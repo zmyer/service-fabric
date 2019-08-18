@@ -28,7 +28,7 @@ namespace TxnReplicator
         static TransactionalReplicator::SPtr Create(
             __in Data::Utilities::PartitionedReplicaId const & traceId,
             __in IRuntimeFolders & runtimeFolders,
-            __in KWfStatefulServicePartition & partition,
+            __in Data::Utilities::IStatefulPartition & partition,
             __in Data::LoggingReplicator::IStateReplicator & stateReplicator,
             __in Data::StateManager::IStateProvider2Factory & stateProviderFactory,
             __in TRInternalSettingsSPtr && transactionalReplicatorConfig,
@@ -36,6 +36,7 @@ namespace TxnReplicator
             __in Data::Log::LogManager & logManager,
             __in IDataLossHandler & dataLossHandler,
             __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
+            __in bool hasPersistedState,
             __in KAllocator& allocator);
 
         __declspec(property(get = get_Config)) TRInternalSettingsSPtr const & Config;
@@ -92,15 +93,15 @@ namespace TxnReplicator
 
         bool get_IsReadable() const noexcept override;
 
-        KWfStatefulServicePartition::SPtr get_StatefulPartition() const override;
+        bool get_HasPersistedState() const noexcept override;
+
+        Data::Utilities::IStatefulPartition::SPtr get_StatefulPartition() const override;
 
         NTSTATUS GetLastStableSequenceNumber(__out LONG64 & lsn) noexcept override;
 
         NTSTATUS GetLastCommittedSequenceNumber(__out LONG64 & lsn) noexcept override;
 
         NTSTATUS GetCurrentEpoch(__out FABRIC_EPOCH & epoch) noexcept override;
-
-        NTSTATUS Test_RequestCheckpointAfterNextTransaction() noexcept override;
 
         ktl::Awaitable<NTSTATUS> TryRemoveCheckpointAsync(
             LONG64 checkpointLsnToBeRemoved,
@@ -215,6 +216,10 @@ namespace TxnReplicator
             __in_opt Common::TimeSpan const & timeout = Common::TimeSpan::MaxValue,
             __in_opt ktl::CancellationToken const & cancellationToken = ktl::CancellationToken::None) noexcept override;
 
+        NTSTATUS Test_GetPeriodicCheckpointAndTruncationTimestampTicks(
+            __out LONG64 & lastPeriodicCheckpointTimeTicks,
+            __out LONG64 & lastPeriodicTruncationTimeTicks) noexcept override;
+
         //
         // Open async operation
         //
@@ -265,6 +270,9 @@ namespace TxnReplicator
 
         NTSTATUS CreateAsyncCloseContext(__out AsyncCloseContext::SPtr & asyncContext);
 
+    public: // Test Support
+        NTSTATUS Test_RequestCheckpointAfterNextTransaction() noexcept override;
+
     protected:
         void OnServiceOpen() override;
         void OnServiceClose() override;
@@ -274,14 +282,15 @@ namespace TxnReplicator
         TransactionalReplicator(
             __in Data::Utilities::PartitionedReplicaId const & traceId,
             __in IRuntimeFolders & runtimeFolders,
-            __in KWfStatefulServicePartition & partition,
+            __in Data::Utilities::IStatefulPartition & partition,
             __in Data::LoggingReplicator::IStateReplicator & stateReplicator,
             __in Data::StateManager::IStateProvider2Factory & stateProviderFactory,
             __in TxnReplicator::TRInternalSettingsSPtr && transactionalReplicatorConfig,
             __in TxnReplicator::SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
             __in Data::Log::LogManager & logManager,
             __in IDataLossHandler & dataLossHandler,
-            __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient);
+            __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
+            __in bool hasPersistedState);
 
         ktl::Task OnServiceOpenAsync() noexcept;
         ktl::Task OnServiceCloseAsync() noexcept;
@@ -291,7 +300,7 @@ namespace TxnReplicator
         TRInternalSettingsSPtr const transactionalReplicatorConfig_;
         SLInternalSettingsSPtr const ktlLoggerSharedLogConfig_;
         IRuntimeFolders::SPtr const runtimeFolders_;
-        KWfStatefulServicePartition::SPtr const partition_;
+        Data::Utilities::IStatefulPartition::SPtr const partition_;
         Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const healthClient_;
 
         ILoggingReplicator::SPtr loggingReplicator_;

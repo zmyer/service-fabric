@@ -15,6 +15,7 @@ Common::StringLiteral const Constants::FTSource("FT");
 Common::StringLiteral const Constants::FTUpdateFailureSource("FTUpdateFailure");
 
 Common::StringLiteral const Constants::NodeSource("Node");
+Common::StringLiteral const Constants::NodeUpSource("NodeUp");
 Common::StringLiteral const Constants::NodeUpdateSource("NodeUpdate");
 Common::StringLiteral const Constants::NodeCacheSource("NodeCache");
 Common::StringLiteral const Constants::NodeStateSource("NodeState");
@@ -28,6 +29,8 @@ Common::StringLiteral const Constants::QuerySource("Query");
 Common::StringLiteral const Constants::AdminApiSource("AdminAPI");
 
 Common::StringLiteral const Constants::ServiceResolverSource("ServiceResolver");
+
+Common::StringLiteral const Constants::NIMApiSource("NIMApi");
 
 int64 const Constants::InvalidConfigurationVersion = 0;
 int64 const Constants::InvalidDataLossVersion = 0;

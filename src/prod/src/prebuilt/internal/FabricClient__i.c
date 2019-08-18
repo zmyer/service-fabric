@@ -1,8 +1,3 @@
-// ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.  All rights reserved.
-// Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
-// ------------------------------------------------------------
-
 
 
 /* this ALWAYS GENERATED file contains the IIDs and CLSIDs */
@@ -67,7 +62,13 @@ MIDL_DEFINE_GUID(IID, LIBID_FabricClient_Lib,0x9ace3047,0xe988,0x4cac,0xba,0xe4,
 MIDL_DEFINE_GUID(IID, IID_IInternalFabricServiceManagementClient,0x1185854b,0x9d32,0x4c78,0xb1,0xf2,0x1f,0xae,0x7a,0xe4,0xc0,0x02);
 
 
+MIDL_DEFINE_GUID(IID, IID_IInternalFabricServiceManagementClient2,0xee2bc5c7,0x235c,0x4dd1,0xb0,0xa9,0x2e,0xd4,0xb4,0x5e,0xbe,0xc9);
+
+
 MIDL_DEFINE_GUID(IID, IID_IInternalFabricApplicationManagementClient,0xd2db94b8,0x7725,0x42a4,0xb9,0xf0,0x7d,0x67,0x7a,0x3f,0xac,0x18);
+
+
+MIDL_DEFINE_GUID(IID, IID_IInternalFabricApplicationManagementClient2,0x94a1bed3,0x445a,0x41ae,0xb1,0xb4,0x6a,0x9b,0xa4,0xbe,0x71,0xe5);
 
 
 MIDL_DEFINE_GUID(IID, IID_IInternalFabricClusterManagementClient,0x28ab258c,0xc5d3,0x4306,0xbf,0x2d,0xfc,0x00,0xdd,0x40,0xdd,0xdd);
@@ -119,5 +120,6 @@ MIDL_DEFINE_GUID(IID, IID_IFabricComposeDeploymentUpgradeProgressResult,0xc78804
 #ifdef __cplusplus
 }
 #endif
+
 
 

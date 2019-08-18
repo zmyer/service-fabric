@@ -1,14 +1,18 @@
 set( LINUX_SOURCES
-  ./ConfigLoader.cpp
-  ./stdafx.cpp
+  ../FabricCommon.cpp
+  ../ConfigLoader.cpp
+  ../stdafx.cpp
   ./dllmain.cpp
   ../../../../pal/wc16.c
 )
 
 set( LINUX_SOURCES2
   ./TraceTemplates.Linux.c
-  ./TraceWrapper.Linux.c
+  ../TraceWrapper.Linux.c
+  ../TraceBinaryWrapper.Linux.c
 )
+
+add_precompiled_header(${lib_FabricCommon} ../stdafx.h)
 
 include_directories("../pch")
 
@@ -36,6 +40,7 @@ target_link_libraries(${lib_FabricCommon}
   ${lib_InternalFabricUUID}
   ${lib_FabricUUID}
   ${lib_FabricResources}
+  ${Ktlfull}
   lttng-ust
   ${Cxx}
   ${CxxABI}
@@ -44,7 +49,6 @@ target_link_libraries(${lib_FabricCommon}
   crypto
   xml2
   uuid
-  unwind
   rt
   pthread
 )

@@ -30,6 +30,7 @@ namespace HttpClient
             Common::TimeSpan const &receiveTimeout,
             bool allowRedirects,
             bool enableCookies,
+            bool enableWinauthAutoLogon,
             __out IHttpClientRequestSPtr &clientRequestSPtr);
 
         virtual ~ClientRequest() {}
@@ -41,7 +42,8 @@ namespace HttpClient
             Common::TimeSpan const &sendTimeout,
             Common::TimeSpan const &receiveTimeout,
             bool allowRedirects,
-            bool enableCookies);
+            bool enableCookies,
+            bool enableWinauthAutoLogon);
 
         //
         // Client Request

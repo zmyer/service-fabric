@@ -34,8 +34,11 @@ namespace ServiceModel
         std::vector<PackageSharingPolicyDescription> PackageSharingPolicies;
         std::vector<EndpointBindingPolicyDescription> EndpointBindingPolicies;
         std::vector<ContainerPoliciesDescription> ContainerHostPolicies;
+        ServicePackageContainerPolicyDescription ServicePackageContainerPolicy;
         std::vector<EnvironmentOverridesDescription> EnvironmentOverrides;
         ServicePackageResourceGovernanceDescription ResourceGovernanceDescription;
+        ServiceFabricRuntimeAccessDescription SFRuntimeAccessDescription;
+        std::vector<ConfigPackagePoliciesDescription> ConfigPackagePolicies;
 
     private:
         friend struct ApplicationManifestDescription;

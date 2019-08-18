@@ -42,6 +42,8 @@ namespace Data
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in KAllocator & allocator);
 
+            virtual std::wstring ToString() const override;
+
             __declspec(property(get = get_LastCompletedBeginCheckpointRecord, put = set_LastCompletedBeginCheckpointRecord)) BeginCheckpointLogRecord::SPtr LastCompletedBeginCheckpointRecord;
             BeginCheckpointLogRecord::SPtr get_LastCompletedBeginCheckpointRecord() const
             {
@@ -79,7 +81,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
         private:
 

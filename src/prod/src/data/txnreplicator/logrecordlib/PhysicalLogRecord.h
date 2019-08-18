@@ -52,6 +52,8 @@ namespace Data
                 linkedPhysicalRecord_ = value;
             }
 
+            virtual std::wstring ToString() const override;
+
             __declspec(property(get = get_nextPhysicalRecord, put = set_nextPhysicalRecord)) PhysicalLogRecord::SPtr NextPhysicalRecord;
             PhysicalLogRecord::SPtr get_nextPhysicalRecord()
             {
@@ -109,7 +111,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
         private:
 

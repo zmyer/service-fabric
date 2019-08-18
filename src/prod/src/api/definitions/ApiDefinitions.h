@@ -3,7 +3,7 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
-#pragma once 
+#pragma once
 
 //
 // External Header Files required by API definitions header files
@@ -24,6 +24,7 @@
 #include "FabricUpgradeOrchestrationService_.h"
 #include "FabricBackupRestoreService_.h"
 #include "FabricContainerActivatorService_.h"
+#include "FabricGatewayResourceManager_.h"
 
 //
 // api definitions Public Header Files
@@ -31,7 +32,6 @@
 
 #include "api/definitions/InterfacePointers.h"
 #include "api/definitions/ForwardDeclarations.h"
-
 
 #include "api/definitions/IStatelessServiceFactory.h"
 #include "api/definitions/IStatelessServiceInstance.h"
@@ -91,6 +91,8 @@
 #include "api/definitions/IRestartPartitionProgressResult.h"
 #include "api/definitions/INodeTransitionProgressResult.h"
 #include "api/definitions/IChaosReportResult.h"
+#include "api/definitions/IChaosEventsSegmentResult.h"
+#include "api/definitions/ISystemServiceApiResult.h"
 #include "api/definitions/IFaultManagementClient.h"
 #include "api/definitions/IMovePrimaryResult.h"
 #include "api/definitions/IMoveSecondaryResult.h"
@@ -131,6 +133,7 @@
 #include "api/definitions/IStatefulServiceReplicaStatusResult.h"
 #include "api/definitions/ICommunicationMessageSender.h"
 #include "api/definitions/IClientConnection.h"
+#include "api/definitions/IResourceManagementClient.h"
 #include "api/definitions/IServiceCommunicationMessageHandler.h"
 #include "api/definitions/IServiceCommunicationTransport.h"
 #include "api/definitions/IServiceCommunicationListenerFactory.h"
@@ -139,6 +142,15 @@
 #include "api/definitions/IServiceCommunicationClient.h"
 #include "api/definitions/IServiceCommunicationListener.h"
 #include "api/definitions/IServiceCommunicationClientFactory.h"
+#include "api/definitions/IResourceManagerClient.h"
 #include "api/definitions/IComposeManagementClient.h"
 #include "api/definitions/IContainerActivatorService.h"
 #include "api/definitions/IContainerActivatorServiceAgent.h"
+#include "api/definitions/IChaosDescriptionResult.h"
+#include "api/definitions/IChaosScheduleDescriptionResult.h"
+#include "api/definitions/ISecretStoreClient.h"
+#include "api/definitions/INetworkManagementClient.h"
+#include "api/definitions/IGatewayResourceManager.h"
+#include "api/definitions/IGatewayResourceManagerAgent.h"
+#include "api/definitions/IGatewayResourceManagerAgentFactory.h"
+#include "api/definitions/IGatewayResourceManagerClient.h"

@@ -7,7 +7,7 @@ set( LINUX_SOURCES
     DeactivateMessageBody.cpp
     DeleteReplicaMessageBody.cpp
     FailoverConfig.cpp
-	FailoverManagerId.cpp
+    FailoverManagerId.cpp
     FailoverUnitDescription.cpp
     FailoverUnitFlags.cpp
     FailoverUnitInfo.cpp
@@ -55,6 +55,4 @@ add_precompiled_header(objects_FailoverCommon Common.Stdafx.h)
 add_library(${lib_FailoverCommon} STATIC $<TARGET_OBJECTS:objects_FailoverCommon>)
 
 set_target_properties(${lib_FailoverCommon} PROPERTIES 
-    ARCHIVE_OUTPUT_DIRECTORY ${LIBRARY_OUTPUT_DIR})
-
-          
+    ARCHIVE_OUTPUT_DIRECTORY ${LIBRARY_OUTPUT_DIR})       

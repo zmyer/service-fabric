@@ -11,11 +11,10 @@ set_target_properties(${exe_ResourceMonitor} PROPERTIES
 add_custom_target(CopyFabricResourceMonitorService ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/ResourceMonitorService.Code.Current
     COMMAND ${CMAKE_COMMAND} -E copy ${TEST_OUTPUT_DIR}/${exe_ResourceMonitor} ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/ResourceMonitor.Code.Current/ResourceMonitor.exe
-    COMMAND strip ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/ResourceMonitor.Code.Current/ResourceMonitor.exe
+    COMMAND ${CMAKE_STRIP} ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/ResourceMonitor.Code.Current/ResourceMonitor.exe
     DEPENDS ${exe_ResourceMonitor}
 )
 
-    
 target_link_libraries(${exe_ResourceMonitor}
   ${lib_ResourceMonitor}
   ${lib_ResourceMonitorConfig}
@@ -37,13 +36,14 @@ target_link_libraries(${exe_ResourceMonitor}
   ${lib_FileStoreService}
   ${lib_Store}
   ${lib_TestHooks}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_TStore}
   ${lib_ApiWrappers}
   ${lib_StoreRepairPolicy}
   ${lib_Replication}
   ${lib_TransactionalReplicator}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_LoadBalancing}
   ${lib_SystemServices}
   ${lib_ServiceGroup}
@@ -72,6 +72,4 @@ target_link_libraries(${exe_ResourceMonitor}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )

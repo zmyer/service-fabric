@@ -14,18 +14,19 @@ using namespace TxnReplicator;
 Common::StringLiteral const TraceComponent("ComTransactionalReplicator");
 
 ComTransactionalReplicator::ComTransactionalReplicator(
-    __in Data::Utilities::PartitionedReplicaId const & prId,
+    __in PartitionedReplicaId const & prId,
     __in FABRIC_REPLICA_ID replicaId,
     __in IFabricStatefulServicePartition & fabricPartition,
     __in ComPointer<IFabricPrimaryReplicator> & v1PrimaryReplicator,
     __in LoggingReplicator::IStateReplicator & v1StateReplicator,
     __in IFabricStateProvider2Factory & factory,
     __in IRuntimeFolders & runtimeFolders,
-    __in TxnReplicator::TRInternalSettingsSPtr && transactionalReplicatorConfig,
-    __in TxnReplicator::SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
-    __in Data::Log::LogManager & logManager,
+    __in TRInternalSettingsSPtr && transactionalReplicatorConfig,
+    __in SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
+    __in Log::LogManager & logManager,
     __in IFabricDataLossHandler & userDataLossHandler,
-    __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient)
+    __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
+    __in BOOLEAN hasPersistedState)
     : KObject()
     , KShared()
     , PartitionedReplicaTraceComponent(prId)
@@ -61,7 +62,7 @@ ComTransactionalReplicator::ComTransactionalReplicator(
 
     try
     {
-        KWfStatefulServicePartition::SPtr partition;
+        IStatefulPartition::SPtr partition;
         status = Partition::Create(
             fabricPartition,
             allocator,
@@ -98,6 +99,7 @@ ComTransactionalReplicator::ComTransactionalReplicator(
             logManager,
             *dataLossHandlerSPtr,
             move(healthClient),
+            hasPersistedState,
             allocator);
     }
     catch (Exception e)
@@ -129,9 +131,9 @@ NTSTATUS ComTransactionalReplicator::Create(
     __in BOOLEAN hasPersistedState,
     __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
     __in IFabricStateProvider2Factory & factory,
-    __in TxnReplicator::TRInternalSettingsSPtr && transactionalReplicatorConfig,
-    __in TxnReplicator::SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
-    __in Data::Log::LogManager & logManager,
+    __in TRInternalSettingsSPtr && transactionalReplicatorConfig,
+    __in SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
+    __in Log::LogManager & logManager,
     __in IFabricDataLossHandler & userDataLossHandler,
     __in KAllocator & allocator,
     __out IFabricPrimaryReplicator ** replicator,
@@ -196,7 +198,8 @@ NTSTATUS ComTransactionalReplicator::Create(
         return status;
     }
 
-    Reliability::ReplicationComponent::IReplicatorHealthClientSPtr v1HealthClient = healthClient;
+    Reliability::ReplicationComponent::IReplicatorHealthClientSPtr v1HealthClient = std::move(healthClient);
+    Reliability::ReplicationComponent::IReplicatorHealthClientSPtr v2HealthClient = v1HealthClient;
 
     // Step 2: Create the real v1 replicator using the above state provider
     hr = replicatorFactory.CreateReplicator(
@@ -262,7 +265,8 @@ NTSTATUS ComTransactionalReplicator::Create(
             move(ktlLoggerSharedLogConfig),
             logManager,
             userDataLossHandler,
-            move(healthClient));
+            move(v2HealthClient),
+            hasPersistedState);
 
     if (comTransactionalReplicator == nullptr)
     {
@@ -600,6 +604,20 @@ HRESULT ComTransactionalReplicator::GetReplicatorStatus(
     __in IFabricGetReplicatorStatusResult ** replicatorStatus)
 {
     return fabricInternalReplicator_->GetReplicatorStatus(replicatorStatus);
+}
+
+HRESULT ComTransactionalReplicator::GetReplicationQueueCounters(
+    __in FABRIC_INTERNAL_REPLICATION_QUEUE_COUNTERS * counters)
+{
+    ComPointer<IFabricInternalStateReplicator> internalStateReplicator;
+    HRESULT hr = fabricInternalReplicator_->QueryInterface(IID_IFabricInternalStateReplicator, internalStateReplicator.VoidInitializationAddress());
+
+    if (SUCCEEDED(hr))
+    {
+        hr = (internalStateReplicator->GetReplicationQueueCounters(counters));
+    }
+
+    return hr;
 }
 
 //

@@ -38,6 +38,7 @@ DEFINE_CREATE_COM_CLIENT( IFabricClusterManagementClient3, FabricClusterClient3)
 DEFINE_CREATE_COM_CLIENT( IFabricClusterManagementClient4, FabricClusterClient4)
 
 DEFINE_CREATE_COM_CLIENT( IInternalFabricApplicationManagementClient, InternalFabricApplicationClient)
+DEFINE_CREATE_COM_CLIENT( IInternalFabricApplicationManagementClient2, InternalFabricApplicationClient2)
 
 class TestFabricClientUpgrade::ApplicationUpgradeContext
 {
@@ -301,20 +302,20 @@ bool TestFabricClientUpgrade::ProvisionApplicationType(StringCollection const & 
     {
         wstring applicationPackageCleanupPolicyStr;
         parser.TryGetString(L"applicationPackageCleanupPolicy", applicationPackageCleanupPolicyStr);
-        ApplicationPackageCleanupPolicy::Enum cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::ClusterDefault;
+        ApplicationPackageCleanupPolicy::Enum cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::Default;
 
         wstring incomingBuildPath = Path::Combine(ApplicationBuilder::ApplicationPackageFolderInImageStore, path);
-        if (applicationPackageCleanupPolicyStr == L"CleanupApplicationPackageOnSuccessfulProvision")
+        if (applicationPackageCleanupPolicyStr == L"Automatic")
         {
-            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::CleanupApplicationPackageOnSuccessfulProvision;
+            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::Automatic;
         }
-        else if (applicationPackageCleanupPolicyStr == L"NoCleanupApplicationPackageOnProvision")
+        else if (applicationPackageCleanupPolicyStr == L"Manual")
         {
-            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::NoCleanupApplicationPackageOnProvision;
+            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::Manual;
         }
-        else if (applicationPackageCleanupPolicyStr == L"ClusterDefault")
+        else if (applicationPackageCleanupPolicyStr == L"Default")
         {
-            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::ClusterDefault;
+            cleanupPolicy = ApplicationPackageCleanupPolicy::Enum::Default;
         }
         else
         {
@@ -1144,7 +1145,6 @@ bool TestFabricClientUpgrade::RollbackApplicationUpgrade(Common::StringCollectio
     parser.TryGetString(L"error", errorString, L"Success");
     ErrorCodeValue::Enum error = FABRICSESSION.FabricDispatcher.ParseErrorCode(errorString);
     HRESULT expectedError = ErrorCode(error).ToHResult();
-
     RollbackApplicationUpgradeImpl(appUri, expectedError);
 
     return true;
@@ -2486,7 +2486,7 @@ bool TestFabricClientUpgrade::MoveNextApplicationUpgradeDomain(StringCollection 
 
 bool TestFabricClientUpgrade::CreateComposeDeployment(StringCollection const & params)
 {
-    if (params.size() > 5)
+    if (params.size() > 6)
     {
         FABRICSESSION.PrintHelp(FabricTestCommands::CreateComposeCommand);
         return false;
@@ -2495,6 +2495,7 @@ bool TestFabricClientUpgrade::CreateComposeDeployment(StringCollection const & p
     wstring deploymentName = params[0];
 
     CommandLineParser parser(params, 1);
+    bool IsOverrideIB = parser.GetBool(L"isOverrideIB");
     bool isSkipSetIB = parser.GetBool(L"isSkipSetIB");
 
     if (!isSkipSetIB)
@@ -2506,6 +2507,10 @@ bool TestFabricClientUpgrade::CreateComposeDeployment(StringCollection const & p
         mockImageBuilderProperties.push_back(incomingBuildPath);// appBuildPath
         mockImageBuilderProperties.push_back(params[2]);// appTypeName
         mockImageBuilderProperties.push_back(params[3]);// appTypeVersion
+        if (IsOverrideIB)
+        {
+            FABRICSESSION.FabricDispatcher.EraseMockImageBuilderProperties(mockImageBuilderProperties[0]);
+        }
         if (!FABRICSESSION.FabricDispatcher.SetMockImageBuilderProperties(mockImageBuilderProperties))
         {
             TestSession::WriteError(
@@ -2585,7 +2590,7 @@ bool TestFabricClientUpgrade::CreateComposeDeployment(StringCollection const & p
 
             for (auto iter = defaultServices.begin(); iter != defaultServices.end(); iter++)
             {
-                defaultServiceNames.push_back(appNameWithSlash.append(*iter));
+                defaultServiceNames.push_back(appNameWithSlash + (*iter));
             }
 
             vector<PartitionedServiceDescriptor> serviceDescriptors;
@@ -2634,7 +2639,7 @@ bool TestFabricClientUpgrade::CreateComposeDeployment(StringCollection const & p
 
                 for (auto iter = defaultServices.begin(); iter != defaultServices.end(); iter++)
                 {
-                    defaultServiceNames.push_back(appNameWithSlash.append(*iter));
+                    defaultServiceNames.push_back(appNameWithSlash + (*iter));
                 }
 
                 vector<PartitionedServiceDescriptor> serviceDescriptors;
@@ -2848,41 +2853,103 @@ bool TestFabricClientUpgrade::UpgradeComposeDeployment(StringCollection const & 
 
     UpgradeComposeDeploymentImpl(upgradeDescription, timeout, expectedErrors);
 
-
-    shared_ptr<Management::ClusterManager::ClusterManagerReplica> cm = FABRICSESSION.FabricDispatcher.GetCM();
-    TestSession::FailTestIfNot(cm != nullptr, "Could not get CM from FabricDispatcher.");
-    int remainingRetries = FabricTestSessionConfig::GetConfig().QueryOperationRetryCount;
-    while (remainingRetries-- >= 0)
+    bool isAsyncVerify = parser.GetBool(L"asyncverify");
+    if (isAsyncVerify)
     {
-        ComposeDeploymentUpgradeState::Enum state;
-        auto error = cm->Test_GetComposeDeploymentUpgradeState(
-            deploymentName,
-            state);
-        if (error.IsSuccess() && state != ComposeDeploymentUpgradeState::Enum::ProvisioningTarget)
+        Threadpool::Post([=]() {
+            shared_ptr<Management::ClusterManager::ClusterManagerReplica> cm = FABRICSESSION.FabricDispatcher.GetCM();
+            TestSession::FailTestIfNot(cm != nullptr, "Could not get CM from FabricDispatcher.");
+            int remainingRetries = FabricTestSessionConfig::GetConfig().QueryOperationRetryCount;
+            while (remainingRetries-- >= 0)
+            {
+                ComposeDeploymentUpgradeState::Enum state;
+                auto error = cm->Test_GetComposeDeploymentUpgradeState(
+                    deploymentName,
+                    state);
+                if (error.IsSuccess() && state != ComposeDeploymentUpgradeState::Enum::ProvisioningTarget)
+                {
+                    break;
+                }
+                else
+                {
+                    TestSession::WriteInfo(
+                        TraceSource,
+                        "Provisioning Target not completed, state {0}, error {1}",
+                        state,
+                        error);
+                }
+
+                Sleep(static_cast<DWORD>(FabricTestSessionConfig::GetConfig().QueryOperationRetryDelay.TotalMilliseconds()));
+            }
+
+            if (startUpgradeCheck)
+            {
+                CheckUpgradeAppComplete(
+                    appName,
+                    appTypeName,
+                    targetVersion,
+                    previousAppBuilderName,
+                    ApplicationUpgradeContext::Create(ErrorCode(upgradeCheckError).ToHResult()));
+            }
+        });
+    }
+    else
+    {
+        shared_ptr<Management::ClusterManager::ClusterManagerReplica> cm = FABRICSESSION.FabricDispatcher.GetCM();
+        TestSession::FailTestIfNot(cm != nullptr, "Could not get CM from FabricDispatcher.");
+        int remainingRetries = FabricTestSessionConfig::GetConfig().QueryOperationRetryCount;
+        while (remainingRetries-- >= 0)
         {
-            break;
-        }
-        else
-        {
-            TestSession::WriteInfo(
-                TraceSource,
-                "Provisioning Target not completed, state {0}, error {1}",
-                state,
-                error);
+            ComposeDeploymentUpgradeState::Enum state;
+            auto error = cm->Test_GetComposeDeploymentUpgradeState(
+                deploymentName,
+                state);
+            if (error.IsSuccess() && state != ComposeDeploymentUpgradeState::Enum::ProvisioningTarget)
+            {
+                break;
+            }
+            else
+            {
+                TestSession::WriteInfo(
+                    TraceSource,
+                    "Provisioning Target not completed, state {0}, error {1}",
+                    state,
+                    error);
+            }
+
+            Sleep(static_cast<DWORD>(FabricTestSessionConfig::GetConfig().QueryOperationRetryDelay.TotalMilliseconds()));
         }
 
-        Sleep(static_cast<DWORD>(FabricTestSessionConfig::GetConfig().QueryOperationRetryDelay.TotalMilliseconds()));
+        if (startUpgradeCheck)
+        {
+            CheckUpgradeAppComplete(
+                appName,
+                appTypeName,
+                targetVersion,
+                previousAppBuilderName,
+                ApplicationUpgradeContext::Create(ErrorCode(upgradeCheckError).ToHResult()));
+        }
+    }
+    return true;
+}
+
+bool TestFabricClientUpgrade::RollbackComposeDeployment(StringCollection const & params)
+{
+    if (params.size() < 1 || params.size() > 2)
+    {
+        FABRICSESSION.PrintHelp(FabricTestCommands::RollbackComposeCommand);
+        return false;
     }
 
-    if (startUpgradeCheck)
-    {
-        CheckUpgradeAppComplete(
-            appName, 
-            appTypeName, 
-            targetVersion,
-            previousAppBuilderName,
-            ApplicationUpgradeContext::Create(ErrorCode(upgradeCheckError).ToHResult()));
-    }
+    wstring deploymentName = params[0];
+    CommandLineParser parser(params);
+
+    wstring errorString;
+    parser.TryGetString(L"error", errorString, L"Success");
+    ErrorCodeValue::Enum error = FABRICSESSION.FabricDispatcher.ParseErrorCode(errorString);
+    HRESULT expectedError = ErrorCode(error).ToHResult();
+
+    RollbackComposeDeploymentImpl(deploymentName, expectedError);
 
     return true;
 }
@@ -2994,6 +3061,10 @@ bool TestFabricClientUpgrade::PrintUpgradeProgress(bool printDetails, ComPointer
 
             case FABRIC_APPLICATION_UPGRADE_STATE_ROLLING_BACK_IN_PROGRESS:
                 applicationUpgradeState = L"RollbackInProgress";
+                break;
+
+            case FABRIC_APPLICATION_UPGRADE_STATE_ROLLING_BACK_PENDING:
+                applicationUpgradeState = L"RollbackPending";
                 break;
 
             case FABRIC_APPLICATION_UPGRADE_STATE_FAILED:
@@ -3293,6 +3364,11 @@ bool TestFabricClientUpgrade::PrintUpgradeProgress(bool printDetails, ComPointer
             case FABRIC_UPGRADE_STATE_ROLLING_BACK_IN_PROGRESS:
                 fabricUpgradeState = L"RollbackInProgress";
                 break;
+
+            case FABRIC_UPGRADE_STATE_ROLLING_BACK_PENDING:
+                fabricUpgradeState = L"RollbackPending";
+                break;
+
         }
 
         vector<wstring> completedDomains;
@@ -3619,8 +3695,8 @@ void TestFabricClientUpgrade::ProvisionApplicationTypeImpl(
 
         // There is a possibility that application package could be deleted by previous provision for retry scenario
         HRESULT acceptableErrorOnRetry = FABRIC_E_APPLICATION_TYPE_ALREADY_EXISTS;
-        if (applicationPackageCleanupPolicy == ApplicationPackageCleanupPolicy::Enum::CleanupApplicationPackageOnSuccessfulProvision ||
-            ((applicationPackageCleanupPolicy == ApplicationPackageCleanupPolicy::Enum::ClusterDefault || 
+        if (applicationPackageCleanupPolicy == ApplicationPackageCleanupPolicy::Enum::Automatic ||
+            ((applicationPackageCleanupPolicy == ApplicationPackageCleanupPolicy::Enum::Default || 
                 applicationPackageCleanupPolicy == ApplicationPackageCleanupPolicy::Enum::Invalid) &&
                 Management::ManagementConfig::GetConfig().CleanupApplicationPackageOnProvisionSuccess))
         {
@@ -3991,6 +4067,39 @@ void TestFabricClientUpgrade::RollbackApplicationUpgradeImpl(
         [&] (ComPointer<IFabricAsyncOperationContext> & context) -> HRESULT
         {
             return managementClient->EndRollbackApplicationUpgrade(context.GetRawPointer());
+        },
+        expectedErrors,
+        vector<HRESULT>(),
+        vector<HRESULT>());
+}
+
+void TestFabricClientUpgrade::RollbackComposeDeploymentImpl(
+    wstring const & deploymentName,
+    HRESULT expectedError)
+{
+    TestSession::WriteNoise(TraceSource, "RollbackComposeDeployment {0} called with expected error {1}", deploymentName, expectedError);
+
+    vector<HRESULT> expectedErrors;
+    expectedErrors.push_back(expectedError);
+
+    ComPointer<IInternalFabricApplicationManagementClient2> composeClient = CreateInternalFabricApplicationClient2(FABRICSESSION.FabricDispatcher.Federation);
+
+    TestFabricClient::PerformFabricClientOperation(
+        L"RollbackComposeDeployment",
+        FabricTestSessionConfig::GetConfig().NamingOperationTimeout,
+        [&](DWORD const timeout, ComPointer<ComCallbackWaiter> const & callback, ComPointer<IFabricAsyncOperationContext> & context) -> HRESULT
+        {
+            FABRIC_COMPOSE_DEPLOYMENT_ROLLBACK_DESCRIPTION description;
+            description.DeploymentName = deploymentName.c_str();
+            return composeClient->BeginRollbackComposeDeployment(
+                &description,
+                timeout,
+                callback.GetRawPointer(),
+                context.InitializationAddress());
+        },
+        [&](ComPointer<IFabricAsyncOperationContext> & context) -> HRESULT
+        {
+            return composeClient->EndRollbackComposeDeployment(context.GetRawPointer());
         },
         expectedErrors,
         vector<HRESULT>(),

@@ -26,6 +26,8 @@ wstring const ApplicationBuilder::ApplicationBuilderSetGroup = L"app.group";
 wstring const ApplicationBuilder::ApplicationBuilderRunAs = L"app.runas";
 wstring const ApplicationBuilder::ApplicationBuilderSharedPackage = L"app.sharedpackage";
 wstring const ApplicationBuilder::ApplicationBuilderHealthPolicy = L"app.healthpolicy";
+wstring const ApplicationBuilder::ApplicationBuilderNetwork = L"app.network";
+wstring const ApplicationBuilder::ApplicationBuilderEndpoint = L"app.endpoint";
 wstring const ApplicationBuilder::ApplicationBuilderUpload = L"app.upload";
 wstring const ApplicationBuilder::ApplicationBuilderDelete = L"app.delete";
 wstring const ApplicationBuilder::ApplicationBuilderClear = L"app.clear";
@@ -173,6 +175,14 @@ bool ApplicationBuilder::ExecuteCommand(
     else if(command == ApplicationBuilder::ApplicationBuilderSharedPackage)
     {
         return applicationBuilder.SetSharedPackage(params);
+    }
+    else if (command == ApplicationBuilder::ApplicationBuilderNetwork)
+    {
+        return applicationBuilder.SetNetwork(params);
+    }
+    else if (command == ApplicationBuilder::ApplicationBuilderEndpoint)
+    {
+        return applicationBuilder.SetEndpoint(params);
     }
     else
     {
@@ -544,6 +554,7 @@ bool ApplicationBuilder::Clear()
     spRGPolicies_.clear();
     containerHosts_.clear();
     defaultRunAsPolicy_.clear();
+    networkPolicies_.clear();
     return true;
 }
 
@@ -751,6 +762,91 @@ bool ApplicationBuilder::SetHealthPolicy(StringCollection const& params)
     return true;
 }
 
+bool ApplicationBuilder::SetNetwork(StringCollection const& params)
+{
+    if (params.size() < 2)
+    {
+        FABRICSESSION.PrintHelp(ApplicationBuilder::ApplicationBuilderNetwork);
+        return false;
+    }
+
+    if (params[1] == L"clearall")
+    {
+        networkPolicies_.clear();
+        return true;
+    }
+
+    CommandLineParser parser(params, 1);
+
+    wstring json;
+    if (parser.TryGetString(L"jsondescription", json))
+    {
+        NetworkPoliciesDescription networkPoliciesDescription;
+        auto error = NetworkPoliciesDescription::FromString(json, networkPoliciesDescription);
+        TestSession::FailTestIfNot(error.IsSuccess(), "Failed to parse network policies {0}", error);
+
+        wstring const& serviceManifestName = params[1];
+        networkPolicies_.insert(make_pair(serviceManifestName, networkPoliciesDescription));
+    }
+    else
+    {
+        FABRICSESSION.PrintHelp(ApplicationBuilder::ApplicationBuilderNetwork);
+        return false;
+    }
+
+    return true;
+}
+
+bool ApplicationBuilder::SetEndpoint(StringCollection const& params)
+{
+    if (params.size() < 2)
+    {
+        FABRICSESSION.PrintHelp(ApplicationBuilder::ApplicationBuilderEndpoint);
+        return false;
+    }
+
+    if (params[1] == L"clearall")
+    {
+        for (auto iter1 = serviceManifestImports_.begin(); iter1 != serviceManifestImports_.end(); iter1++)
+        {
+            iter1->second.Resources.Endpoints.clear();
+        }
+
+        return true;
+    }
+
+    wstring const& serviceManifestName = params[1];
+    auto iter2 = serviceManifestImports_.find(serviceManifestName);
+    TestSession::FailTestIf(iter2 == serviceManifestImports_.end(), "serviceManifestName {0} not found", serviceManifestName);
+
+    CommandLineParser parser(params, 1);
+
+    wstring name;
+    if (!parser.TryGetString(L"name", name))
+    {
+        FABRICSESSION.PrintHelp(ApplicationBuilder::ApplicationBuilderEndpoint);
+        return false;
+    }
+
+    wstring protocolTypeStr;
+    wstring endpointTypeStr;
+    ProtocolType::Enum protocolType;
+    EndpointType::Enum endpointType;
+    parser.TryGetString(L"protocol", protocolTypeStr, L"tcp");
+    parser.TryGetString(L"type", endpointTypeStr, L"input");
+    protocolType = ProtocolType::GetProtocolType(protocolTypeStr);
+    endpointType = EndpointType::GetEndpointType(endpointTypeStr);
+
+    EndpointDescription endpointDescription;
+    endpointDescription.Name = name;
+    endpointDescription.Protocol = protocolType;
+    endpointDescription.Type = endpointType;
+
+    iter2->second.Resources.Endpoints.push_back(endpointDescription);
+
+    return true;
+}
+
 bool ApplicationBuilder::SetParameters(StringCollection const& params)
 {
     if(params.size() < 2)
@@ -827,6 +923,17 @@ bool ApplicationBuilder::SetServiceTemplates(StringCollection const& params)
         scheme = PartitionScheme::UniformInt64;
     }
 
+    vector<Reliability::ServiceScalingPolicyDescription> scalingPolicies;
+    wstring scalingPolicy;
+    parser.TryGetString(L"scalingPolicy", scalingPolicy, L"");
+    if (!scalingPolicy.empty())
+    {
+        if (!TestFabricClient::GetServiceScalingPolicy(scalingPolicy, scalingPolicies))
+        {
+            return false;
+        }
+    }
+
     if(isStateful)
     {
         for (auto iter = statefulServiceTemplates_.begin(); iter != statefulServiceTemplates_.end(); iter++)
@@ -865,6 +972,7 @@ bool ApplicationBuilder::SetServiceTemplates(StringCollection const& params)
         statefulService.ReplicaRestartWaitDurationInSeconds = replicaRestartWaitDurationInSeconds;
         statefulService.QuorumLossWaitDurationInSeconds = quorumLossWaitDurationInSeconds;
         statefulService.StandByReplicaKeepDurationInSeconds = standByReplicaKeepDurationInSeconds;
+        statefulService.ScalingPolicies = scalingPolicies;
 
         statefulServiceTemplates_.push_back(statefulService);
     }
@@ -890,6 +998,8 @@ bool ApplicationBuilder::SetServiceTemplates(StringCollection const& params)
         statelessService.LowKey = lowKey;
         statelessService.HighKey = highKey;
         statelessService.PartitionNames = names;
+        statelessService.ScalingPolicies = scalingPolicies;
+
         statelessServiceTemplates_.push_back(statelessService);
     }
 
@@ -931,6 +1041,8 @@ bool ApplicationBuilder::SetDefaultService(StringCollection const& params)
     parser.TryGetString(L"lowkey", lowKey, wformatString(FabricTestSessionConfig::GetConfig().ServiceDescriptorLowRange));
     std::wstring highKey;
     parser.TryGetString(L"highkey", highKey, wformatString(FabricTestSessionConfig::GetConfig().ServiceDescriptorHighRange));
+    std::wstring serviceDnsName;
+    parser.TryGetString(L"serviceDnsName", serviceDnsName, L"");
     vector<wstring> names;
 
     wstring servicePackageActivationMode;
@@ -953,6 +1065,17 @@ bool ApplicationBuilder::SetDefaultService(StringCollection const& params)
     {
         // Default value
         scheme = PartitionScheme::UniformInt64;
+    }
+
+    vector<Reliability::ServiceScalingPolicyDescription> scalingPolicies;
+    wstring scalingPolicy;
+    parser.TryGetString(L"scalingPolicy", scalingPolicy, L"");
+    if (!scalingPolicy.empty())
+    {
+        if (!TestFabricClient::GetServiceScalingPolicy(scalingPolicy, scalingPolicies))
+        {
+            return false;
+        }
     }
 
     if(isStateful)
@@ -1029,6 +1152,8 @@ bool ApplicationBuilder::SetDefaultService(StringCollection const& params)
         statefulService.ServiceCorrelations = serviceCorrelations;
         statefulService.DefaultMoveCost = defaultMoveCost;
         statefulService.ServicePackageActivationMode = servicePackageActivationMode;
+        statefulService.ScalingPolicies = scalingPolicies;
+        statefulService.ServiceDnsName = serviceDnsName;
 
         requiredStatefulService_.insert(make_pair(serviceName, statefulService));
     }
@@ -1089,6 +1214,8 @@ bool ApplicationBuilder::SetDefaultService(StringCollection const& params)
         statelessService.PlacementPolicies = placementPolicies;
         statelessService.ServiceCorrelations = serviceCorrelations;
         statelessService.DefaultMoveCost = defaultMoveCost;
+        statelessService.ScalingPolicies = scalingPolicies;
+        statelessService.ServiceDnsName = serviceDnsName;
 
         statelessService.ServicePackageActivationMode = servicePackageActivationMode;
 
@@ -1347,7 +1474,7 @@ bool ApplicationBuilder::SetCodePackage(
             auto iter2 = skipIter->second.find(codePackageName);
             if (iter2 != skipIter->second.end())
             {
-				skipIter->second.erase(iter2);
+                skipIter->second.erase(iter2);
             }
         }
     }
@@ -1361,6 +1488,7 @@ bool ApplicationBuilder::SetCodePackage(
     wstring isolationPolicyType;
     parser.TryGetString(L"isolationtype", isolationPolicyType, L"DedicatedProcess");    
     bool isShared = parser.GetBool(L"isshared");
+    auto isGuestExe = parser.GetBool(L"isGuestExe");
 
     wstring supportedTypes;
     parser.TryGetString(L"types", supportedTypes);
@@ -1401,12 +1529,13 @@ bool ApplicationBuilder::SetCodePackage(
     {
         wstring program = L"FabricTestHost.exe";
         wstring arguments = wformatString(
-            "version={0} testdir={1} serverport={2} useetw={3} security={4}", 
+            "version={0} testdir={1} serverport={2} useetw={3} security={4} isGuestExe={5}", 
             version, 
             FabricTestDispatcher::TestDataDirectory,
             FederationTestCommon::AddressHelper::ServerListenPort,
             FabricTestSessionConfig::GetConfig().UseEtw,
-            clientCredentialsType);
+            clientCredentialsType,
+            isGuestExe);
 
         codePackageDescription.EntryPoint.ExeEntryPoint.Program = program;
         codePackageDescription.EntryPoint.ExeEntryPoint.Arguments = arguments;
@@ -1473,10 +1602,10 @@ bool ApplicationBuilder::SetCodePackage(
         auto skipIter = skipUploadCodePackages_.find(serviceManifestName);
         if (skipIter == skipUploadCodePackages_.end())
         {
-			skipIter = skipUploadCodePackages_.insert(make_pair(serviceManifestName, set<wstring>())).first;
+            skipIter = skipUploadCodePackages_.insert(make_pair(serviceManifestName, set<wstring>())).first;
         }
 
-		skipIter->second.insert(codePackageName);
+        skipIter->second.insert(codePackageName);
     }
 
     ConfigParameter configParameter;
@@ -1509,7 +1638,7 @@ bool ApplicationBuilder::UploadApplication(
     Common::StringCollection const& params,
     ComPointer<IFabricNativeImageStoreClient> const & imageStoreClientCPtr)
 {
-	wstring pathToIncoming = Path::Combine(Path::Combine(FabricTestDispatcher::TestDataDirectory, FabricTestConstants::TestImageStoreDirectory), ApplicationPackageFolderInImageStore);
+    wstring pathToIncoming = Path::Combine(Path::Combine(FabricTestDispatcher::TestDataDirectory, FabricTestConstants::TestImageStoreDirectory), ApplicationPackageFolderInImageStore);
     if(!Directory::Exists(pathToIncoming))
     {
         Directory::Create(pathToIncoming);
@@ -1660,7 +1789,7 @@ bool ApplicationBuilder::UploadApplication(
     if (imageStoreClientCPtr)
     {
 
-		wstring remoteDestination = Path::Combine(ApplicationPackageFolderInImageStore, applicationFriendlyName);
+        wstring remoteDestination = Path::Combine(ApplicationPackageFolderInImageStore, applicationFriendlyName);
 
         auto hr = imageStoreClientCPtr->UploadContent(
             remoteDestination.c_str(),
@@ -1853,9 +1982,20 @@ void ApplicationBuilder::GetServiceManifestString(wstring & serviceManifest, Ser
             iter->Name,
             iter->Version);
     }
-    serviceManifestWriter.WriteLine(L"</ServiceManifest>");
 
-    // Do not support Resources yet
+    if (serviceManifestDescription.Resources.Endpoints.size() > 0)
+    {
+        serviceManifestWriter.WriteLine(L"<Resources>");
+        serviceManifestWriter.WriteLine(L"<Endpoints>");
+        for (auto iter = serviceManifestDescription.Resources.Endpoints.begin(); iter != serviceManifestDescription.Resources.Endpoints.end(); iter++)
+        {
+            serviceManifestWriter.WriteLine("<Endpoint Name='{0}' Protocol='{1}' Type='{2}' />", iter->Name, ProtocolType::EnumToString(iter->Protocol), EndpointType::EnumToString(iter->Type));
+        }
+        serviceManifestWriter.WriteLine(L"</Endpoints>");
+        serviceManifestWriter.WriteLine(L"</Resources>");
+    }
+
+    serviceManifestWriter.WriteLine(L"</ServiceManifest>");
 }
 
 void ApplicationBuilder::GetApplicationManifestString(wstring & applicationManifest)
@@ -1888,6 +2028,7 @@ void ApplicationBuilder::GetApplicationManifestString(wstring & applicationManif
         auto rgPoliciesIter = rgPolicies_.find(iter->second.Name);
         auto spRGPoliciesIter = spRGPolicies_.find(iter->second.Name);
         auto containerHostIter = containerHosts_.find(iter->second.Name);
+        auto networkPoliciesIter = networkPolicies_.find(iter->second.Name);
         auto repositoryAccountName = "sftestcontainerreg";
         auto repositoryAccountPassword = "";
 
@@ -1895,7 +2036,8 @@ void ApplicationBuilder::GetApplicationManifestString(wstring & applicationManif
             packageSharingIter != sharedPackagePolicies_.end() ||
             rgPoliciesIter != rgPolicies_.end() ||
             spRGPoliciesIter != spRGPolicies_.end() ||
-            containerHostIter != containerHosts_.end())
+            containerHostIter != containerHosts_.end() ||
+            networkPoliciesIter != networkPolicies_.end())
         {
             appManifestWriter.WriteLine(L"<Policies>");
 
@@ -1964,6 +2106,21 @@ void ApplicationBuilder::GetApplicationManifestString(wstring & applicationManif
                     appManifestWriter.WriteLine("</ContainerHostPolicies>");
                 }
             }
+            if (networkPoliciesIter != networkPolicies_.end())
+            {
+                appManifestWriter.WriteLine(L"<NetworkPolicies>");
+                for (auto containerNetworkPoliciesIter = networkPoliciesIter->second.ContainerNetworkPolicies.begin(); containerNetworkPoliciesIter != networkPoliciesIter->second.ContainerNetworkPolicies.end(); containerNetworkPoliciesIter++)
+                {
+                    appManifestWriter.WriteLine("<ContainerNetworkPolicy NetworkRef='{0}'>", containerNetworkPoliciesIter->NetworkRef);
+                    for (auto endpointBindingsIter = containerNetworkPoliciesIter->EndpointBindings.begin(); endpointBindingsIter != containerNetworkPoliciesIter->EndpointBindings.end(); endpointBindingsIter++)
+                    {
+                        appManifestWriter.WriteLine("<EndpointBinding EndpointRef='{0}' />", endpointBindingsIter->EndpointRef);
+                    }
+
+                    appManifestWriter.WriteLine("</ContainerNetworkPolicy>");
+                }
+                appManifestWriter.WriteLine(L"</NetworkPolicies>");
+            }
             appManifestWriter.WriteLine(L"</Policies>");
         }
 
@@ -1991,14 +2148,30 @@ void ApplicationBuilder::GetApplicationManifestString(wstring & applicationManif
         appManifestWriter.WriteLine(L"<DefaultServices>");
         for (auto iter = requiredStatelessServices_.begin(); iter != requiredStatelessServices_.end(); iter++)
         {
-            appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}'>", iter->first, iter->second.ServicePackageActivationMode);
+            if (!iter->second.ServiceDnsName.empty())
+            {
+                appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}' ServiceDnsName='{2}'>", iter->first, iter->second.ServicePackageActivationMode, iter->second.ServiceDnsName);
+            }
+            else
+            {
+                appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}'>", iter->first, iter->second.ServicePackageActivationMode, iter->second.ServiceDnsName);
+            }
+
             WriteStatelessServiceType(appManifestWriter, iter->second);
             appManifestWriter.WriteLine("</Service>");
         }
 
         for (auto iter = requiredStatefulService_.begin(); iter != requiredStatefulService_.end(); iter++)
         {
-            appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}'>", iter->first, iter->second.ServicePackageActivationMode);
+            if (!iter->second.ServiceDnsName.empty())
+            {
+                appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}' ServiceDnsName='{2}'>", iter->first, iter->second.ServicePackageActivationMode, iter->second.ServiceDnsName);
+            }
+            else
+            {
+                appManifestWriter.WriteLine("<Service Name='{0}' ServicePackageActivationMode='{1}'>", iter->first, iter->second.ServicePackageActivationMode, iter->second.ServiceDnsName);
+            }
+
             WriteStatefulServiceType(appManifestWriter, iter->second);
             appManifestWriter.WriteLine("</Service>");
         }
@@ -2274,6 +2447,57 @@ void ApplicationBuilder::WriteStatelessServiceType(StringWriter & writer, Statel
         writer.WriteLine("</ServicePlacementPolicies>");
     }
 
+    if (statelessService.ScalingPolicies.size() > 0)
+    {
+        writer.WriteLine("<ServiceScalingPolicies>");
+        for (auto scalingPolicy : statelessService.ScalingPolicies)
+        {
+            writer.WriteLine("<ScalingPolicy>");
+            if (scalingPolicy.Trigger != nullptr)
+            {
+                if (scalingPolicy.Trigger->Kind == Reliability::ScalingTriggerKind::AveragePartitionLoad)
+                {
+                    shared_ptr<Reliability::AveragePartitionLoadScalingTrigger> aplTrigger = static_pointer_cast<Reliability::AveragePartitionLoadScalingTrigger>(scalingPolicy.Trigger);
+                    writer.WriteLine("<AveragePartitionLoadScalingTrigger MetricName=\"{0}\" LowerLoadThreshold=\"{1}\" UpperLoadThreshold=\"{2}\" ScaleIntervalInSeconds=\"{3}\" />",
+                        aplTrigger->MetricName,
+                        aplTrigger->LowerLoadThreshold,
+                        aplTrigger->UpperLoadThreshold,
+                        aplTrigger->ScaleIntervalInSeconds);
+                }
+                else if (scalingPolicy.Trigger->Kind == Reliability::ScalingTriggerKind::AverageServiceLoad)
+                {
+                    shared_ptr<Reliability::AverageServiceLoadScalingTrigger> aslTrigger = static_pointer_cast<Reliability::AverageServiceLoadScalingTrigger>(scalingPolicy.Trigger);
+                    writer.WriteLine("<AverageServiceLoadScalingTrigger MetricName=\"{0}\" LowerLoadThreshold=\"{1}\" UpperLoadThreshold=\"{2}\" ScaleIntervalInSeconds=\"{3}\" />",
+                        aslTrigger->MetricName,
+                        aslTrigger->LowerLoadThreshold,
+                        aslTrigger->UpperLoadThreshold,
+                        aslTrigger->ScaleIntervalInSeconds);
+                }
+            }
+            if (scalingPolicy.Mechanism != nullptr)
+            {
+                if (scalingPolicy.Mechanism->Kind == Reliability::ScalingMechanismKind::AddRemoveIncrementalNamedPartition)
+                {
+                    shared_ptr<Reliability::AddRemoveIncrementalNamedPartitionScalingMechanism> arMechanism = static_pointer_cast<Reliability::AddRemoveIncrementalNamedPartitionScalingMechanism>(scalingPolicy.Mechanism);
+                    writer.WriteLine("<AddRemoveIncrementalNamedPartitionScalingMechanism MinPartitionCount=\"{0}\" MaxPartitionCount=\"{1}\" ScaleIncrement=\"{2}\" />",
+                        arMechanism->MinimumPartitionCount,
+                        arMechanism->MaximumPartitionCount,
+                        arMechanism->ScaleIncrement);
+                }
+                else if (scalingPolicy.Mechanism->Kind == Reliability::ScalingMechanismKind::PartitionInstanceCount)
+                {
+                    shared_ptr<Reliability::InstanceCountScalingMechanism> icMechanism = static_pointer_cast<Reliability::InstanceCountScalingMechanism>(scalingPolicy.Mechanism);
+                    writer.WriteLine("<InstanceCountScalingMechanism MinInstanceCount=\"{0}\" MaxInstanceCount=\"{1}\" ScaleIncrement=\"{2}\" />",
+                        icMechanism->MinimumInstanceCount,
+                        icMechanism->MaximumInstanceCount,
+                        icMechanism->ScaleIncrement);
+                }
+            }
+            writer.WriteLine("</ScalingPolicy>");
+        }
+        writer.WriteLine("</ServiceScalingPolicies>");
+    }
+
     writer.WriteLine("</StatelessService>");
 }
 
@@ -2434,6 +2658,58 @@ void ApplicationBuilder::WriteStatefulServiceType(Common::StringWriter & writer,
         }
 
         writer.WriteLine("</ServicePlacementPolicies>");
+    }
+
+    if (statefulService.ScalingPolicies.size() > 0)
+    {
+        writer.WriteLine("<ServiceScalingPolicies>");
+        for (auto scalingPolicy : statefulService.ScalingPolicies)
+        {
+            writer.WriteLine("<ScalingPolicy>");
+            if (scalingPolicy.Trigger != nullptr)
+            {
+                if (scalingPolicy.Trigger->Kind == Reliability::ScalingTriggerKind::AveragePartitionLoad)
+                {
+                    shared_ptr<Reliability::AveragePartitionLoadScalingTrigger> aplTrigger = static_pointer_cast<Reliability::AveragePartitionLoadScalingTrigger>(scalingPolicy.Trigger);
+                    writer.WriteLine("<AveragePartitionLoadScalingTrigger MetricName=\"{0}\" LowerLoadThreshold=\"{1}\" UpperLoadThreshold=\"{2}\" ScaleIntervalInSeconds=\"{3}\" />",
+                        aplTrigger->MetricName,
+                        aplTrigger->LowerLoadThreshold,
+                        aplTrigger->UpperLoadThreshold,
+                        aplTrigger->ScaleIntervalInSeconds);
+                }
+                else if (scalingPolicy.Trigger->Kind == Reliability::ScalingTriggerKind::AverageServiceLoad)
+                {
+                    shared_ptr<Reliability::AverageServiceLoadScalingTrigger> aslTrigger = static_pointer_cast<Reliability::AverageServiceLoadScalingTrigger>(scalingPolicy.Trigger);
+                    writer.WriteLine("<AverageServiceLoadScalingTrigger MetricName=\"{0}\" LowerLoadThreshold=\"{1}\" UpperLoadThreshold=\"{2}\" ScaleIntervalInSeconds=\"{3}\" UseOnlyPrimaryLoad=\"{4}\" />",
+                        aslTrigger->MetricName,
+                        aslTrigger->LowerLoadThreshold,
+                        aslTrigger->UpperLoadThreshold,
+                        aslTrigger->ScaleIntervalInSeconds,
+                        aslTrigger->UseOnlyPrimaryLoad);
+                }
+            }
+            if (scalingPolicy.Mechanism != nullptr)
+            {
+                if (scalingPolicy.Mechanism->Kind == Reliability::ScalingMechanismKind::AddRemoveIncrementalNamedPartition)
+                {
+                    shared_ptr<Reliability::AddRemoveIncrementalNamedPartitionScalingMechanism> arMechanism = static_pointer_cast<Reliability::AddRemoveIncrementalNamedPartitionScalingMechanism>(scalingPolicy.Mechanism);
+                    writer.WriteLine("<AddRemoveIncrementalNamedPartitionScalingMechanism MinPartitionCount=\"{0}\" MaxPartitionCount=\"{1}\" ScaleIncrement=\"{2}\" />",
+                        arMechanism->MinimumPartitionCount,
+                        arMechanism->MaximumPartitionCount,
+                        arMechanism->ScaleIncrement);
+                }
+                else if (scalingPolicy.Mechanism->Kind == Reliability::ScalingMechanismKind::PartitionInstanceCount)
+                {
+                    shared_ptr<Reliability::InstanceCountScalingMechanism> icMechanism = static_pointer_cast<Reliability::InstanceCountScalingMechanism>(scalingPolicy.Mechanism);
+                    writer.WriteLine("<InstanceCountScalingMechanism MinInstanceCount=\"{0}\" MaxInstanceCount=\"{1}\" ScaleIncrement=\"{2}\" />",
+                        icMechanism->MinimumInstanceCount,
+                        icMechanism->MaximumInstanceCount,
+                        icMechanism->ScaleIncrement);
+                }
+            }
+            writer.WriteLine("</ScalingPolicy>");
+        }
+        writer.WriteLine("</ServiceScalingPolicies>");
     }
 
     writer.WriteLine("</StatefulService>");

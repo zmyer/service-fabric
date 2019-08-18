@@ -120,6 +120,7 @@ namespace PlacementAndLoadBalancingUnitTest
         VERIFY_IS_TRUE(plbTestHelper.CheckRGMetricStatistics(*ServiceModel::Constants::SystemMetricNameCpuCores, 6, 1, 1, 14));
         VERIFY_IS_TRUE(plbTestHelper.CheckRGMetricStatistics(*ServiceModel::Constants::SystemMetricNameMemoryInMB, 7168, 1024, 1024, 13824));
 
+        VERIFY_IS_TRUE(plbTestHelper.CheckDefragStatistics(6, 0, 0, 0, 0)); //Count: Random metric, SystemCpuCores, SystemMetricMB and 3 default metrics
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(2u, actionList.size());
 
@@ -135,7 +136,7 @@ namespace PlacementAndLoadBalancingUnitTest
         actionList = GetActionListString(fm_->MoveActions);
         VerifyPLBAction(plb, L"ConstraintCheck");
         //we are violation node capacity on this node
-        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"4 move primary 5=>2", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"4 move primary 5=>0|2|3|4", value)));
 
         VERIFY_IS_TRUE(plbTestHelper.CheckRGMetricStatistics(*ServiceModel::Constants::SystemMetricNameCpuCores, 7, 1, 1, 14));
         VERIFY_IS_TRUE(plbTestHelper.CheckRGMetricStatistics(*ServiceModel::Constants::SystemMetricNameMemoryInMB, 9216, 1024, 1024, 13824));
@@ -196,7 +197,7 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(4), wstring(L"TestService4"), 0, CreateReplicas(L""), 1));
 
         fm_->RefreshPLB(Stopwatch::Now());
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(2u, actionList.size());
         //down replica are not considered in scaleout
@@ -422,7 +423,7 @@ namespace PlacementAndLoadBalancingUnitTest
         // we must place in ud1 and 0 is the only one with enough capacity
         VERIFY_ARE_EQUAL(1u, actionList.size());
         VERIFY_ARE_EQUAL(1u, CountIf(actionList, ActionMatch(L"0 add secondary 0", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 1, CreateReplicas(L"P/4,S/5"), 0));
         fm_->Clear();
@@ -956,7 +957,131 @@ namespace PlacementAndLoadBalancingUnitTest
         fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval);
         actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(0u, actionList.size());
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementWithDefaultMetrics)
+    {
+        // Test case: 4 replicas with shared host need to be placed on 2 nodes.
+        //      When we account for default metrics, each node needs to receive 2 primaries.
+        PLBConfigScopeChange(UseRGInBoost, bool, false);
+
+        wstring testName = L"PlacementWithDefaultMetrics";
+        Trace.WriteInfo("PLBResourceGovernanceTestSource", "{0}", testName);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescription(0));
+        plb.UpdateNode(CreateNodeDescription(1));
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        vector<ServicePackageDescription> packages;
+        ServiceModel::ServicePackageIdentifier spId;
+        packages.push_back(CreateServicePackageDescription(L"ServicePackageName", appTypeName, appName, 4, 2048, spId));
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(L"ServiceType1", set<Federation::NodeId>()));
+
+        wstring serviceName = L"ServiceName";
+        plb.UpdateService(ServiceDescription(wstring(serviceName),
+            wstring(L"ServiceType1"),           // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            4,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId),
+            ServiceModel::ServicePackageActivationMode::SharedProcess));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(serviceName), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(serviceName), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(serviceName), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(serviceName), 0, CreateReplicas(L""), 1));
+
+        fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval);
+
+        auto actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(4u, actionList.size());
+        VERIFY_ARE_EQUAL(2u, CountIf(actionList, ActionMatch(L"* add primary 0", value)));
+        VERIFY_ARE_EQUAL(2u, CountIf(actionList, ActionMatch(L"* add primary 1", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(BalancingWithDefaultMetrics)
+    {
+        // Test case: 4 replicas with shared host: 3 on node 0, 1 on node 1.
+        // Looking only at resources, system is perfectly balanced.
+        // Balancing should kick in to balances instances so that distribution is 2-2.
+        PLBConfigScopeChange(UseRGInBoost, bool, false);
+
+        wstring testName = L"BalancingWithDefaultMetrics";
+        Trace.WriteInfo("PLBResourceGovernanceTestSource", "{0}", testName);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescription(0));
+        plb.UpdateNode(CreateNodeDescription(1));
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        vector<ServicePackageDescription> packages;
+        ServiceModel::ServicePackageIdentifier spId1;
+        packages.push_back(CreateServicePackageDescription(L"ServicePackageName", appTypeName, appName, 4, 2048, spId1));
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(L"ServiceType1", set<Federation::NodeId>()));
+
+        wstring serviceName = L"ServiceName";
+        plb.UpdateService(ServiceDescription(wstring(serviceName),
+            wstring(L"ServiceType1"),           // Service type
+            wstring(appName),                   // Application name
+            false,                              // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            4,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId1),
+            ServiceModel::ServicePackageActivationMode::SharedProcess));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(serviceName), 0, CreateReplicas(L"S/0"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(serviceName), 0, CreateReplicas(L"S/0"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(serviceName), 0, CreateReplicas(L"S/0"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(serviceName), 0, CreateReplicas(L"S/1"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval);
+
+        auto actionList = GetActionListString(fm_->MoveActions);
+        VerifyPLBAction(plb, L"LoadBalancing");
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+        VERIFY_ARE_EQUAL(1u, CountIf(actionList, ActionMatch(L"* move instance 0=>1", value)));
+
+        //Clear actions and check will default metrics stay after RG metrics update
+        fm_->ClearMoveActions();
+
+        vector<ServicePackageDescription> packages2;
+        packages2.push_back(CreateServicePackageDescription(L"ServicePackageName", appTypeName, appName, 20, 2048, spId1));
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages, packages2));
+
+        fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval);
+
+        actionList.clear();
+        actionList = GetActionListString(fm_->MoveActions);
+        VerifyPLBAction(plb, L"LoadBalancing");
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+        VERIFY_ARE_EQUAL(1u, CountIf(actionList, ActionMatch(L"* move instance 0=>1", value)));
     }
 
     BOOST_AUTO_TEST_CASE(BasicUpgradeWithAffinity)
@@ -1384,7 +1509,7 @@ namespace PlacementAndLoadBalancingUnitTest
             true,                               // Persisted?
             ServiceModel::ServicePackageIdentifier(spId3)));  // Service package
 
-        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(service1Name), 0, CreateReplicas(L"P/0,S/1"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(service1Name), 0, CreateReplicas(L"S/0,P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(service1Name), 0, CreateReplicas(L"P/0,S/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(service2Name), 0, CreateReplicas(L"P/0,S/1/D"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(service3Name), 0, CreateReplicas(L"P/0,S/1/D"), 0));
@@ -1792,10 +1917,11 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType3"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType4"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType4", true, spId4));
+        // Do not add default metrics: we want to test if PLB will move smalles number of replicas in order to move the entire SP.
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType4", true, spId4, CreateMetrics(L"DummyMetric/1.0/0/0")));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L"P/0,S/1"), 0));
@@ -1846,11 +1972,12 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType1"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType3"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType2", true, spId2));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService5", L"ServiceType3", true, spId3));
+        // DummyMetric is here to avoid balancing on default metrics. We want to test if entire SPs will be moved.
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService5", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0")));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L"P/0,S/1,S/2"), 0));
@@ -1954,11 +2081,12 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType1"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType3"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L""), false));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L""), true));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L""), false));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType3", true, spId3, CreateMetrics(L""), false));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService5", L"ServiceType2", true, spId2, CreateMetrics(L""), true));
+        // We want to test that PLB will move correct replicas to move the entire SP, so adding dummy metrics.
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0"), false));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0"), true));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0"), false));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0"), false));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService5", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0"), true));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L"P/0,S/1"), 0));
@@ -2017,8 +2145,9 @@ namespace PlacementAndLoadBalancingUnitTest
 
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType1"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"")));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L""), false));
+        // The intent is to test if preventing overcommit works, so no balancing on default metrics is required.
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0"), false));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/2"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/3"), 0));
@@ -2092,7 +2221,7 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService4", L"ServiceType3", true, spId3, CreateMetrics(L""), true));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/1,S/2"), 0));
-        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 0, CreateReplicas(L"P/0,S/1,S/2"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 0, CreateReplicas(L"S/0,S/1,P/2"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(L"TestService2"), 0, CreateReplicas(L"P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(L"TestService3"), 0, CreateReplicas(L"P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(4), wstring(L"TestService4"), 0, CreateReplicas(L"P/1"), 0));
@@ -2108,7 +2237,7 @@ namespace PlacementAndLoadBalancingUnitTest
         PLBConfigScopeChange(MinConstraintCheckInterval, Common::TimeSpan, Common::TimeSpan::MaxValue);
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 1, CreateReplicas(L"P/0,S/1,S/2"), 0));
-        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 1, CreateReplicas(L"P/0,S/1,S/2"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 1, CreateReplicas(L"S/0,S/1,P/2"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(L"TestService2"), 1, CreateReplicas(L"P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(L"TestService3"), 1, CreateReplicas(L"P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(4), wstring(L"TestService4"), 1, CreateReplicas(L"P/1"), 0));
@@ -2235,9 +2364,9 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType1"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType3"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0")));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L"P/1"), 0));
@@ -4047,6 +4176,171 @@ namespace PlacementAndLoadBalancingUnitTest
         VerifyServicePackageReplicaNumber(ServiceModel::ServicePackageIdentifier(spId2), 1, 0, 0, CreateNodeId(2));
     }
 
+    BOOST_AUTO_TEST_CASE(NoneReplicaWithResourceGovernanceSPIncludeLoadTest)
+    {
+        wstring testName = L"NoneReplicaWithResourceGovernanceSPIncludeLoadTest";
+        Trace.WriteInfo("PLBResourceGovernanceTestSource", "{0}", testName);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 2, 2048));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 2, 2048));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 2, 2048));
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        vector<ServicePackageDescription> packages;
+        ServiceModel::ServicePackageIdentifier spId1;
+        packages.push_back(CreateServicePackageDescription(L"SP1", appTypeName, appName, 2, 1024, spId1));
+        ServiceModel::ServicePackageIdentifier spId2;
+        packages.push_back(CreateServicePackageDescription(L"SP2", appTypeName, appName, 1, 512, spId2));
+        ServiceModel::ServicePackageIdentifier spIdNoRG;
+        packages.push_back(CreateServicePackageDescription(L"SPNoRG", appTypeName, appName, 0, 0, spIdNoRG));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(L"ServiceType", set<Federation::NodeId>()));
+
+        wstring service1Name = L"Service1";
+        plb.UpdateService(ServiceDescription(wstring(service1Name),
+            wstring(L"ServiceType"),            // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            1,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId1)));   // shared service package
+
+        wstring service2Name = L"Service2";
+        plb.UpdateService(ServiceDescription(wstring(service2Name),
+            wstring(L"ServiceType"),            // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            1,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId1)));   // shared service package
+
+        wstring service3Name = L"Service3";
+        plb.UpdateService(ServiceDescription(wstring(service3Name),
+            wstring(L"ServiceType"),            // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            1,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId2),
+            ServiceModel::ServicePackageActivationMode::ExclusiveProcess));   // exclusive service package
+
+        wstring service4Name = L"Service4";
+        plb.UpdateService(ServiceDescription(wstring(service4Name),
+            wstring(L"ServiceType"),            // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"Dummy/1.0/5/5")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            1,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spIdNoRG),
+            ServiceModel::ServicePackageActivationMode::ExclusiveProcess));   // exclusive service package
+
+        // Config IncludeResourceGovernanceNoneReplicaLoad is on - so include load for none replicas
+        // Scenario1: Check load for None replica that have RG load
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(service1Name), 0, CreateReplicas(L"N/0"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(service2Name), 0, CreateReplicas(L"N/0"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(service3Name), 0, CreateReplicas(L"N/1"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(3), wstring(service4Name), 0, CreateReplicas(L"N/2"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+
+        VerifyNodeLoadQuery(plb, 0, *ServiceModel::Constants::SystemMetricNameMemoryInMB, 0);
+        VerifyNodeLoadQuery(plb, 0, *ServiceModel::Constants::SystemMetricNameCpuCores, 0);
+
+        VerifyNodeLoadQuery(plb, 1, *ServiceModel::Constants::SystemMetricNameMemoryInMB, 512);
+        VerifyNodeLoadQuery(plb, 1, *ServiceModel::Constants::SystemMetricNameCpuCores, 1);
+
+        VerifyNodeLoadQuery(plb, 2, L"Dummy", 0);
+        VerifyNodeLoadQuery(plb, 2, *ServiceModel::Constants::SystemMetricNameMemoryInMB, 0);
+        VerifyNodeLoadQuery(plb, 2, *ServiceModel::Constants::SystemMetricNameCpuCores, 0);
+
+        // expectedExclusiveRegularReplicaCount, expectedSharedRegularReplicaCount, expectedSharedDisappearReplicaCount
+        VerifyServicePackageReplicaNumber(ServiceModel::ServicePackageIdentifier(spId1), 0, 0, 0, CreateNodeId(0));
+        VerifyServicePackageReplicaNumber(ServiceModel::ServicePackageIdentifier(spId2), 0, 0, 0, CreateNodeId(1));
+    }
+
+    BOOST_AUTO_TEST_CASE(NoneReplicaWithResourceGovernanceSPLoadTest)
+    {
+        PLBConfigScopeChange(IncludeResourceGovernanceNoneReplicaLoad, bool, false);
+
+        wstring testName = L"NoneReplicaWithResourceGovernanceSPLoadTest";
+        Trace.WriteInfo("PLBResourceGovernanceTestSource", "{0}", testName);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 2, 2048));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 2, 2048));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 2, 2048));
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        vector<ServicePackageDescription> packages;
+        ServiceModel::ServicePackageIdentifier spId;
+        packages.push_back(CreateServicePackageDescription(L"SP", appTypeName, appName, 2, 1024, spId));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(L"ServiceType", set<Federation::NodeId>()));
+        wstring serviceName = L"Service";
+        plb.UpdateService(ServiceDescription(wstring(serviceName),
+            wstring(L"ServiceType"),            // Service type
+            wstring(appName),                   // Application name
+            true,                               // Stateful?
+            wstring(L""),                       // Placement constraints
+            wstring(L""),                       // Parent
+            true,                               // Aligned affinity
+            move(CreateMetrics(L"")),           // Default metrics
+            FABRIC_MOVE_COST_LOW,               // Move cost
+            false,                              // On every node
+            1,                                  // Partition count
+            1,                                  // Target replica set size
+            true,                               // Persisted?
+            ServiceModel::ServicePackageIdentifier(spId),
+            ServiceModel::ServicePackageActivationMode::ExclusiveProcess));   // exclusive service package
+
+        // Config IncludeResourceGovernanceNoneReplicaLoad is off - so do not include load for none replicas
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(serviceName), 0, CreateReplicas(L"N/0"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+
+        VerifyNodeLoadQuery(plb, 0, *ServiceModel::Constants::SystemMetricNameMemoryInMB, 0);
+        VerifyNodeLoadQuery(plb, 0, *ServiceModel::Constants::SystemMetricNameCpuCores, 0);
+    }
+
     BOOST_AUTO_TEST_CASE(BalancingCpuCoresActivityThreshold)
     {
         PLBConfigScopeChange(UseRGInBoost, bool, true);
@@ -4085,7 +4379,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // No metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4102,7 +4396,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // No metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4174,7 +4468,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")),
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4191,7 +4485,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")),
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4256,6 +4550,12 @@ namespace PlacementAndLoadBalancingUnitTest
 
     BOOST_AUTO_TEST_CASE(ScopedDefragActivityThresholdTest)
     {
+        // There are 5 nodes with loads and capacity as below for SystemCpuMetric
+        // 1: 0/4   2: 2/4   3: 8/11   4: 3/4   5: 0/4
+        // Strategy is ReservationWithBalancing; 2 nodes with 4 Cpu's should be reserved
+        // If activity threshold is set to 9, no balancing is triggered because there are enough empty nodes
+        // If activity threshold is set to 7, balancing should trigger and free up some space on node 3 to reach balanced state
+
         PLBConfigScopeChange(UseRGInBoost, bool, true);
 
         wstring testName = L"ScopedDefragActivityThresholdTest";
@@ -4285,7 +4585,7 @@ namespace PlacementAndLoadBalancingUnitTest
             PLBConfig::KeyIntegerValueMap,
             defragmentationEmptyNodeDistributionPolicy);
 
-        int numberOfNodesRequested = 3;
+        int numberOfNodesRequested = 2;
         PLBConfig::KeyDoubleValueMap defragmentationMetricsPercentOrNumberOfEmptyNodesTriggeringThreshold;
         defragmentationMetricsPercentOrNumberOfEmptyNodesTriggeringThreshold.insert(make_pair(*(ServiceModel::Constants::SystemMetricNameCpuCores),
             numberOfNodesRequested));
@@ -4297,17 +4597,26 @@ namespace PlacementAndLoadBalancingUnitTest
         activityThresholdsNoBalancing.insert(make_pair(ServiceModel::Constants::SystemMetricNameCpuCores, 9));
         PLBConfigScopeChange(MetricActivityThresholds, PLBConfig::KeyIntegerValueMap, activityThresholdsNoBalancing);
 
+        PLBConfig::KeyIntegerValueMap reservationLoad;
+        reservationLoad.insert(make_pair(ServiceModel::Constants::SystemMetricNameCpuCores, 4));
+        PLBConfigScopeChange(ReservedLoadPerNode, PLBConfig::KeyIntegerValueMap, reservationLoad);
+
+        PLBConfig::KeyDoubleValueMap emptyNodeWeight;
+        emptyNodeWeight.insert(make_pair(ServiceModel::Constants::SystemMetricNameCpuCores, 0.5));
+        PLBConfigScopeChange(DefragmentationEmptyNodeWeight, PLBConfig::KeyDoubleValueMap, emptyNodeWeight);
+
         PLBConfigScopeChange(BalancingDelayAfterNodeDown, TimeSpan, TimeSpan::Zero);
         PLBConfigScopeChange(BalancingDelayAfterNewNode, TimeSpan, TimeSpan::Zero);
         PLBConfigScopeChange(SimulatedAnnealingIterationsPerRound, int, 3000);
 
         PlacementAndLoadBalancing & plb = fm_->PLB;
 
-        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 4, 2048, std::map<wstring, wstring>(), L"", L"ud1"));
-        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 4, 2048, std::map<wstring, wstring>(), L"", L"ud1"));
-        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 11, 2048, std::map<wstring, wstring>(), L"", L"ud2"));
-        plb.UpdateNode(CreateNodeDescriptionWithResources(3, 4, 2048, std::map<wstring, wstring>(), L"", L"ud3"));
-        plb.UpdateNode(CreateNodeDescriptionWithResources(4, 4, 2048, std::map<wstring, wstring>(), L"", L"ud4"));
+        // Both FD and UD's should exist but distribution isn't important when reservation is done by number of empty nodes
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 4, 2048, std::map<wstring, wstring>(), L"", L"ud1", L"fd/1"));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 4, 2048, std::map<wstring, wstring>(), L"", L"ud1", L"fd/2"));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 11, 2048, std::map<wstring, wstring>(), L"", L"ud2", L"fd/3"));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(3, 4, 2048, std::map<wstring, wstring>(), L"", L"ud3", L"fd/4"));
+        plb.UpdateNode(CreateNodeDescriptionWithResources(4, 4, 2048, std::map<wstring, wstring>(), L"", L"ud4", L"fd/5"));
 
         wstring appTypeName = wformatString("{0}_AppType", testName);
         wstring appName = wformatString("{0}_Application", testName);
@@ -4323,9 +4632,9 @@ namespace PlacementAndLoadBalancingUnitTest
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType1"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType2"), set<Federation::NodeId>()));
         plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType3"), set<Federation::NodeId>()));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2));
-        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService1", L"ServiceType1", true, spId1, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService2", L"ServiceType2", true, spId2, CreateMetrics(L"DummyMetric/1.0/0/0")));
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(L"TestService3", L"ServiceType3", true, spId3, CreateMetrics(L"DummyMetric/1.0/0/0")));
 
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/1"), 0));
         plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L"P/2,S/3"), 0));
@@ -4392,7 +4701,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4409,7 +4718,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4459,7 +4768,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4475,7 +4784,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4491,7 +4800,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4524,7 +4833,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4540,7 +4849,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count
@@ -4556,7 +4865,7 @@ namespace PlacementAndLoadBalancingUnitTest
             wstring(L""),                       // Placement constraints
             wstring(L""),                       // Parent
             true,                               // Aligned affinity
-            move(CreateMetrics(L"")),           // Default metrics
+            move(CreateMetrics(L"DummyMetric/1.0/0/0")), // Default metrics
             FABRIC_MOVE_COST_LOW,               // Move cost
             false,                              // On every node
             1,                                  // Partition count

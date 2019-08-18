@@ -11,9 +11,6 @@ namespace Management
     {
         class IImageStore : public Common::TextTraceComponent<Common::TraceTaskCodes::ImageStore>
         {
-        private:
-            static Common::GlobalWString ArchiveMarkerFileName;
-
         public:
 
             virtual ~IImageStore() {}
@@ -154,7 +151,12 @@ namespace Management
             static Common::ErrorCode ReplaceErrorCode(Common::ErrorCode const & errorCode);
 
             Common::ErrorCode DoesArchiveExistInStore(std::wstring const &, Common::TimeSpan const timeout, __out bool & result);
-            Common::ErrorCode ExtractArchive(std::wstring const & src, std::wstring const & dest, bool overwrite);
+            Common::ErrorCode ExtractArchive(
+                std::wstring const & src, 
+                std::wstring const & dest, 
+                bool overwrite = false, 
+                std::wstring const & expectedChecksumValue = L"",
+                std::wstring const & cacheChecksumObject = L"");
 
             Common::ErrorCode RemoveCorruptedContent(std::wstring const & cacheObject, Common::TimeoutHelper const & timeoutHelper);
 

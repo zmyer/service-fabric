@@ -181,22 +181,24 @@ bool ConfigSettings::TryAddSection(ConfigSection && section)
 void ConfigSettings::ApplyOverrides(ConfigSettingsOverride const& configSettingsOverride)
 {
     //MustOverride validation has already been done at the Image builder
-    for(auto configSettingsOverrideIter = configSettingsOverride.Sections.begin(); configSettingsOverrideIter != configSettingsOverride.Sections.end(); ++configSettingsOverrideIter)
+    for(auto const& configSectionOverride : configSettingsOverride.Sections)
     {
-        ConfigSectionOverride const& configSectionOverride = configSettingsOverrideIter->second;
-        auto iter1 = Sections.find(configSectionOverride.Name);
-        ASSERT_IF(iter1 == Sections.end(), "ConfigSectionOverride {0} not found in ConfigSections", configSectionOverride.Name);
+        auto iter1 = Sections.find(configSectionOverride.second.Name);
+        ASSERT_IF(iter1 == Sections.end(), "ConfigSectionOverride {0} not found in ConfigSections", configSectionOverride.second.Name);
         ConfigSection & configSection = iter1->second;
 
-        for(auto configParameterOverrideIter = configSectionOverride.Parameters.begin(); configParameterOverrideIter != configSectionOverride.Parameters.end(); ++configParameterOverrideIter)
+        for(auto const& configParameterOverride : configSectionOverride.second.Parameters)
         {
-            ConfigParameterOverride const& configParameterOverride = configParameterOverrideIter->second;
-            auto iter2 = configSection.Parameters.find(configParameterOverride.Name);
-            ASSERT_IF(iter1 == Sections.end(), "ConfigParameterOverride {0} not found in ConfigParameter", configParameterOverride.Name);
+            auto iter2 = configSection.Parameters.find(configParameterOverride.second.Name);
+            ASSERT_IF(iter2 == configSection.Parameters.end(), "ConfigParameterOverride {0} not found in ConfigParameter", configParameterOverride.second.Name);
             ConfigParameter & configParameter = iter2->second;
 
-            configParameter.Name = configParameterOverride.Name;
-            configParameter.Value = configParameterOverride.Value;
+            configParameter.Name = configParameterOverride.second.Name;
+            configParameter.Value = configParameterOverride.second.Value;
+            if (!configParameterOverride.second.Type.empty())
+            {
+                configParameter.Type = configParameterOverride.second.Type;
+            }
         }
     }
 }

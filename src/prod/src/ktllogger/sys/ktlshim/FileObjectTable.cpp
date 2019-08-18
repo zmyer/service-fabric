@@ -3,6 +3,10 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+#ifdef UNIFY
+#define UPASSTHROUGH 1
+#endif
+
 #pragma prefast(push)
 #pragma prefast(disable: 28167, "DevDiv:422165: Prefast not recognizing c++ dtor being called")
 
@@ -570,6 +574,7 @@ NTSTATUS FileObjectTable::CreateAndRegisterOverlayManagerInternal(
     //
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     KtlLogManager::SharedLogContainerSettings sharedLogContainerSettings;
+    KtlLogManager::AcceleratedFlushLimits accelerateFlushLimits;
 
     //
     // Default memory throttle limits and settings
@@ -582,6 +587,7 @@ NTSTATUS FileObjectTable::CreateAndRegisterOverlayManagerInternal(
     memoryThrottleLimits.PeriodicTimerIntervalInSec = KtlLogManager::MemoryThrottleLimits::_DefaultPeriodicTimerIntervalInSec;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_DefaultAllocationTimeoutInMs;
     memoryThrottleLimits.MaximumDestagingWriteOutstanding = KtlLogManager::MemoryThrottleLimits::_DefaultMaximumDestagingWriteOutstanding;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     //
     // Use global default settings in the case that FabricNode does not
@@ -597,11 +603,17 @@ NTSTATUS FileObjectTable::CreateAndRegisterOverlayManagerInternal(
     sharedLogContainerSettings.MaximumRecordSize = 0;
     sharedLogContainerSettings.Flags = 0;
 
+    accelerateFlushLimits.AccelerateFlushActiveTimerInMs = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushActiveTimerInMs;
+    accelerateFlushLimits.AccelerateFlushPassiveTimerInMs = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushPassiveTimerInMs;
+    accelerateFlushLimits.AccelerateFlushActivePercent = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushActivePercent;
+    accelerateFlushLimits.AccelerateFlushPassivePercent = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushPassivePercent;
+    
     OverlayManager::SPtr overlayManager;
 
     status = OverlayManager::Create(overlayManager,
-                                    &memoryThrottleLimits,
-                                    &sharedLogContainerSettings,
+                                    memoryThrottleLimits,
+                                    sharedLogContainerSettings,
+                                    accelerateFlushLimits,
                                     Allocator,
                                     AllocationTag
                                     );
@@ -819,7 +831,7 @@ VOID FileObjectTable::LookupOverlayManager(
     )
 {
     KSharedBase::SPtr overlayManager;   
-    WCHAR overlayManagerText[sizeof(OVERLAY_MANAGER) / 2];
+    WCHAR overlayManagerText[sizeof(OVERLAY_MANAGER) / sizeof(WCHAR)];
 
     KMemCpySafe(overlayManagerText, sizeof(overlayManagerText), OVERLAY_MANAGER, sizeof(OVERLAY_MANAGER));
     

@@ -39,10 +39,10 @@ class OpenCloseUser : public OpenCloseDriver, public KThreadPool::WorkItem
             return(_FOT.RawPtr());
         }
 
-		PVOID GetKernelPointerFromObjectId(
-		    __in ULONGLONG ObjectId
+        PVOID GetKernelPointerFromObjectId(
+            __in ULONGLONG ObjectId
         ) override ;
-		
+        
     protected:
         VOID
         OnStart(
@@ -402,7 +402,7 @@ DevIoControlInprocUser::Execute(
     // Emulate buffered IO by creating a buffer and using this
     // buffer for the call to the "kernel" side
     //
-    status = KBuffer::Create(max(_InBufferSize, _OutBufferSize),
+    status = KBuffer::Create(MAX(_InBufferSize, _OutBufferSize),
                              _TransferKBuffer,
                              GetThisAllocator(),
                              _AllocationTag);
@@ -884,11 +884,11 @@ OpenCloseUser::PostCloseCompletion(
 
 PVOID OpenCloseUser::GetKernelPointerFromObjectId(
     __in ULONGLONG ObjectId
-	)
+    )
 {
-    PVOID p;	
+    PVOID p;    
 
-	p = _FOT->LookupObjectPointer(ObjectId);
+    p = _FOT->LookupObjectPointer(ObjectId);
 
 	return(p);
 }

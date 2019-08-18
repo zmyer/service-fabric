@@ -98,9 +98,10 @@ void TruncateTailLogRecord::Read(
 void TruncateTailLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite,
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
     ULONG32 logicalStartingPosition = binaryWriter.Position;
     
     binaryWriter.Position += sizeof(ULONG32);
@@ -119,4 +120,11 @@ void TruncateTailLogRecord::Write(
 bool TruncateTailLogRecord::Test_Equals(__in LogRecord const & other) const
 {
     return __super::Test_Equals(other);
+}
+
+std::wstring TruncateTailLogRecord::ToString() const
+{
+    std::wstring logRecordString = Constants::CloseJSON;
+
+    return __super::ToString() + logRecordString;
 }

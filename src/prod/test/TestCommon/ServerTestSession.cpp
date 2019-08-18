@@ -92,8 +92,13 @@ void ServerTestSession::ProcessClientMessage(Transport::MessageUPtr & message, T
             ConnectMessageBody connectMessageBody;
             message->GetBody(connectMessageBody);
             TestSession::WriteNoise(TraceSource, "New Connection message from Client {0} with PID {1}", context->From, connectMessageBody.ProcessId);
-            bool success = StartMonitoringClient(connectMessageBody.ProcessId, context->From);
-            TestSession::FailTestIf(!success && !isClosed_, "Client {0} with PID {1} failed to start monitoring", context->From, connectMessageBody.ProcessId);
+
+            bool processExitedBeforeOpen = false;
+            bool success = StartMonitoringClient(connectMessageBody.ProcessId, context->From, processExitedBeforeOpen);
+
+            // Fix RDBug 11139724.
+            // If process already exited when OpenProcess is called in StartMonitoringClient, then OpenProcess failure is expected so we will not fail the test. 
+            TestSession::FailTestIf(!success && !isClosed_ && !processExitedBeforeOpen, "Client {0} with PID {1} failed to start monitoring", context->From, connectMessageBody.ProcessId);
         }
 
         OnClientConnection(context->From);
@@ -121,22 +126,34 @@ void ServerTestSession::ProcessClientMessage(Transport::MessageUPtr & message, T
     }
 }
 
-bool ServerTestSession::StartMonitoringClient(DWORD processId, wstring const& clientId)
+bool ServerTestSession::StartMonitoringClient(DWORD processId, wstring const& clientId, __out bool & processExitedBeforeOpen)
 {
-    HANDLE result = ::OpenProcess(SYNCHRONIZE, FALSE, processId);
-    if (result == NULL)
+    HandleUPtr processHandle;
+    DWORD osErrorCode = 0;
+    auto errorCode = ProcessUtility::OpenProcess(
+        SYNCHRONIZE,
+        FALSE,
+        processId,
+        processHandle,
+        osErrorCode);
+
+    if (!errorCode.IsSuccess())
     {
-		if (!isClosed_)
-		{
-			TestSession::WriteError(TraceSource, "OpenProcess for monitoring failed for process id {0}", processId);
-		}        
+        // If osErrorCode is ERROR_INVALID_PARAMETER after OpenProcess call, it means processId is invalid because the other 2 args are always valid. 
+        // In this case, the process already exited before OpenProcess call and we set processExitedBeforeOpen to true. 
+        if (osErrorCode == ERROR_INVALID_PARAMETER)
+        {
+            processExitedBeforeOpen = true;
+        }
+        
+        TestSession::WriteError(TraceSource, "OpenProcess for monitoring failed with error {0}", errorCode);
         return false;
     }
 
     auto root = this->CreateComponentRoot();
     auto localClientId = clientId;
     ProcessWaitSPtr proccessMonitor = ProcessWait::CreateAndStart(
-        Handle(result),
+        move(*processHandle),
         processId,
         [this, root, localClientId](pid_t processId, ErrorCode const &, DWORD)
     {

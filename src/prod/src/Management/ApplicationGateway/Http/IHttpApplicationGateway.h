@@ -19,6 +19,7 @@ namespace HttpApplicationGateway
         virtual Common::ComponentRoot const & GetComponentRoot() = 0;
         virtual IHttpApplicationGatewayConfig const & GetGatewayConfig() = 0;
         virtual IHttpApplicationGatewayEventSource const & GetTraceEventSource() = 0;
+        virtual Transport::SecurityProvider::Enum  GetSecurityProvider() = 0;
 
         virtual Common::ErrorCode CreateHttpClientRequest(
             std::wstring const &clientUri,
@@ -28,6 +29,7 @@ namespace HttpApplicationGateway
             __in KAllocator &ktlAllocator,
             __in bool allowRedirects,
             __in bool enableCookies,
+            __in bool enableWinauthAutoLogon,
             __out HttpClient::IHttpClientRequestSPtr &clientRequest) = 0;
     };
 }

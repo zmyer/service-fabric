@@ -3,6 +3,10 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+#ifdef UNIFY
+#define UPASSTHROUGH 1
+#endif
+
 #define VERBOSE 1
 
 #include "KtlLogShimKernel.h"
@@ -257,7 +261,8 @@ OverlayStream::CoalesceRecords::CreateAsyncReadContext(
 //
 VOID
 OverlayStream::CoalesceRecords::AsyncAppendOrFlushContext::CompleteRequest(
-__in NTSTATUS Status)
+    __in NTSTATUS Status
+    )
 {
     Complete(Status);
 }
@@ -684,6 +689,7 @@ OverlayStream::CoalesceRecords::AsyncAppendOrFlushContext::AppendFSMContinue(
                     //
                     _LLSource.Clear();
                     _CoalesceRecords->RemoveWriteFromWaitingList(*this);
+                    _DestagingWriteContext->SetOrResetTruncateOnCompletion(FALSE);                  
                     flushingRecordsContext->AppendCoalescingWrite(this);
                 }
 
@@ -759,6 +765,7 @@ OverlayStream::CoalesceRecords::AsyncAppendOrFlushContext::AppendFSMContinue(
 
                 _LLSource.Clear();
                 _CoalesceRecords->RemoveWriteFromWaitingList(*this);
+                _DestagingWriteContext->SetOrResetTruncateOnCompletion(FALSE);                  
                 flushingRecordsContext->AppendCoalescingWrite(this);
 
                 _CoalesceRecords->StartNextWrite();
@@ -1297,7 +1304,7 @@ VOID
 OverlayStream::CoalesceRecords::StartPeriodicFlush()
 {
     NTSTATUS status;
-    
+
     //
     // Take service activity to represent the outstanding periodic
     // flush. It is released when the flush completes.
@@ -1399,13 +1406,6 @@ OverlayStream::CoalesceRecords::PeriodicTimerCompletion(
 {
     NTSTATUS status = Async.Status();
     OverlayStream::SPtr overlayStream = (OverlayStream*)ParentAsync;
-
-    KDbgCheckpointWData(overlayStream->GetActivityId(),
-                        "OverlayStream::CoalesceRecords::PeriodicTimerCompletion enter", status,
-                        (ULONGLONG)overlayStream.RawPtr(),
-                        (ULONGLONG)this,
-                        (ULONGLONG)0,
-                        (ULONGLONG)0);
 
     //
     // See if the OverlayStream is closing or not. If closing or closed
@@ -1511,7 +1511,7 @@ OverlayStream::CoalesceRecords::PeriodicTimerCompletion(
                             (ULONGLONG)isUnderPressure,
                             (ULONGLONG)this,
                             (ULONGLONG)_PeriodicFlushCounter,
-                            (ULONGLONG)0);
+                            (ULONGLONG)_OverlayStream->GetPeriodicFlushTimeInSec());
         StartPeriodicFlush();
     } else {
 #ifdef UDRIVER
@@ -1651,6 +1651,8 @@ OverlayStream::CoalesceRecords::AsyncFlushAllRecordsForClose::FSMContinue(
             KDbgCheckpointWDataInformational(_OverlayStream->GetActivityId(), 
                 "OverlayStream::CoalesceRecords::AsyncFlushAllRecordsForClose::FSMContinue",
                                              Status, _State, (ULONGLONG)this, _CoalesceRecords->FlushingRecordsCount(), 0);
+
+            _CoalesceRecords->RemoveAllFailedFlushingRecordsContext();
             if (_CoalesceRecords->IsFlushingRecordsEmpty())
             {
                 Complete(STATUS_SUCCESS);
@@ -2027,6 +2029,7 @@ OverlayStream::CoalesceRecords::CoalesceRecords(
     _CurrentlyExecuting = NULL;
 
     _FlushingRecordsContext = nullptr;
+    _FailedFlushingRecordCount = 0;
 
     _RestartPeriodicFlushTimer = FALSE;
     _IsFlushTimerActive = FALSE;
@@ -2118,7 +2121,7 @@ OverlayStream::CoalesceRecords::AsyncFlushingRecordsContext::OnCompleted(
 {
     KInvariant(_CoalescingWrites.IsEmpty());
 
-    _CoalesceRecords->RemoveFlushingRecordsContext(*this);
+    _CoalesceRecords->RemoveFlushingRecordsContext(Status(), *this);
     
     _IoBuffer = nullptr;
     _MetadataBuffer = nullptr;
@@ -2285,10 +2288,24 @@ VOID OverlayStream::CoalesceRecords::AsyncFlushingRecordsContext::CompleteFlushi
 {
     OverlayStream::CoalesceRecords::AsyncAppendOrFlushContext::SPtr appendContext;
 
+    //
+    // Find the last append async in the list, this is the one that
+    // should truncate
+    //
+    appendContext = _CoalescingWrites.PeekTail();
+    while ((appendContext != nullptr) && (appendContext->IsFlushContext()))
+    {
+        appendContext = _CoalescingWrites.Predecessor(appendContext.RawPtr());
+    }
+    
+    if (appendContext)
+    {
+        appendContext->_DestagingWriteContext->SetOrResetTruncateOnCompletion(TRUE);
+    }
+    
     while (!_CoalescingWrites.IsEmpty())
     {
         appendContext = _CoalescingWrites.RemoveHead();
-        KInvariant(appendContext);
         appendContext->CompleteRequest(Status);
     }
 }
@@ -2342,26 +2359,62 @@ void OverlayStream::CoalesceRecords::InsertCurrentFlushingRecordsContext()
     ResetFlushingRecordsContext();              
 }
 
-void OverlayStream::CoalesceRecords::RemoveFlushingRecordsContext(__in AsyncFlushingRecordsContext& FlushingRecordsContext)
+void OverlayStream::CoalesceRecords::RemoveFlushingRecordsContext(
+    __in NTSTATUS ,
+    __in AsyncFlushingRecordsContext& FlushingRecordsContext
+    )
 {
     OverlayStream::CoalesceRecords::AsyncFlushingRecordsContext* p;
     K_LOCK_BLOCK(_FRListLock)
     {
-        p =_FlushingRecords.Remove(&FlushingRecordsContext);
-        KInvariant(p != NULL);
+        if (NT_SUCCESS(FlushingRecordsContext.Status()))
+        {
+            p =_FlushingRecords.Remove(&FlushingRecordsContext);
+            KInvariant(p != NULL);
+            FlushingRecordsContext.Release();
+        } else {
+            _FailedFlushingRecordCount++;
+        }
     }
-
-    FlushingRecordsContext.Release();
 
     //
     // When closing and flushing records list is empty then fire
     // an event that FlushAllRecordsForClose waits
     //
-    if ((_IsClosing) && _FlushingRecords.IsEmpty())
+    if (_IsClosing)
     {
         _FlushingRecordsFlushed.SetEvent();
     }
 }
+
+void OverlayStream::CoalesceRecords::RemoveAllFailedFlushingRecordsContext(
+    )
+{
+    AsyncFlushingRecordsContext* flushingRecordsContext;
+    AsyncFlushingRecordsContext* nextFlushingRecordsContext;
+    
+    K_LOCK_BLOCK(_FRListLock)
+    {
+        if (_FailedFlushingRecordCount > 0)
+        {
+            flushingRecordsContext = _FlushingRecords.PeekHead();
+            while ((flushingRecordsContext != NULL) && (_FailedFlushingRecordCount > 0))
+            {
+                nextFlushingRecordsContext = _FlushingRecords.Successor(flushingRecordsContext);
+                if (! NT_SUCCESS(flushingRecordsContext->Status()))
+                {
+                    _FlushingRecords.Remove(flushingRecordsContext);
+                    flushingRecordsContext->Release();
+                    _FailedFlushingRecordCount--;
+                }
+                flushingRecordsContext = nextFlushingRecordsContext;
+            }
+        }
+    }
+    
+    KInvariant(_FailedFlushingRecordCount == 0);
+}
+
 
 NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
     __inout RvdLogAsn& RecordAsn,
@@ -2495,15 +2548,6 @@ NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
             llCopy.SetDataSize(_LLDestination.GetDataSize());
             llCopy.UpdateValidationInformation();
 
-#if 0 // TODO: Remove when stabilized
-            KDbgCheckpointWDataInformational(_OverlayStream->GetActivityId(),
-                                "CoalesceRecords::FindDataInFlushingRecords", status,
-                                (ULONGLONG)RecordAsn.Get(),
-                                (ULONGLONG)this,
-                                (ULONGLONG)llCopy.GetDataSize() * 0x100000000 + llCopy.GetStreamBlockHeader()->DataSize,
-                                (ULONGLONG)ioBuffer->QuerySize());
-#endif
-
             RecordAsn = streamBlockHeader->StreamOffset;
             Version = streamBlockHeader->HighestOperationId;
             MetaDataBuffer = Ktl::Move(metadataBuffer);
@@ -2532,8 +2576,23 @@ NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
                 //
                 RecordAsn = flushingRecordsContext->GetStreamOffset();
                 Version = flushingRecordsContext->GetHighestOperationId();
-                MetaDataBuffer = flushingRecordsContext->GetMetadataBuffer();
+
+#ifdef UPASSTHROUGH
+                //
+                // For inproc logger, make a copy of the IoBuffer since
+                // the logical log will call Clear() on it. This is not
+                // needed in the case of the KDRIVER or UDRIVER since a
+                // copy is made when crossing the user/kernel boundary.
+                //
+                status = flushingRecordsContext->GetIoBuffer()->CreateAlias(IoBuffer);
+                if (! NT_SUCCESS(status))
+                {
+                    return(status);
+                }               
+#else
                 IoBuffer = flushingRecordsContext->GetIoBuffer();
+#endif              
+                MetaDataBuffer = flushingRecordsContext->GetMetadataBuffer();
                 
                 return(STATUS_SUCCESS);
             }
@@ -2569,8 +2628,23 @@ NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
 
                 RecordAsn = independentWriteContext->GetStreamOffset();
                 Version = independentWriteContext->GetVersion();
-                MetaDataBuffer = independentWriteContext->GetMetadataBuffer();
+
+#ifdef UPASSTHROUGH
+                //
+                // For inproc logger, make a copy of the IoBuffer since
+                // the logical log will call Clear() on it. This is not
+                // needed in the case of the KDRIVER or UDRIVER since a
+                // copy is made when crossing the user/kernel boundary.
+                //
+                status = independentWriteContext->GetIoBuffer()->CreateAlias(IoBuffer);
+                if (! NT_SUCCESS(status))
+                {
+                    return(status);
+                }               
+#else
                 IoBuffer = independentWriteContext->GetIoBuffer();
+#endif              
+                MetaDataBuffer = independentWriteContext->GetMetadataBuffer();
                 
                 return(STATUS_SUCCESS);
             }
@@ -2608,9 +2682,23 @@ NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
 
                     RecordAsn = waitingWriteContext->GetStreamOffset();
                     Version = waitingWriteContext->GetVersion();
-                    MetaDataBuffer = waitingWriteContext->GetMetadataBuffer();
+#ifdef UPASSTHROUGH
+                    //
+                    // For inproc logger, make a copy of the IoBuffer since
+                    // the logical log will call Clear() on it. This is not
+                    // needed in the case of the KDRIVER or UDRIVER since a
+                    // copy is made when crossing the user/kernel boundary.
+                    //
+                    status = waitingWriteContext->GetIoBuffer()->CreateAlias(IoBuffer);
+                    if (! NT_SUCCESS(status))
+                    {
+                        return(status);
+                    }               
+#else
                     IoBuffer = waitingWriteContext->GetIoBuffer();
-
+#endif              
+                    
+                    MetaDataBuffer = waitingWriteContext->GetMetadataBuffer();
                     return(STATUS_SUCCESS);
                 }
             }
@@ -2618,7 +2706,6 @@ NTSTATUS OverlayStream::CoalesceRecords::FindDataInFlushingRecords(
             waitingWriteContext = _WaitingCoalescingWrites.Successor(waitingWriteContext.RawPtr());
         }       
     }
-
     
     return(STATUS_NOT_FOUND);
 }

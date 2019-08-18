@@ -31,14 +31,31 @@ ErrorCode ProcessUtility::OpenProcess(
     DWORD dwProcessId,
     __out HandleUPtr & processHandle)
 {
+    DWORD osErrorCode = 0;
+    return OpenProcess(
+        dwDesiredAccess,
+        bInheritHandle,
+        dwProcessId,
+        processHandle,
+        osErrorCode);
+}
+
+ErrorCode ProcessUtility::OpenProcess(
+    DWORD dwDesiredAccess,
+    BOOL bInheritHandle,
+    DWORD dwProcessId,
+    __out Common::HandleUPtr & processHandle,
+    __out DWORD & osErrorCode)
+{
     HANDLE result = ::OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId);
 
     if (result == NULL)
     {
+        osErrorCode = ::GetLastError();
         WriteWarning(
             TraceType_ProcessUtility,
             "OpenProcess failed with {0}: DesiredAccess:{1}, InheritHandle={2}, ProcessId={3}",
-            ::GetLastError(),
+            osErrorCode,
             dwDesiredAccess,
             bInheritHandle,
             dwProcessId);
@@ -49,7 +66,7 @@ ErrorCode ProcessUtility::OpenProcess(
     {
         processHandle = make_unique<Handle>(result);
     }
-    catch(...)
+    catch (...)
     {
         ::CloseHandle(result);
         throw;

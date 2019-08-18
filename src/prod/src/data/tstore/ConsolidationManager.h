@@ -22,13 +22,15 @@ namespace Data
 
         public:
             static NTSTATUS Create(
-                __in IConsolidationProvider<TKey, TValue>& consolidationProvider,
+                __in IConsolidationProvider<TKey, TValue> & consolidationProvider,
                 __in StoreTraceComponent & traceComponent,
-                __in KAllocator& allocator,
-                __out SPtr& result)
+                __in KAllocator & allocator,
+                __out SPtr & result)
             {
                 NTSTATUS status;
-                SPtr output = _new(CONSOLIDATIONMANAGER_TAG, allocator) ConsolidationManager(consolidationProvider, traceComponent);
+                SPtr output = _new(CONSOLIDATIONMANAGER_TAG, allocator) ConsolidationManager(
+                    consolidationProvider,
+                    traceComponent);
 
                 if (!output)
                 {
@@ -56,6 +58,13 @@ namespace Data
             {
                numberOfDeltasToBeConsolidated_ = value;
             }
+
+            // Exposed for testing
+            __declspec(property(get = get_AggregatedStoreComponent)) KSharedPtr<AggregatedStoreComponent<TKey, TValue>> AggregatedStoreComponentSPtr;
+            KSharedPtr<AggregatedStoreComponent<TKey, TValue>> get_AggregatedStoreComponent()
+            {
+                return aggregatedStoreComponentSPtr_.Get();
+            }
             
             static int CompareEnumerators(__in KSharedPtr<DifferentialStateEnumerator<TKey, TValue>> const & one, __in KSharedPtr<DifferentialStateEnumerator<TKey, TValue>> const & two)
             {
@@ -65,6 +74,7 @@ namespace Data
             ktl::Task ConsolidateAsync(
                __in MetadataTable& metadataTable,
                __in ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>& completionSource,
+               __in StorePerformanceCountersSPtr & perfCounters,
                __in ktl::CancellationToken const cancellationToken)
             {
                KShared$ApiEntry();
@@ -84,7 +94,9 @@ namespace Data
                      consolidationProviderSPtr_->CreateTransactionId(),
                      consolidationProviderSPtr_->StateProviderId,
                      *consolidationProviderSPtr_->KeyComparerSPtr,
-                     this->GetThisAllocator(), rwtxSPtr);
+                     *traceComponent_,
+                     this->GetThisAllocator(), 
+                      rwtxSPtr);
                   Diagnostics::Validate(status);
 
                   // Release all acquired store locks; if any.
@@ -107,8 +119,8 @@ namespace Data
                   }
 
                   // Assert that new aggregated state is null
-                  auto cachedNewAggregatedComponentSPtr = newAggregatedStoreComponentSPtr_.Get();
-                  STORE_ASSERT(cachedNewAggregatedComponentSPtr == nullptr, "cachedNewAggregatedComponentSPtr == nullptr");
+                  // New aggregated state does not have to be cached since there will no writes when reads are in progress.
+                  STORE_ASSERT(newAggregatedStoreComponentSPtr_ == nullptr, "newAggregatedStoreComponentSPtr_ == nullptr");
 
                   MetadataTable::SPtr mergeTableSPtr = consolidationProviderSPtr_->MergeMetadataTableSPtr;
                   STORE_ASSERT(mergeTableSPtr == nullptr, "merged metadata table should be null");
@@ -134,6 +146,10 @@ namespace Data
                   // todo: Add an overload that takes in count.
                   KSharedPtr<ConsolidatedStoreComponent<TKey, TValue>> newConsolidatedStateSPtr;
                   status = ConsolidatedStoreComponent<TKey, TValue>::Create(*consolidationProviderSPtr_->KeyComparerSPtr, this->GetThisAllocator(), newConsolidatedStateSPtr);
+                  Diagnostics::Validate(status);
+                   
+                  // Create new aggregated state here. This method is the only writer, there can be no readers. Unlike managed, clear cannot contend here for writes.
+                  status = AggregatedStoreComponent<TKey, TValue>::Create(*newConsolidatedStateSPtr, *consolidationProviderSPtr_->KeyComparerSPtr, *traceComponent_, this->GetThisAllocator(), newAggregatedStoreComponentSPtr_);
                   Diagnostics::Validate(status);
 
                   auto oldConsolidatedStateSPtr = cachedAggregatedComponentSPtr->GetConsolidatedState();
@@ -221,16 +237,19 @@ namespace Data
                         versionedItems->Append(valueInConsolidatedState);
 
                         // Decrement number of valid entries.
-                        FileMetadata::SPtr fileMetadataSPtr = nullptr;
-                        if (!metadataTableSPtr->Table->TryGetValue(valueInConsolidatedState->GetFileId(), fileMetadataSPtr))
+                        if (consolidationProviderSPtr_->HasPersistedState)
                         {
-                           STORE_ASSERT(
-                              fileMetadataSPtr != nullptr,
-                              "Failed to find file metadata for versioned item in consolidated with file id {1}.",
-                              valueInConsolidatedState->GetFileId());
-                        }
+                            FileMetadata::SPtr fileMetadataSPtr = nullptr;
+                            if (!metadataTableSPtr->Table->TryGetValue(valueInConsolidatedState->GetFileId(), fileMetadataSPtr))
+                            {
+                                STORE_ASSERT(
+                                    fileMetadataSPtr != nullptr,
+                                    "Failed to find file metadata for versioned item in consolidated with file id {1}.",
+                                    valueInConsolidatedState->GetFileId());
+                            }
 
-                        fileMetadataSPtr->DecrementValidEntries();
+                            fileMetadataSPtr->DecrementValidEntries();
+                        }
 
                         // Remove the value in differential.
                         auto differentialStateVersionsSPtr = oldDifferentialState->ReadVersions(differntialStateKey);
@@ -356,19 +375,15 @@ namespace Data
 
                   // If any files fall below the threshold, merge them together
                   KSharedArray<ULONG32>::SPtr mergeFileIds = nullptr;
-                  if (co_await consolidationProviderSPtr_->MergeHelperSPtr->ShouldMerge(*metadataTableSPtr, mergeFileIds))
+                  if (
+                      consolidationProviderSPtr_->HasPersistedState &&
+                      co_await consolidationProviderSPtr_->MergeHelperSPtr->ShouldMerge(*metadataTableSPtr, mergeFileIds))
                   {
                      STORE_ASSERT(mergeFileIds != nullptr, "mergeFileIds != nullptr");
-                     postMergeMetadataTableInformation = co_await MergeAsync(*metadataTableSPtr, *mergeFileIds, *newConsolidatedStateSPtr, cancellationToken);
+                     postMergeMetadataTableInformation = co_await MergeAsync(*metadataTableSPtr, *mergeFileIds, *newConsolidatedStateSPtr, perfCounters, cancellationToken);
                      STORE_ASSERT(postMergeMetadataTableInformation != nullptr, "Merge result cannot be null");
                      STORE_ASSERT(postMergeMetadataTableInformation->DeletedFileIdsSPtr != nullptr, "Deleted list cannot be null");
                   }
-
-                  KSharedPtr<AggregatedStoreComponent<TKey, TValue>> newAggregatedComponentSPtr = nullptr;
-                  status = AggregatedStoreComponent<TKey, TValue>::Create(*newConsolidatedStateSPtr, *consolidationProviderSPtr_->KeyComparerSPtr, *traceComponent_, this->GetThisAllocator(), newAggregatedComponentSPtr);
-                  Diagnostics::Validate(status);
-
-                  newAggregatedStoreComponentSPtr_.Put(Ktl::Move(newAggregatedComponentSPtr));
 
                   if (consolidationProviderSPtr_->EnableBackgroundConsolidation)
                   {
@@ -392,14 +407,13 @@ namespace Data
 
             void ResetToNewAggregatedState()
             {
-               auto cachedNewAggregatedComponentSPtr_ = newAggregatedStoreComponentSPtr_.Get();
                auto cachedAggregatedComponentSPtr_ = aggregatedStoreComponentSPtr_.Get();
                STORE_ASSERT(cachedAggregatedComponentSPtr_ != nullptr, "cachedAggregatedComponentSPtr_ != nullptr");
 
                // NewAggregatedState not null cannot be asserted since there can be cases when consolidation is not needed. Since this is co-ordintade by performcheckpoint,
                // not asserting here.
 
-               if (cachedNewAggregatedComponentSPtr_ != nullptr)
+               if (newAggregatedStoreComponentSPtr_ != nullptr)
                {
                   K_LOCK_BLOCK(indexLock_)
                   {
@@ -411,15 +425,13 @@ namespace Data
                         STORE_ASSERT(diffComponent != nullptr, "All indexes should be present");
 
                         // Add it in the correct order
-                        cachedNewAggregatedComponentSPtr_->AppendDeltaDifferentialState(*diffComponent);
+                        newAggregatedStoreComponentSPtr_->AppendDeltaDifferentialState(*diffComponent);
                      }
 
-                     aggregatedStoreComponentSPtr_.Put(Ktl::Move(cachedNewAggregatedComponentSPtr_));
-                     newAggregatedStoreComponentSPtr_.Put(nullptr);
-                    
-                     // todo: Check for size before triggering sweep.
-                     ktl::Task sweepTask = consolidationProviderSPtr_->TryStartSweepAsync();
-                     STORE_ASSERT(sweepTask.IsTaskStarted(), "Expected sweep task to start");
+                     aggregatedStoreComponentSPtr_.Put(Ktl::Move(newAggregatedStoreComponentSPtr_));
+                     newAggregatedStoreComponentSPtr_ = nullptr;
+                       
+                     // Do not trigger sweep here. Background sweep will account for checkpoints
                   }
                }
             }
@@ -485,6 +497,14 @@ namespace Data
                return cachedAggregratedStoreComponentSPtr->GetSortedKeyEnumerable(useFirstKey, firstKey, useLastKey, lastKey);
             }
 
+            KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> GetAllKeysAndValuesEnumerator()
+            {
+               auto cachedAggregratedStoreComponentSPtr = aggregatedStoreComponentSPtr_.Get();
+               STORE_ASSERT(cachedAggregratedStoreComponentSPtr != nullptr, "cachedAggregratedStoreComponentSPtr != nullptr");
+
+               return cachedAggregratedStoreComponentSPtr->GetKeysAndValuesEnumerator();
+            }
+
             LONG64 Count()
             {
                auto cachedAggregratedStoreComponentSPtr = aggregatedStoreComponentSPtr_.Get();
@@ -493,16 +513,21 @@ namespace Data
                return cachedAggregratedStoreComponentSPtr->Count();
             }
 
-            LONG64 GetMemorySize()
+            LONG64 GetMemorySize(__in LONG64 estimatedKeySize)
             {
                auto cachedAggregratedStoreComponentSPtr = aggregatedStoreComponentSPtr_.Get();
                STORE_ASSERT(cachedAggregratedStoreComponentSPtr != nullptr, "cachedAggregratedStoreComponentSPtr != nullptr");
 
-               return cachedAggregratedStoreComponentSPtr->GetMemorySize();
+               return cachedAggregratedStoreComponentSPtr->GetMemorySize(estimatedKeySize);
             }
 
             void AddToMemorySize(__in LONG64 size)
             {
+               if (newAggregatedStoreComponentSPtr_ != nullptr)
+               {
+                  newAggregatedStoreComponentSPtr_->AddToMemorySize(size);
+               }
+
                auto cachedAggregratedStoreComponentSPtr = aggregatedStoreComponentSPtr_.Get();
                STORE_ASSERT(cachedAggregratedStoreComponentSPtr != nullptr, "cachedAggregratedStoreComponentSPtr != nullptr");
 
@@ -596,12 +621,10 @@ namespace Data
                }
             }
 
-            void Sweep(
-               __in ktl::CancellationToken const & cancellationToken,
-               __in ktl::AwaitableCompletionSource<bool> & sweepTaskCompletionSource)
+            ULONG32 SweepConsolidatedState(__in ktl::CancellationToken const & cancellationToken)
             {
-               KFinally([&] { sweepTaskCompletionSource.SetResult(true); });
                cancellationToken.ThrowIfCancellationRequested();
+               ULONG32 sweepCount = 0;
                auto cachedAggregatedComponentSPtr = aggregatedStoreComponentSPtr_.Get();
                STORE_ASSERT(cachedAggregatedComponentSPtr != nullptr, "cachedNewAggregatedComponentSPtr == nullptr");
 
@@ -632,6 +655,7 @@ namespace Data
 
                      if (swept)
                      {
+                        sweepCount++;
                         consolidatedState->DecrementSize(versionedItem->GetValueSize());
                      }
                   }
@@ -667,11 +691,14 @@ namespace Data
 
                      if (swept)
                      {
+                        sweepCount++;
                         auto diffComponentSPtr = valuesForSweepEnumeratorSPtr->CurrentComponentSPtr;
                         diffComponentSPtr->DecrementSize(versionedItem->GetValueSize());
                      }
                   }
                }
+
+               return sweepCount;
             }
 
         private:
@@ -679,6 +706,7 @@ namespace Data
                 __in MetadataTable & mergeTable,
                 __in KSharedArray<ULONG32> & listOfFileIds, 
                 __in ConsolidatedStoreComponent<TKey, TValue> & newConsolidatedState,
+                __in StorePerformanceCountersSPtr & perfCounters,
                 __in ktl::CancellationToken const cancellationToken)
             {
                 StoreEventSource::Events->ConsolidationManagerMergeAsync(traceComponent_->PartitionId, traceComponent_->TraceTag, L"started");
@@ -766,6 +794,8 @@ namespace Data
                         this->GetThisAllocator(),
                         blockAlignedWriterSPtr);
                     Diagnostics::Validate(status);
+
+                    CheckpointPerformanceCounterWriter checkpointPerfCounterWriter(perfCounters);
 
                     while (!priorityQueue.IsEmpty())
                     {
@@ -895,15 +925,15 @@ namespace Data
 
                             KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>> kvpToWrite(keyToWrite, valueToWriteSPtr);
 
+                            checkpointPerfCounterWriter.StartMeasurement();
+
                             // Write the value
-                            if (shouldWriteSerializedValue)
-                            {
-                                co_await blockAlignedWriterSPtr->BlockAlignedWriteItemAsync(kvpToWrite, serializedValueSPtr, false);
-                            }
-                            else
-                            {
-                                co_await blockAlignedWriterSPtr->BlockAlignedWriteItemAsync(kvpToWrite, nullptr, true);
-                            }
+                            co_await blockAlignedWriterSPtr->BlockAlignedWriteItemAsync(
+                                kvpToWrite,
+                                serializedValueSPtr,
+                                !shouldWriteSerializedValue);
+                            
+                            checkpointPerfCounterWriter.StopMeasurement();
 
                             if (kvpToWrite.Value->GetRecordKind() != RecordKind::DeletedVersion)
                             {
@@ -936,8 +966,12 @@ namespace Data
 
                        StoreEventSource::Events->ConsolidationManagerMergeFile(traceComponent_->PartitionId, traceComponent_->TraceTag, ToStringLiteral(*fullFileNameSPtr));
                         
+                       checkpointPerfCounterWriter.StartMeasurement();
+
                        // Flush both key and value checkpoints to disk
                        co_await blockAlignedWriterSPtr->FlushAsync();
+
+                       checkpointPerfCounterWriter.StopMeasurement();
 
                        CheckpointFile::SPtr checkpointFileSPtr = nullptr;
                        status = CheckpointFile::Create(*fullFileNameSPtr, *keyFileSPtr, *valueFileSPtr, *traceComponent_, this->GetThisAllocator(), checkpointFileSPtr);
@@ -958,6 +992,13 @@ namespace Data
                        Diagnostics::Validate(status);
 
                        mergedFileMetadataSPtr->CheckpointFileSPtr = *checkpointFileSPtr;
+
+                       ULONG64 writeBytes = co_await checkpointFileSPtr->GetTotalFileSizeAsync(this->GetThisAllocator());
+                       ULONG64 writeBytesPerSecond = checkpointPerfCounterWriter.UpdatePerformanceCounter(writeBytes);
+
+                       StoreEventSource::Events->CheckpointFileWriteBytesPerSec(
+                           traceComponent_->PartitionId, traceComponent_->TraceTag,
+                           writeBytesPerSecond);
                     }
 
                     KSharedArray<ULONG32>::SPtr deletedFileIds = _new(CONSOLIDATIONMANAGER_TAG, this->GetThisAllocator()) KSharedArray<ULONG32>();
@@ -1186,12 +1227,12 @@ namespace Data
            }
 
            ConsolidationManager(
-               __in IConsolidationProvider<TKey, TValue>& consolidationProvider, 
+               __in IConsolidationProvider<TKey, TValue> & consolidationProvider, 
                __in StoreTraceComponent & traceComponent);
 
             KSharedPtr<IConsolidationProvider<TKey, TValue>> consolidationProviderSPtr_;
             ThreadSafeSPtrCache<AggregatedStoreComponent<TKey, TValue>> aggregatedStoreComponentSPtr_;
-            ThreadSafeSPtrCache<AggregatedStoreComponent<TKey, TValue>> newAggregatedStoreComponentSPtr_;
+            KSharedPtr<AggregatedStoreComponent<TKey, TValue>> newAggregatedStoreComponentSPtr_;
             KSpinLock indexLock_;
             ULONG32 numberOfDeltasToBeConsolidated_;
             ULONG32 snapshotOfHighestIndexOnConsolidation_;

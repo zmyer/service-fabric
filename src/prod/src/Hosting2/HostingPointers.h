@@ -65,8 +65,8 @@ namespace Hosting2
     typedef std::map<std::wstring, CodePackageSPtr, Common::IsLessCaseInsensitiveComparer<std::wstring>> CodePackageMap;
 
     class CodePackageInstance;
-    typedef std::shared_ptr<CodePackageInstance> CodePackageInstanceSPtr;    
-    typedef std::unique_ptr<CodePackageInstance> CodePackageInstanceUPtr;    
+    typedef std::shared_ptr<CodePackageInstance> CodePackageInstanceSPtr;
+    typedef std::unique_ptr<CodePackageInstance> CodePackageInstanceUPtr;
 
     class EnvironmentManager;
     typedef std::unique_ptr<EnvironmentManager> EnvironmentManagerUPtr;
@@ -85,6 +85,9 @@ namespace Hosting2
 
     class IPAddressProvider;
     typedef std::unique_ptr<IPAddressProvider> IPAddressProviderUPtr;
+
+    class NatIPAddressProvider;
+    typedef std::unique_ptr<NatIPAddressProvider> NatIPAddressProviderUPtr;
 
     class ILogCollectionProvider;
     typedef std::unique_ptr<ILogCollectionProvider> ILogCollectionProviderUPtr;
@@ -126,6 +129,9 @@ namespace Hosting2
     class DownloadManager;
     typedef std::unique_ptr<DownloadManager> DownloadManagerUPtr;
 
+    class ImageCacheManager;
+    typedef std::unique_ptr<ImageCacheManager> ImageCacheManagerUPtr;
+
     class Activator;
     typedef std::unique_ptr<Activator> ActivatorUPtr;
 
@@ -165,6 +171,13 @@ namespace Hosting2
 
     class IContainerActivator;
     typedef std::unique_ptr<IContainerActivator> IContainerActivatorUPtr;
+
+    class ApplicationHostCodePackageActivator;
+    typedef std::unique_ptr<ApplicationHostCodePackageActivator> ApplicationHostCodePackageActivatorUPtr;
+    typedef std::shared_ptr<ApplicationHostCodePackageActivator> ApplicationHostCodePackageActivatorSPtr;
+
+    class ContainerNetworkOperations;
+    typedef std::unique_ptr<ContainerNetworkOperations> ContainerNetworkOperationUPtr;
 
     class FabricRestartManager;
     typedef std::unique_ptr<FabricRestartManager> FabricRestartManagerUPtr;
@@ -210,6 +223,10 @@ namespace Hosting2
     typedef std::shared_ptr<HostedServiceActivationManager> HostedServiceActivationManagerSPtr;
     typedef Common::RootedObjectHolder<HostedServiceActivationManager> HostedServiceActivationManagerHolder;
 
+    class NetworkInventoryAgent;
+    typedef std::unique_ptr<NetworkInventoryAgent> NetworkInventoryAgentUPtr;
+    typedef std::shared_ptr<NetworkInventoryAgent> NetworkInventoryAgentSPtr;
+
     class TraceSessionManager;
     typedef std::unique_ptr<TraceSessionManager> TraceSessionManagerUPtr;
 
@@ -223,9 +240,9 @@ namespace Hosting2
         std::wstring const & principalSid)> PortCertificateBindingCallback;
 
     typedef std::function<void(std::wstring, std::wstring, DWORD)> ContainerTerminationCallback;
-    typedef std::function<void()> ContainerEngineTerminationCallback;
+    typedef std::function<void(DWORD, ULONG, Common::TimeSpan)> ContainerEngineTerminationCallback;
 
-    typedef std::function<void(DWORD, std::wstring , Common::ErrorCode)> FabricHostClientProcessTerminationCallback;
+    typedef std::function<void(DWORD, std::wstring , Common::ErrorCode, uint64)> FabricHostClientProcessTerminationCallback;
 
     class ContainerHealthStatusInfo;
     typedef std::function<void(std::wstring, std::vector<ContainerHealthStatusInfo>)> ContainerHealthCheckStatusCallback;
@@ -263,6 +280,8 @@ namespace Hosting2
     class IFabricActivatorClient;
     typedef std::shared_ptr<IFabricActivatorClient> IFabricActivatorClientSPtr;
 
+    class ISecretStoreClientPtr;
+
     class ActivateProcessRequest;
     class ConfigureSecurityPrincipalRequest;
 
@@ -290,7 +309,7 @@ namespace Hosting2
 
     class CertificateAccessDescription;
     class ContainerImageDescription;
-	class EndpointCertificateBinding;
+    class EndpointCertificateBinding;
 
     class DeletionManager;
     typedef std::shared_ptr<DeletionManager> DeletionManagerUPtr;
@@ -327,17 +346,23 @@ namespace Hosting2
     class LocalResourceManager;
     typedef std::unique_ptr<LocalResourceManager> LocalResourceManagerUPtr;
 
+    class LocalSecretServiceManager;
+    typedef std::unique_ptr<LocalSecretServiceManager> LocalSecretServiceManagerUPtr;
+
     class IIPAM;
     typedef std::shared_ptr<IIPAM> IIPAMSPtr;
 
-    class IAzureVnetPluginProcessManager;
-    typedef std::shared_ptr<IAzureVnetPluginProcessManager> IAzureVnetPluginProcessManagerSPtr;
-    
+    class INatIPAM;
+    typedef std::shared_ptr<INatIPAM> INatIPAMSPtr;
+
     class GuestServiceTypeHost;
     typedef std::shared_ptr<GuestServiceTypeHost> GuestServiceTypeHostSPtr;
 
     class GuestServiceTypeHostManager;
     typedef std::unique_ptr<GuestServiceTypeHostManager> GuestServiceTypeHostManagerUPtr;
+
+    class NetworkAllocationEntry;
+    typedef std::shared_ptr<NetworkAllocationEntry> NetworkAllocationEntrySPtr;
 
     class DnsServiceEnvironmentManager;
     typedef std::unique_ptr<DnsServiceEnvironmentManager> DnsServiceEnvironmentManagerUPtr;
@@ -348,4 +373,48 @@ namespace Hosting2
 
     class ContainerActivatorServiceAgent;
     typedef std::shared_ptr<ContainerActivatorServiceAgent> ContainerActivatorServiceAgentSPtr;
+
+    typedef std::function<void(Common::DateTime)> GhostChangeCallback;
+    typedef std::function<void()> InternalReplenishNetworkResourcesCallback;
+    typedef std::function<void(const std::wstring &)> ReplenishNetworkResourcesCallback;
+    typedef std::function<void()> NetworkPluginProcessRestartedCallback;
+
+    class OverlayNetworkManager;
+    typedef std::unique_ptr<OverlayNetworkManager> OverlayNetworkManagerUPtr;
+
+    class OverlayNetworkDriver;
+    typedef std::shared_ptr<OverlayNetworkDriver> OverlayNetworkDriverSPtr;
+
+    class OverlayNetworkPlugin;
+    typedef std::shared_ptr<OverlayNetworkPlugin> OverlayNetworkPluginSPtr;
+
+    class OverlayNetworkDefinition;
+    typedef std::shared_ptr<OverlayNetworkDefinition> OverlayNetworkDefinitionSPtr;
+
+    class OverlayNetworkRoutingInformation;
+    typedef std::shared_ptr<OverlayNetworkRoutingInformation> OverlayNetworkRoutingInformationSPtr;
+
+    class OverlayNetworkContainerParameters;
+    typedef std::shared_ptr<OverlayNetworkContainerParameters> OverlayNetworkContainerParametersSPtr;
+
+    class OverlayNetworkResource;
+    typedef std::shared_ptr<OverlayNetworkResource> OverlayNetworkResourceSPtr;
+
+    class IOverlayIPAM;
+    typedef std::shared_ptr<IOverlayIPAM> IOverlayIPAMSPtr;
+
+    class INatIPAM;
+    typedef std::shared_ptr<INatIPAM> INatIPAMSPtr;
+
+    class OverlayNetworkResourceProvider;
+    typedef std::shared_ptr<OverlayNetworkResourceProvider> OverlayNetworkResourceProviderSPtr;
+
+    class OverlayNetworkRoute;
+    typedef std::shared_ptr<OverlayNetworkRoute> OverlayNetworkRouteSPtr;
+
+    class OverlayNetworkPluginOperations;
+    typedef std::unique_ptr<OverlayNetworkPluginOperations> OverlayNetworkPluginOperationsUPtr;
+
+    class INetworkPluginProcessManager;
+    typedef std::shared_ptr<INetworkPluginProcessManager> INetworkPluginProcessManagerSPtr;
 }

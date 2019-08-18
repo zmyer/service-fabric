@@ -3,6 +3,10 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+#ifdef UNIFY
+#define UPASSTHROUGH 1
+#endif
+
 #include "KtlLogShimKernel.h"
 
 OverlayLog::~OverlayLog()
@@ -10,6 +14,60 @@ OverlayLog::~OverlayLog()
 #if !defined(PLATFORM_UNIX)
     KInvariant(! _PerfCounterSetInstance);
 #endif
+}
+
+NTSTATUS
+OverlayLog::CommonConstructor()
+{
+    NTSTATUS status;
+
+    KFinally([&] {
+        if (! NT_SUCCESS(status))
+        {
+            _LogInstrumentedComponent = nullptr;
+            _OpenLogContext = nullptr;
+            _BaseLogShutdownWait = nullptr;
+            _AccelerateFlushTimer = nullptr;
+        }
+    });
+    
+    _ObjectState = Closed;
+
+    status = KInstrumentedComponent::Create(_LogInstrumentedComponent, GetThisAllocator(), GetThisAllocationTag());
+    if (!NT_SUCCESS(status))
+    {
+        return(status);
+    }    
+    
+    //
+    // Gather up resources needed such as the OpenLog context
+    //
+    status = _BaseLogManager->CreateAsyncOpenLogContext(_OpenLogContext);
+    if (! NT_SUCCESS(status))
+    {
+        return(status);
+    }
+
+    _LCMBInfo = nullptr;
+    
+    //
+    // Allocate a waiter for the base container close event
+    //
+    status = _BaseLogShutdownEvent.CreateWaitContext(GetThisAllocationTag(),
+                                                     GetThisAllocator(),
+                                                     _BaseLogShutdownWait);
+    if (! NT_SUCCESS(status))
+    {
+        return(status);
+    }
+
+    status = KTimer::Create(_AccelerateFlushTimer, GetThisAllocator(), GetThisAllocationTag());
+    if (!NT_SUCCESS(status))
+    {
+        return(status);
+    }
+    
+    return(STATUS_SUCCESS);
 }
 
 OverlayLog::OverlayLog(
@@ -35,45 +93,17 @@ OverlayLog::OverlayLog(
 #if !defined(PLATFORM_UNIX)
         _PerfCounterSetInstance(nullptr),
 #endif
-        _ThrottledAllocator(&ThrottledAllocator)
+        _ThrottledAllocator(&ThrottledAllocator),
+        _ThrottledWritesList(OverlayStream::_ThrottleLinkageOffset)
 {
     NTSTATUS status;
     
-    _ObjectState = Closed;
-    
-    //
-    // Gather up resources needed such as the OpenLog context
-    //
-    status = _BaseLogManager->CreateAsyncOpenLogContext(_OpenLogContext);
-    if (! NT_SUCCESS(status))
-    {
-        _OpenLogContext = nullptr;
-        SetConstructorStatus(status);
-        return; 
-    }
-
-    status = KInstrumentedComponent::Create(_LogInstrumentedComponent, GetThisAllocator(), GetThisAllocationTag());
+    status = CommonConstructor();
     if (!NT_SUCCESS(status))
     {
         SetConstructorStatus(status);
         return;
-    }    
-    
-    _LCMBInfo = nullptr;
-    
-    //
-    // Allocate a waiter for the base container close event
-    //
-    status = _BaseLogShutdownEvent.CreateWaitContext(GetThisAllocationTag(),
-                                                     GetThisAllocator(),
-                                                     _BaseLogShutdownWait);
-    if (! NT_SUCCESS(status))
-    {
-        _OpenLogContext = nullptr;
-        _LCMBInfo = nullptr;
-        SetConstructorStatus(status);
-        return; 
-    }
+    }       
 }
 
 OverlayLog::OverlayLog(
@@ -98,46 +128,17 @@ OverlayLog::OverlayLog(
 #if !defined(PLATFORM_UNIX)
         _PerfCounterSetInstance(nullptr),
 #endif
-        _ThrottledAllocator(&ThrottledAllocator)
+        _ThrottledAllocator(&ThrottledAllocator),
+        _ThrottledWritesList(OverlayStream::_ThrottleLinkageOffset)
 {
     NTSTATUS status;
-    
-    _ObjectState = Closed;
 
-    status = KInstrumentedComponent::Create(_LogInstrumentedComponent, GetThisAllocator(), GetThisAllocationTag());
+    status = CommonConstructor();
     if (!NT_SUCCESS(status))
     {
         SetConstructorStatus(status);
         return;
-    }    
-    
-    //
-    // Gather up resources needed such as the OpenLog context
-    //
-    status = _BaseLogManager->CreateAsyncOpenLogContext(_OpenLogContext);
-    if (! NT_SUCCESS(status))
-    {
-        _OpenLogContext = nullptr;
-        SetConstructorStatus(status);
-        return; 
-    }
-
-    _LCMBInfo = nullptr;
-    
-    //
-    // Allocate a waiter for the base container close event
-    //
-    status = _BaseLogShutdownEvent.CreateWaitContext(GetThisAllocationTag(),
-                                                     GetThisAllocator(),
-                                                     _BaseLogShutdownWait);
-    if (! NT_SUCCESS(status))
-    {
-        _OpenLogContext = nullptr;
-        _LCMBInfo = nullptr;
-        SetConstructorStatus(status);
-        return; 
-    }
-    
+    }       
 }
 
 NTSTATUS
@@ -250,7 +251,8 @@ OverlayLog::StreamRecoveryCompletion(
 
         KTraceFailedAsyncRequest(status, this, entry.LogStreamId.Get().Data1, 0);
 
-        if ((status == STATUS_OBJECT_NAME_NOT_FOUND) ||
+
+       if ((status == STATUS_OBJECT_NAME_NOT_FOUND) ||
             (status == STATUS_OBJECT_PATH_NOT_FOUND) ||
             (status == K_STATUS_LOG_STRUCTURE_FAULT))
         {
@@ -313,8 +315,7 @@ OverlayLog::StreamRecoveryCompletion(
             operationDelete->StartDeleteOperation(ParentAsync,
                                                   failedCompletion);           
             return;
-        }
-
+        }               
         
         //
         // Don't fail container open
@@ -613,7 +614,7 @@ OverlayLog::OpenServiceFSM(
     switch (_State)
     {
         case OpenInitial:
-        {
+        {                   
             //
             // Flag this service for deferred close behavior to ensure
             // that all operations against the container are drained
@@ -624,7 +625,7 @@ OverlayLog::OpenServiceFSM(
             KInvariant(_ObjectState == Closed);
             
             SetDeferredCloseBehavior();
-
+            
             KStringView prefix(L"SharedLogWrite");
             Status = _LogInstrumentedComponent->SetComponentName(prefix, _ContainerId.Get());
             if (! NT_SUCCESS(Status))
@@ -680,6 +681,49 @@ OverlayLog::OpenServiceFSM(
             // metadata
             //
             _State = OpenLCMBInfo;
+
+
+            //
+            // Determine the throttle threshold which is the number of
+            // bytes remaining in the shared log before throttling
+            // starts to occur. If 0 then no throttling is going to
+            // happen.
+            //
+
+            ULONG sharedLogThrottleLimit;
+            ULONGLONG totalSpace = 0, freeSpace = 0;
+            OverlayManager::SPtr overlayManager = GetOverlayManager();
+            if (overlayManager)
+            {
+                sharedLogThrottleLimit = overlayManager->GetSharedLogThrottleLimit();
+            } else {
+                sharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+            }
+            
+            if (sharedLogThrottleLimit == KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit)
+            {
+                _ThrottleThreshold = 0;
+            } else {            
+                _BaseLogContainer->QuerySpaceInformation(&totalSpace,
+                                                         &freeSpace);
+
+                //
+                // start throttling based on config setting
+                //
+                KInvariant(sharedLogThrottleLimit < 100);
+                _ThrottleThreshold = (totalSpace / 100) * (100 - sharedLogThrottleLimit);
+                if (_ThrottleThreshold == 0)
+                {
+                    _ThrottleThreshold = KtlLogContainer::MinimumThrottleAmountInBytes;
+                }
+
+            }
+
+            KDbgCheckpointWDataInformational(GetActivityId(), "SharedLogThrottlingLimix", STATUS_SUCCESS,
+                (ULONGLONG)_ThrottleThreshold,
+                (ULONGLONG)totalSpace,
+                (ULONGLONG)sharedLogThrottleLimit,
+                (ULONGLONG)0);              
             
             //
             // Open up the shared metadata to process each stream
@@ -717,7 +761,50 @@ OverlayLog::OpenServiceFSM(
         case OpenLCMBInfo:
         {           
             _LogInstrumentedComponent->SetReportFrequency(KInstrumentedComponent::DefaultReportFrequency);
+
+            ULONGLONG freeSpace, totalSpace, onePercentSpace;
+            _BaseLogContainer->QuerySpaceInformation(&totalSpace,
+                                                     &freeSpace);
+
+            if (_OverlayManager)
+            {
+                KtlLogManager::AcceleratedFlushLimits* acceleratedFlushLimits = _OverlayManager->GetAcceleratedFlushLimits();
+                
+                _AccelerateFlushActiveTimerInMs = acceleratedFlushLimits->AccelerateFlushActiveTimerInMs;
+                _AccelerateFlushPassiveTimerInMs = acceleratedFlushLimits->AccelerateFlushPassiveTimerInMs;
+                _AccelerateFlushActivePercent = acceleratedFlushLimits->AccelerateFlushActivePercent;
+                _AccelerateFlushPassivePercent = acceleratedFlushLimits->AccelerateFlushPassivePercent;
+            } else {
+                _AccelerateFlushActiveTimerInMs = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushActiveTimerInMs;
+                _AccelerateFlushPassiveTimerInMs = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushPassiveTimerInMs;
+                _AccelerateFlushActivePercent = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushActivePercent;
+                _AccelerateFlushPassivePercent = KtlLogManager::AcceleratedFlushLimits::DefaultAccelerateFlushPassivePercent;
+            }
+                    
+            _IsAccelerateInActiveMode = FALSE;
+            _AccelerateFlushTimerInMs = _AccelerateFlushPassiveTimerInMs;
+                                       
+            onePercentSpace = totalSpace / 100;
+            _AcceleratedFlushActiveThreshold = _AccelerateFlushActivePercent * onePercentSpace;
+            _AcceleratedFlushPassiveThreshold = _AccelerateFlushPassivePercent * onePercentSpace;
+            _ActiveFlushCount = 0;
+
+            KDbgCheckpointWDataInformational(GetActivityId(), "AcceleratedFlushLimits", STATUS_SUCCESS,
+                (ULONGLONG)_AccelerateFlushActiveTimerInMs,
+                (ULONGLONG)_AccelerateFlushPassiveTimerInMs,
+                (ULONGLONG)_AcceleratedFlushActiveThreshold,
+                (ULONGLONG)_AcceleratedFlushPassiveThreshold);              
             
+            _AcceleratedFlushInProgress = nullptr;
+            KAsyncContextBase::CompletionCallback accelerateFlushTimerCompletion(this,
+                                                       &OverlayLog::AccelerateFlushTimerCompletion);
+
+            if (_AccelerateFlushTimerInMs != KtlLogManager::AcceleratedFlushLimits::AccelerateFlushActiveTimerInMsNoAction)
+            {
+                _AccelerateFlushTimer->Reuse();
+                _AccelerateFlushTimer->StartTimer(_AccelerateFlushTimerInMs, this, accelerateFlushTimerCompletion);
+            }
+                        
             _ObjectState = Opened;
             CompleteOpen(STATUS_SUCCESS);
             break;
@@ -888,6 +975,8 @@ OverlayLog::CloseServiceFSM(
                 _PerfCounterSetInstance = nullptr;
 #endif
 
+                _AccelerateFlushTimer->Cancel();
+                
                 // fall through
             }
 
@@ -1140,6 +1229,338 @@ OverlayLog::AccountForStreamClosed(
     RecomputeStreamQuotas(FALSE, _TotalDedicatedSpace);
 }
 
+BOOLEAN
+OverlayLog::IsUnderThrottleLimit(
+    __out ULONGLONG& TotalSpace,
+    __out ULONGLONG& FreeSpace
+    )
+{
+    _BaseLogContainer->QuerySpaceInformation(&TotalSpace,
+                                             &FreeSpace);
+    return(FreeSpace >= _ThrottleThreshold);
+}
+
+VOID
+OverlayLog::AccelerateFlushTimerCompletion(
+    __in_opt KAsyncContextBase* const,
+    __in KAsyncContextBase&
+)
+{
+    NTSTATUS status;
+
+    status = TryAcquireRequestRef();
+    if (! NT_SUCCESS(status))
+    {
+        //
+        // OverlayLog must be shutting down, just go away
+        //
+        return;
+    }
+    KFinally([&] { ReleaseRequestRef(); });
+
+    //
+    // There is a potential race here where the timer could fire before
+    // the an entire timer cycle has completed. This is because a new
+    // flush could have been initiated by the truncation completion
+    // event. It is very possible that a flush is started by the
+    // truncation completion and then immediately after the timer
+    // fires. 
+    //
+    // If the flush has been outstanding for a whole timer cycle,
+    // assume it may never finish and cancel it. If it was just being
+    // slow then the flush will finish eventually. In any case a new
+    // flush will restart here anyway. Cancel() is thread safe so if
+    // the signal races then this is not an issue.
+    //
+    //           Timestamp the start of the accelerated flush and only
+    //           cancel if it has been stuck for longer than a specific
+    //           threshold in the retail build. Set TEST_CANCEL_FLUSHES
+    //           to allow the timeout to happen right away to induce extra
+    //           race conditions.
+    //
+    ULONG nextTimerPeriod = _AccelerateFlushTimerInMs;
+    KAsyncEvent::WaitContext::SPtr acceleratedFlushInProgress = _AcceleratedFlushInProgress;    
+    if (acceleratedFlushInProgress)
+    {
+#if TEST_CANCEL_FLUSHES
+        //
+        // For testing, force more flush cancellations so that the
+        // codepath can be exercised more often since the race
+        // condition is relatively rare.
+        //
+        ULONG timeRunning = (ULONG)_AccelerateFlushTimerInMs;
+#else
+        ULONG timeRunning = (ULONG)(KNt::GetTickCount64() - _AcceleratedFlushInProgressTimestamp);
+#endif
+        if (timeRunning >= _AccelerateFlushTimerInMs)
+        {
+            KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(_AcceleratedFlushInProgressStreamId),
+                                             "IsTimeToAccelerateFlush Cancel", STATUS_SUCCESS,
+                                             (ULONGLONG)acceleratedFlushInProgress.RawPtr(), 0,
+                                             0, 0);
+
+            acceleratedFlushInProgress->Cancel();
+        } else {
+            nextTimerPeriod = _AccelerateFlushTimerInMs - timeRunning;
+        }
+    } else {    
+        AccelerateFlushesIfNeeded();
+    }
+    
+    KAsyncContextBase::CompletionCallback accelerateFlushTimerCompletion(this,
+                                               &OverlayLog::AccelerateFlushTimerCompletion);
+    _AccelerateFlushTimer->Reuse();
+    _AccelerateFlushTimer->StartTimer(nextTimerPeriod, this, accelerateFlushTimerCompletion);
+}
+
+
+VOID
+OverlayLog::AccelerateFlushesIfNeeded(
+    )
+{    
+    ULONGLONG freeSpace, totalSpace, usedSpace;
+    LONGLONG lowestLsn, highestLsn;
+    RvdLogStreamId lowestLsnStreamId;
+    BOOLEAN isTimeToAccelerateFlush;
+    BOOLEAN freeActiveFlushCount = TRUE;
+
+    //
+    // Only allow a single thread to be actively flushing or starting a
+    // flush
+    //
+    LONG activeFlushCount = InterlockedCompareExchange(&_ActiveFlushCount, 1, 0);
+
+    if (activeFlushCount == 0)
+    {
+        //
+        // Accelerate flushes when above threshold for shared log usage.
+        // Find the stream that has the lowest LSN and is thus in
+        // most need of being flushed and then kick off a flush for it.
+        //
+        _AcceleratedFlushInProgress = nullptr;
+        
+        _BaseLogContainer->QuerySpaceInformation(&totalSpace,
+                                                 &freeSpace);
+        usedSpace = totalSpace - freeSpace;
+        
+
+        if (_IsAccelerateInActiveMode)
+        {
+            isTimeToAccelerateFlush = (usedSpace > _AcceleratedFlushPassiveThreshold);
+        } else {
+            isTimeToAccelerateFlush = (usedSpace > _AcceleratedFlushActiveThreshold);
+        }   
+
+        if (isTimeToAccelerateFlush)
+        {
+            if (! _IsAccelerateInActiveMode)
+            {
+                KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(_AcceleratedFlushInProgressStreamId),
+                                                 "IsTimeToAccelerateFlush XActive", STATUS_SUCCESS,
+                                                 usedSpace, _AcceleratedFlushActiveThreshold,
+                                                 _AcceleratedFlushPassiveThreshold, freeSpace);
+            }
+            
+            _IsAccelerateInActiveMode = TRUE;       
+            _AccelerateFlushTimerInMs = _AccelerateFlushActiveTimerInMs;
+
+            _BaseLogContainer->QueryLsnRangeInformation(lowestLsn, highestLsn, lowestLsnStreamId);
+            NTSTATUS status2;
+            OverlayStreamFreeService::SPtr overlayStreamFS;
+            OverlayStream::SPtr overlayStream;
+
+            status2 = _StreamsTable.FindOverlayStream(lowestLsnStreamId, overlayStreamFS);
+            if (NT_SUCCESS(status2))
+            {               
+                overlayStream = overlayStreamFS->GetOverlayStream();
+                _StreamsTable.ReleaseOverlayStream(*overlayStreamFS);
+                if (overlayStream)
+                {
+                    OverlayStream::CoalesceRecords::SPtr coalesceRecords;
+                    coalesceRecords = overlayStream-> GetCoalesceRecords();
+                    if (coalesceRecords)
+                    {
+                        status2 = overlayStream->CreateTruncateCompletedWaiter(_AcceleratedFlushInProgress);
+
+                        if (NT_SUCCESS(status2))
+                        {
+                            freeActiveFlushCount = FALSE;
+                            KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(lowestLsnStreamId),
+                                                             "IsTimeToAccelerateFlush", STATUS_SUCCESS,
+                                                             lowestLsn, (ULONGLONG)_AcceleratedFlushInProgress.RawPtr(),
+                                                             usedSpace, freeSpace);
+
+                            _AcceleratedFlushInProgressStreamId = lowestLsnStreamId;
+                            overlayStream->ResetTruncateCompletedEvent();                       
+                            KAsyncContextBase::CompletionCallback truncateCompletedCompletion(this,
+                                                                       &OverlayLog::TruncateCompletedCompletion);
+                            _AcceleratedFlushInProgressTimestamp = KNt::GetTickCount64();
+                            _AcceleratedFlushInProgress->StartWaitUntilSet(this,
+                                                                           truncateCompletedCompletion);
+                        } else {
+                            KTraceFailedAsyncRequest(status2, this, overlayStream->GetStreamId().Get().Data1, 0);                      
+                        }
+
+                        coalesceRecords->StartPeriodicFlush();
+                    }
+                } else {
+                    KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(lowestLsnStreamId),
+                                                     "IsTimeToAccelerateFlush Fail", STATUS_SUCCESS,
+                                                     lowestLsn, 0,
+                                                     usedSpace, freeSpace);
+                }
+
+            } else {
+                KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(lowestLsnStreamId),
+                                                 "IsTimeToAccelerateFlush Fail", STATUS_SUCCESS,
+                                                 lowestLsn, 0,
+                                                 usedSpace, freeSpace);
+            }
+        } else {
+            if (_IsAccelerateInActiveMode)
+            {
+                KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(_AcceleratedFlushInProgressStreamId),
+                                                 "IsTimeToAccelerateFlush XPassive", STATUS_SUCCESS,
+                                                 usedSpace, _AcceleratedFlushActiveThreshold,
+                                                 _AcceleratedFlushPassiveThreshold, freeSpace);
+            }
+            
+            _IsAccelerateInActiveMode = FALSE;      
+            _AccelerateFlushTimerInMs = _AccelerateFlushPassiveTimerInMs;
+        }
+
+        if (freeActiveFlushCount)
+        {
+            //
+            // Since truncation completion event won't
+            // fire, reset this and let next timer
+            // cycle try again.
+            //
+            _ActiveFlushCount = 0;
+        }
+    } else {
+        KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(_AcceleratedFlushInProgressStreamId),
+                                         "IsTimeToAccelerateFlush Busy", STATUS_SUCCESS,
+                                         (ULONGLONG)_AcceleratedFlushInProgress.RawPtr(), _ActiveFlushCount,
+                                         0, 0);
+    }
+}
+
+VOID
+OverlayLog::TruncateCompletedCompletion(
+    __in_opt KAsyncContextBase* const ParentAsync,
+    __in KAsyncContextBase& Async
+)
+{
+    UNREFERENCED_PARAMETER(ParentAsync);
+    
+    NTSTATUS status;
+    KAsyncEvent::WaitContext::SPtr waitContext = (KAsyncEvent::WaitContext*)(&Async);
+
+    KInvariant(_AcceleratedFlushInProgress == waitContext);
+    
+    status = TryAcquireRequestRef();
+    if (! NT_SUCCESS(status))
+    {
+        //
+        // OverlayLog must be shutting down, just go away
+        //
+        return;
+    }
+    KFinally([&] { ReleaseRequestRef(); });
+
+    KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(_AcceleratedFlushInProgressStreamId),
+                                     "IsTimeToAccelerateFlush TruncationCompletion", STATUS_SUCCESS,
+                                     (ULONGLONG)waitContext.RawPtr(), 0,
+                                     0, 0);
+    
+    _ActiveFlushCount = 0;
+    AccelerateFlushesIfNeeded();
+}
+
+BOOLEAN
+OverlayLog::ShouldThrottleSharedLog(
+    __in OverlayStream::AsyncDestagingWriteContextOverlay& DestagingWriteContext,
+    __out ULONGLONG& TotalSpace,
+    __out ULONGLONG& FreeSpace,
+    __out LONGLONG& LowestLsn,
+    __out LONGLONG& HighestLsn,
+    __out RvdLogStreamId& LowestLsnStreamId
+)
+{
+
+    if (_ThrottleThreshold == 0)
+    {
+        return(FALSE);
+    }
+
+    BOOLEAN b = IsUnderThrottleLimit(TotalSpace, FreeSpace);
+
+    // TODO: Consider if these really need to be returned
+    _BaseLogContainer->QueryLsnRangeInformation(LowestLsn, HighestLsn, LowestLsnStreamId);
+    
+
+    if (! b)
+    {        
+        K_LOCK_BLOCK(_ThrottleWriteLock)
+        {
+            _ThrottledWritesList.AppendTail(&DestagingWriteContext);
+        }
+        
+        return(TRUE);
+    }
+
+    return(FALSE);
+}
+
+VOID
+OverlayLog::ShouldUnthrottleSharedLog(
+    __in BOOLEAN ReleaseOne
+)
+{    
+    BOOLEAN continueUnthrottling = TRUE;
+    OverlayStream::AsyncDestagingWriteContextOverlay* throttledWrite = NULL;
+    ULONGLONG freeSpace = 0, totalSpace = 0;
+
+    while (continueUnthrottling)
+    {
+        throttledWrite = NULL;
+
+        K_LOCK_BLOCK(_ThrottleWriteLock)
+        {
+            throttledWrite = _ThrottledWritesList.PeekHead();
+
+            if (throttledWrite == NULL)
+            {
+                //
+                // If there is nothing on the list then nothing to
+                // unthrottle
+                //
+                return;
+            }
+
+            if (ReleaseOne || (IsUnderThrottleLimit(totalSpace, freeSpace)))
+            {
+                throttledWrite = _ThrottledWritesList.RemoveHead();
+            } else {
+                // TODO: Remove when stabilized
+                KDbgCheckpointWDataInformational(throttledWrite->GetActivityId(), "Didnt Unthrottled write", STATUS_SUCCESS,
+                                    (ULONGLONG)throttledWrite, totalSpace,
+                                    throttledWrite->GetRecordAsn().Get(), freeSpace);
+                return;
+            }
+            
+            ReleaseOne = FALSE;
+        }
+
+        // TODO: Remove when stabilized
+        KDbgCheckpointWDataInformational(throttledWrite->GetActivityId(), "Unthrottled write", STATUS_SUCCESS,
+                            (ULONGLONG)throttledWrite, totalSpace,
+                            throttledWrite->GetRecordAsn().Get(), freeSpace);
+        throttledWrite->OnStartAllocateBuffer();
+    }
+}
+
 VOID
 OverlayLog::RecomputeStreamQuotas(
     __in BOOLEAN IncludeClosedStreams,
@@ -1189,24 +1610,15 @@ OverlayLog::RecomputeStreamQuotas(
                                          (osfs->GetObjectState() == ServiceWrapper::Opening)))
             {
                 float fquota;
-                ULONGLONG quota;
+                LONGLONG quota;
 
                 fquota = scale * (float)osfs->GetStreamSize();
                 quota = (ULONGLONG)fquota;
-                if (quota > (ULONGLONG)osfs->GetStreamSize())
+                if (quota > osfs->GetStreamSize())
                 {
-                    quota = (ULONGLONG)osfs->GetStreamSize();
+                    quota = osfs->GetStreamSize();
                 }
 
-
-                KDbgCheckpointWDataInformational(KLoggerUtilities::ActivityIdFromStreamId(osfs->GetStreamId()),
-                                    "OverlayLog::RecomputeStreamQuotas", status,
-                                    (ULONGLONG)quota,
-                                    (ULONGLONG)0,
-                                    (ULONGLONG)0,
-                                    (ULONGLONG)0);
-                
-                
                 osfs->SetSharedQuota(quota);
                 
                 if (os)

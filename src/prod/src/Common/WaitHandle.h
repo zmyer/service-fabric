@@ -13,7 +13,7 @@ namespace Common
         DENY_COPY(WaitHandle);
 
     public:
-        WaitHandle(bool initialState = false);
+        WaitHandle(bool initialState = false, std::wstring = L"");
         virtual ~WaitHandle();
 
         ErrorCode Set();
@@ -44,12 +44,11 @@ namespace Common
         pthread_mutex_t mutex_;
         bool signaled_ = false;
         bool closed_ = false;
-
 #else
 
         ::HANDLE handle_;
         bool closed_ = false;
-
+        std::wstring eventName_;
 #endif
     };
 

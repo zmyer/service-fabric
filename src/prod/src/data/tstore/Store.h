@@ -30,6 +30,7 @@ namespace Data
             , public TxnReplicator::IStateProvider2
             , public IConsolidationProvider<TKey, TValue>
             , public IStoreCopyProvider
+            , public ISweepProvider
             , public IStore<TKey, TValue>
             , public IStateProviderInfo
         {
@@ -37,6 +38,7 @@ namespace Data
                 K_SHARED_INTERFACE_IMP(IStateProvider2)
                 K_SHARED_INTERFACE_IMP(IConsolidationProvider)
                 K_SHARED_INTERFACE_IMP(IStoreCopyProvider)
+                K_SHARED_INTERFACE_IMP(ISweepProvider)
                 K_SHARED_INTERFACE_IMP(IStore)
                 K_SHARED_INTERFACE_IMP(IStateProviderInfo)
 
@@ -75,10 +77,22 @@ namespace Data
                 return STATUS_SUCCESS;
             }
 
+            __declspec(property(get = get_TraceComponent)) StoreTraceComponent::SPtr TraceComponent;
+            StoreTraceComponent::SPtr get_TraceComponent() const
+            {
+                return traceComponent_;
+            }
+
             __declspec(property(get = get_Name)) KUriView Name;
             KUriView get_Name() const
             {
-                return name_;
+                return static_cast<KUriView>(*name_);
+            }
+
+            __declspec(property(get = get_HasPersistedState)) bool HasPersistedState;
+            bool get_HasPersistedState() const override
+            {
+                return hasPersistedState_;
             }
 
             __declspec(property(get = get_KeyConverter)) KSharedPtr<Data::StateManager::IStateSerializer<TKey>> KeyConverterSPtr;
@@ -105,10 +119,16 @@ namespace Data
                 return GetReplicator();
             }
 
-            __declspec(property(get = get_LockManager)) LockManager::SPtr LockManagerSPtr;
+            __declspec(property(get = get_LockManager, put = set_LockManager)) LockManager::SPtr LockManagerSPtr;
             LockManager::SPtr get_LockManager() const override
             {
                 return lockManager_;
+            }
+
+            // Exposed for testability
+            void set_LockManager(LockManager::SPtr lockManager)
+            {
+                lockManager_ = lockManager;
             }
 
             __declspec(property(get = get_CurrentMetadataTable)) KSharedPtr<MetadataTable> CurrentMetadataTableSPtr;
@@ -167,11 +187,12 @@ namespace Data
                 return countSnap;
             }
 
+            // Get the approximate store buffer size - data+metadata, does not account for static structures
             __declspec(property(get = get_Size)) LONG64 Size;
             LONG64 get_Size()
             {
-                LONG64 size = ComputeMemorySize();
-                
+                LONG64 size = GetMemorySize();
+
                 // Disabling until #10584838 is resolved 
                 //STORE_ASSERT(size >= 0, "Size {1} cannot be negative", size);
                 return size;
@@ -197,6 +218,17 @@ namespace Data
             virtual void set_DictionaryChangeHandlerMask(DictionaryChangeEventMask::Enum mask)
             {
                 dictionaryChangeHandlerMask_ = mask;
+            }
+
+            __declspec(property(get = get_CacheThresholdInMB, put = set_CacheThresholdInMB)) LONG64 CacheThresholdInMB;
+            LONG64 get_CacheThresholdInMB() const override
+            {
+                return sweepManagerSPtr_->MemoryBufferSize;
+            }
+
+            void set_CacheThresholdInMB(__in LONG64 sizeInMegabytes) override
+            {
+                sweepManagerSPtr_->MemoryBufferSize = sizeInMegabytes * 1024 * 1024;
             }
 
             KAllocator& get_Allocator() const override
@@ -233,6 +265,13 @@ namespace Data
             }
 
             // This property is exposed for testability
+            __declspec(property(get = get_SweepManager)) KSharedPtr<SweepManager<TKey, TValue>> SweepManagerSPtr;
+            KSharedPtr<SweepManager<TKey, TValue>> get_SweepManager() const
+            {
+                return sweepManagerSPtr_;
+            }
+
+            // This property is exposed for testability
             __declspec(property(get = get_ConsolidationTcs)) ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::SPtr ConsolidationTcs;
             ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::SPtr get_ConsolidationTcs()
             {
@@ -251,7 +290,7 @@ namespace Data
             {
                 return testDelayOnConsolidationSPtr_;
             }
-            
+
             void set_TestDelayOnConsolidation(ktl::AwaitableCompletionSource<bool>::SPtr completionSourceSPtr)
             {
                 testDelayOnConsolidationSPtr_ = completionSourceSPtr;
@@ -324,7 +363,18 @@ namespace Data
             {
                 enableEnumerationWithRepeatableRead_ = enable;
             }
-            
+
+            virtual NTSTATUS OnCreateStoreTransaction(
+                __in LONG64 id,
+                __in TxnReplicator::TransactionBase& transaction,
+                __in LONG64 owner,
+                __in ConcurrentDictionary2<LONG64, KSharedPtr<StoreTransaction<TKey, TValue>>>& container,
+                __in IComparer<TKey> & keyComparer,
+                __out typename StoreTransaction<TKey, TValue>::SPtr& result)
+            {
+                return StoreTransaction<TKey, TValue>::Create(id, transaction, owner, container, keyComparer, *traceComponent_, this->GetThisAllocator(), result);
+            }
+
             KSharedPtr<StoreTransaction<TKey, TValue>> CreateStoreTransaction(__in TxnReplicator::TransactionBase& replicatorTransaction)
             {
                 ApiEntry();
@@ -333,8 +383,9 @@ namespace Data
                 {
                     KSharedPtr<StoreTransaction<TKey, TValue>> storeTxnSPtr = nullptr;
 
-                    NTSTATUS status = StoreTransaction<TKey, TValue>::Create(replicatorTransaction.TransactionId, replicatorTransaction, storeId_, *inflightReadWriteStoreTransactionsSPtr_, *keyComparerSPtr_, this->GetThisAllocator(), storeTxnSPtr);
+                    NTSTATUS status = OnCreateStoreTransaction(replicatorTransaction.TransactionId, replicatorTransaction, storeId_, *inflightReadWriteStoreTransactionsSPtr_, *keyComparerSPtr_, storeTxnSPtr);
                     Diagnostics::Validate(status);
+
                     STORE_ASSERT(storeTxnSPtr != nullptr, "storeTxnSPtr != nullptr");
                     LONG64 transactionId = replicatorTransaction.TransactionId;
                     bool add = inflightReadWriteStoreTransactionsSPtr_->TryAdd(transactionId, storeTxnSPtr);
@@ -355,7 +406,7 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"CreateStoreTransaction", e);
+                    TraceException(L"CreateStoreTransaction", e, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -387,7 +438,7 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"CreateOrFindTransaction", e);
+                    TraceException(L"CreateOrFindTransaction", e, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -402,18 +453,17 @@ namespace Data
             {
                 ApiEntry();
 
+                ULONG64 keyLockResourceNameHash = 0;
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
+
                 try
                 {
-                    KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
-
                     ThrowIfFaulted(*storeTransactionSPtr);
                     ThrowIfNotWritable(storeTransactionSPtr->Id);
 
                     // Extract key and value bytes.
                     auto keyBytes = GetKeyBytes(key);
                     auto valueBytes = GetValueBytes(value);
-
-                    TxnReplicator::TransactionBase::SPtr replicatorTransactionSPtr = storeTransactionSPtr->ReplicatorTransaction;
 
                     // Compute redo and undo information. This can be done outside the lock.
                     KSharedPtr<MetadataOperationDataKV<TKey, TValue> const> metadataCSPtr = nullptr;
@@ -435,13 +485,22 @@ namespace Data
                     OperationData::SPtr redoSPtr = redoDataSPtr.DownCast<OperationData>();
                     OperationData::SPtr undoSPtr = nullptr;
 
-                    ULONG64 keyLockResourceNameHash = GetHash(*keyBytes);
+                    keyLockResourceNameHash = GetHash(*keyBytes);
+
+                    Common::TimeSpan primeLockTimeout = timeout;
+                    if (primeLockTimeout < Common::TimeSpan::Zero)
+                    {
+                        primeLockTimeout = Common::TimeSpan::MaxValue;
+                    }
 
                     co_await storeTransactionSPtr->AcquirePrimeLockAsync(
                         *lockManager_,
                         LockMode::Shared,
-                        timeout,
+                        primeLockTimeout,
                         false);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     ThrowIfFaulted(*storeTransactionSPtr);
 
@@ -451,6 +510,9 @@ namespace Data
                         keyLockResourceNameHash,
                         *storeTransactionSPtr,
                         timeout);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     // CanKeyBeAdded check.
                     if (!CanKeyBeAdded(*storeTransactionSPtr, func_, key))
@@ -487,7 +549,7 @@ namespace Data
                 }
                 catch (ktl::Exception & e)
                 {
-                    TraceException(L"AddAsync", e);
+                    TraceException(L"AddAsync", e, storeTransactionSPtr->Id, keyLockResourceNameHash);
                     throw;
                 }
 
@@ -503,18 +565,18 @@ namespace Data
                 __in_opt LONG64 conditionalVersion = -1) override
             {
                 ApiEntry();
+
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
+                ULONG64 keyLockResourceNameHash = 0;
+
                 try
                 {
-                    KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
-
                     ThrowIfFaulted(*storeTransactionSPtr);
                     ThrowIfNotWritable(storeTransactionSPtr->Id);
 
                     // Extract key and value bytes.
                     auto keyBytes = GetKeyBytes(key);
                     auto valueBytes = GetValueBytes(value);
-
-                    TxnReplicator::TransactionBase::SPtr replicatorTransactionSPtr = storeTransactionSPtr->ReplicatorTransaction;
 
                     // Compute redo and undo information. This can be done outside the lock.
                     KSharedPtr<MetadataOperationDataKV<TKey, TValue> const> metadataCSPtr = nullptr;
@@ -536,13 +598,22 @@ namespace Data
                     OperationData::SPtr redoSPtr = redoDataSPtr.DownCast<OperationData>();
                     OperationData::SPtr undoSPtr = nullptr;
 
-                    ULONG64 keyLockResourceNameHash = GetHash(*keyBytes);
+                    keyLockResourceNameHash = GetHash(*keyBytes);
+
+                    Common::TimeSpan primeLockTimeout = timeout;
+                    if (primeLockTimeout < Common::TimeSpan::Zero)
+                    {
+                        primeLockTimeout = Common::TimeSpan::MaxValue;
+                    }
 
                     co_await storeTransactionSPtr->AcquirePrimeLockAsync(
                         *lockManager_,
                         LockMode::Shared,
-                        timeout,
+                        primeLockTimeout,
                         false);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     ThrowIfFaulted(*storeTransactionSPtr);
 
@@ -552,6 +623,9 @@ namespace Data
                         keyLockResourceNameHash,
                         *storeTransactionSPtr,
                         timeout);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     LONG64 currentVersion = Constants::InvalidLsn;
                     if (!CanKeyBeUpdatedOrDeleted(*storeTransactionSPtr, conditionalVersion, key, currentVersion))
@@ -599,7 +673,7 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"ConditionalUpdateAsync", e);
+                    TraceException(L"ConditionalUpdateAsync", e, storeTransactionSPtr->Id, keyLockResourceNameHash);
                     throw;
                 }
             }
@@ -613,17 +687,16 @@ namespace Data
             {
                 ApiEntry();
 
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
+                ULONG64 keyLockResourceNameHash = 0;
+
                 try
                 {
-                    KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
-
                     ThrowIfFaulted(*storeTransactionSPtr);
                     ThrowIfNotWritable(storeTransactionSPtr->Id);
 
                     // Extract key and value bytes.
                     auto keyBytes = GetKeyBytes(key);
-
-                    TxnReplicator::TransactionBase::SPtr replicatorTransactionSPtr = storeTransactionSPtr->ReplicatorTransaction;
 
                     // Compute redo and undo information. This can be done outside the lock.
                     KSharedPtr<MetadataOperationDataK<TKey> const> metadataCSPtr = nullptr;
@@ -644,13 +717,22 @@ namespace Data
                     OperationData::SPtr redoSPtr = static_cast<OperationData *>(redoDataSPtr.RawPtr());
                     OperationData::SPtr undoSPtr = nullptr;
 
-                    ULONG64 keyLockResourceNameHash = GetHash(*keyBytes);
+                    keyLockResourceNameHash = GetHash(*keyBytes);
+
+                    Common::TimeSpan primeLockTimeout = timeout;
+                    if (primeLockTimeout < Common::TimeSpan::Zero)
+                    {
+                        primeLockTimeout = Common::TimeSpan::MaxValue;
+                    }
 
                     co_await storeTransactionSPtr->AcquirePrimeLockAsync(
                         *lockManager_,
                         LockMode::Shared,
-                        timeout,
+                        primeLockTimeout,
                         false);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     ThrowIfFaulted(*storeTransactionSPtr);
 
@@ -660,6 +742,9 @@ namespace Data
                         keyLockResourceNameHash,
                         *storeTransactionSPtr,
                         timeout);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     LONG64 currentVersion = Constants::InvalidLsn;
                     if (!CanKeyBeUpdatedOrDeleted(*storeTransactionSPtr, conditionalVersion, key, currentVersion))
@@ -705,7 +790,7 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"ConditionalRemoveAsync", e);
+                    TraceException(L"ConditionalRemoveAsync", e, storeTransactionSPtr->Id, keyLockResourceNameHash);
                     throw;
                 }
             }
@@ -732,6 +817,155 @@ namespace Data
                 KeyValuePair<LONG64, TValue> dummyValue;
                 bool exists = co_await TryGetValueAsync(storeTransaction, key, timeout, dummyValue, ReadMode::Off, cancellationToken);
                 co_return exists;
+            }
+
+            ktl::Awaitable<bool> TryGetValueAsync(
+                __in IStoreTransaction<TKey, TValue>& storeTransaction,
+                __in TKey key,
+                __in Common::TimeSpan timeout,
+                __out KeyValuePair<LONG64, TValue>& value,
+                __in ReadMode readMode,
+                __in ktl::CancellationToken const & cancellationToken)
+            {
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
+                ULONG64 keyLockResourceNameHash = 0;
+
+                try
+                {
+                    KSharedPtr<DifferentialStoreComponent<TKey, TValue>> componentSPtr = differentialStoreComponentSPtr_.Get();
+
+                    ThrowIfFaulted(*storeTransactionSPtr);
+                    ThrowIfNotReadable(*storeTransactionSPtr);
+
+                    Common::TimeSpan primeLockTimeout = timeout;
+                    if (primeLockTimeout < Common::TimeSpan::Zero)
+                    {
+                        primeLockTimeout = Common::TimeSpan::MaxValue;
+                    }
+                    co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Shared, primeLockTimeout, false);
+
+                    // If the operation was cancelled during the lock wait, then terminate
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    ThrowIfFaulted(*storeTransactionSPtr);
+
+                    KSharedPtr<VersionedItem<TValue>> versionedItemSPtr = nullptr;
+                    KSharedPtr<StoreComponentReadResult<TValue>> readResultSPtr = nullptr;
+
+                    auto keyBytes = GetKeyBytes(key);
+                    keyLockResourceNameHash = GetHash(*keyBytes);
+
+                    if (!storeTransactionSPtr->IsWriteSetEmpty)
+                    {
+                        auto writeset = storeTransactionSPtr->GetComponent(func_);
+                        STORE_ASSERT(writeset != nullptr, "writeset != nullptr");
+                        versionedItemSPtr = writeset->Read(key);
+
+                        if (versionedItemSPtr != nullptr)
+                        {
+                            if (versionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion)
+                            {
+                                StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
+                                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                                    storeTransactionSPtr->Id,
+                                    keyLockResourceNameHash,
+                                    static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
+                                    -1,
+                                    L"keyfounddeleted");
+
+                                value.Key = versionedItemSPtr->GetVersionSequenceNumber();
+                                value.Value = TValue();
+                                co_return false;
+                            }
+                            else
+                            {
+                                // Key exists
+                                // Safe to get the value from versioned item since it is in the write set
+                                value.Key = versionedItemSPtr->GetVersionSequenceNumber();
+                                value.Value = versionedItemSPtr->GetValue();
+                                co_return true;
+                            }
+                        }
+                    }
+
+                    if (versionedItemSPtr == nullptr)
+                    {
+                        if (storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::Snapshot)
+                        {
+                            TxnReplicator::Transaction::SPtr transaction = static_cast<TxnReplicator::Transaction *>(storeTransactionSPtr->ReplicatorTransaction.RawPtr());
+                            LONG64 visibilitySequenceNumber;
+                            Diagnostics::Validate(co_await transaction->GetVisibilitySequenceNumberAsync(visibilitySequenceNumber));
+
+                            readResultSPtr = co_await TryGetValueForReadOnlyTransactionsAsync(key, visibilitySequenceNumber, true, readMode, cancellationToken);
+                            versionedItemSPtr = readResultSPtr->VersionedItem;
+
+                            // Check if transaction has been disposed since replicator can dispose  a long running tx or 
+                            // on change role and it can race with a read, 
+                            // so checking here coz read from the snapshot container has already completed.
+                            ThrowIfFaulted(*storeTransactionSPtr);
+                        }
+                        else
+                        {
+                            STORE_ASSERT(storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadRepeatable,
+                                //|| storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadCommitted,
+                                "store transaction should be read committed or repeatable read");
+                            co_await AcquireKeyReadLockAsync(*lockManager_, keyLockResourceNameHash, *storeTransactionSPtr, timeout);
+
+                            // If the operation was cancelled during the lock wait, then terminate
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            // todo read past lock
+                            readResultSPtr = co_await TryGetValueForReadOnlyTransactionsAsync(key, -1, false, readMode, cancellationToken);
+                            versionedItemSPtr = readResultSPtr->VersionedItem;
+
+                            //if (storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadCommitted)
+                            //{
+                            //   lockManager_->ReleaseLock(readLock);
+                            //}
+                        }
+                    }
+
+                    // Make sure a read does not start in primary role and completes in secondary role.
+                    ThrowIfNotReadable(*storeTransactionSPtr);
+
+
+                    if (versionedItemSPtr != nullptr)
+                    {
+                        if (versionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion)
+                        {
+                            StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
+                                traceComponent_->PartitionId, traceComponent_->TraceTag,
+                                storeTransactionSPtr->Id,
+                                keyLockResourceNameHash,
+                                static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
+                                -1,
+                                L"keyfounddeleted");
+                            co_return false;
+                        }
+                        else
+                        {
+                            STORE_ASSERT(readResultSPtr != nullptr, "Read result should not be null");
+                            STORE_ASSERT(readResultSPtr->HasValue(), "Read result should have a value");
+                            value.Key = versionedItemSPtr->GetVersionSequenceNumber();
+                            value.Value = readResultSPtr->Value;
+                            co_return true;
+                        }
+                    }
+
+                    StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
+                        traceComponent_->PartitionId, traceComponent_->TraceTag,
+                        storeTransactionSPtr->Id,
+                        keyLockResourceNameHash,
+                        static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
+                        -1,
+                        L"keydoesnotexist");
+                    co_return false;
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"TryGetValueAsync", e, storeTransactionSPtr->Id, keyLockResourceNameHash);
+                    throw;
+                }
             }
 
             ktl::Awaitable<void> BackupCheckpointAsync(
@@ -767,7 +1001,7 @@ namespace Data
                 try
                 {
                     co_await MetadataManager::OpenAsync(*snapshotMetadataTableSPtr, *this->CurrentDiskMetadataFilePath, this->GetThisAllocator(), *traceComponent_);
-                    
+
                     // Backup the current metadata table.
                     auto backupMetadataFileName = Common::Path::Combine(backupDirectorySPtr->operator LPCWSTR(), CurrentDiskMetadataFileName.operator LPCWSTR());
                     auto fileCopy = Common::File::Copy(this->CurrentDiskMetadataFilePath->operator LPCWSTR(), backupMetadataFileName, false);
@@ -863,7 +1097,7 @@ namespace Data
                 KString & backupDirectoryCast = const_cast<KString&>(backupDirectory);
                 KString::SPtr backupDirectorySPtr = &backupDirectoryCast;
                 SharedException::CSPtr exceptionSPtr = nullptr;
-                
+
                 StoreEventSource::Events->StoreRestoreCheckpointAsyncApi(
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     Data::Utilities::ToStringLiteral(*backupDirectorySPtr),
@@ -1034,7 +1268,7 @@ namespace Data
 
                 if (storeTransaction.ReadIsolationLevel != StoreTransactionReadIsolationLevel::Snapshot)
                 {
-                    throw ktl::Exception(SF_STATUS_INVALID_OPERATION); 
+                    throw ktl::Exception(SF_STATUS_INVALID_OPERATION);
                 }
 
                 TKey defaultKey;
@@ -1066,22 +1300,25 @@ namespace Data
                 }
             }
 
-            ktl::Awaitable<KSharedPtr<IAsyncEnumerator<KeyValuePair<TKey, KeyValuePair<LONG64, TValue>>>>> CreateEnumeratorAsync(__in IStoreTransaction<TKey, TValue> & storeTransaction) override
+            ktl::Awaitable<KSharedPtr<IAsyncEnumerator<KeyValuePair<TKey, KeyValuePair<LONG64, TValue>>>>> CreateEnumeratorAsync(
+                __in IStoreTransaction<TKey, TValue> & storeTransaction,
+                __in ReadMode readMode=ReadMode::ReadValue) override
             {
                 ApiEntry();
 
                 TKey defaultValue = TKey();
-                return CreateEnumeratorAsync(storeTransaction, defaultValue, false, defaultValue, false);
+                return CreateEnumeratorAsync(storeTransaction, defaultValue, false, defaultValue, false, readMode);
             }
 
             ktl::Awaitable<KSharedPtr<IAsyncEnumerator<KeyValuePair<TKey, KeyValuePair<LONG64, TValue>>>>> CreateEnumeratorAsync(
                 __in IStoreTransaction<TKey, TValue> & storeTransaction,
                 __in TKey firstKey,
-                __in TKey lastKey)
+                __in TKey lastKey,
+                __in ReadMode readMode=ReadMode::ReadValue)
             {
                 ApiEntry();
 
-                return CreateEnumeratorAsync(storeTransaction, firstKey, true, lastKey, true);
+                return CreateEnumeratorAsync(storeTransaction, firstKey, true, lastKey, true, readMode);
             }
 
             ktl::Awaitable<KSharedPtr<IAsyncEnumerator<KeyValuePair<TKey, KeyValuePair<LONG64, TValue>>>>> CreateEnumeratorAsync(
@@ -1089,7 +1326,8 @@ namespace Data
                 __in TKey firstKey,
                 __in bool useFirstKey,
                 __in TKey lastKey,
-                __in bool useLastKey)
+                __in bool useLastKey,
+                __in ReadMode readMode=ReadMode::ReadValue)
             {
                 ApiEntry();
 
@@ -1108,7 +1346,7 @@ namespace Data
 
                 try
                 {
-                    return CreateKeyValueEnumeratorAsync(storeTransaction, firstKey, useFirstKey, lastKey, useLastKey);
+                    return CreateKeyValueEnumeratorAsync(storeTransaction, firstKey, useFirstKey, lastKey, useLastKey, readMode);
                 }
                 catch (ktl::Exception const & e)
                 {
@@ -1117,131 +1355,189 @@ namespace Data
                 }
             }
 
+
+#pragma region ISweepProvider
+
+            void SetKeySize(__in LONG64 keySize)
+            {
+                keySize_ = keySize;
+            }
+
+            LONG64 GetEstimatedKeySize()
+            {
+                if (keySize_ > 0)
+                {
+                    return keySize_;
+                }
+
+                auto cachedEstimator = keySizeEstimatorSPtr_.Get();
+                CODING_ERROR_ASSERT(cachedEstimator != nullptr);
+                return cachedEstimator->GetEstimatedKeySize();
+            }
+
+            LONG64 GetMemorySize() override
+            {
+                LONG64 differentialSize = 0;
+                LONG64 consolidatedSize = 0;
+                LONG64 snapshotSize = 0;
+
+                LONG64 estimatedKeySize = GetEstimatedKeySize();
+
+                auto cachedDifferentialStoreComponentSPtr = differentialStoreComponentSPtr_.Get();
+                STORE_ASSERT(cachedDifferentialStoreComponentSPtr != nullptr, "differential store component cannot be null");
+
+                // We are conservatively estimating that each key in the differential component has both previous and current version set, so 2 VersionedItems for each key
+
+                differentialSize = cachedDifferentialStoreComponentSPtr->Size + cachedDifferentialStoreComponentSPtr->Count() * (estimatedKeySize + 2 * Constants::ValueMetadataSizeBytes);
+                STORE_ASSERT(differentialSize >= 0, "Differential size {1} should not be negative", differentialSize);
+
+                consolidatedSize = consolidationManagerSPtr_->GetMemorySize(estimatedKeySize);
+                STORE_ASSERT(consolidatedSize >= 0, "Consolidated size {1} should not be negative", consolidatedSize);
+
+                snapshotSize = snapshotContainerSPtr_->GetMemorySize(estimatedKeySize);
+                STORE_ASSERT(snapshotSize >= 0, "Snapshot size {1} should not be negative", snapshotSize);
+
+                return differentialSize + consolidatedSize + snapshotSize;
+            }
+
+#pragma endregion
+
             void TrimFiles()
             {
-               StoreEventSource::Events->StoreMetadataTableTrimFilesStart(
-                  traceComponent_->PartitionId, traceComponent_->TraceTag,
-                  Data::Utilities::ToStringLiteral(*workFolder_));
+                StoreEventSource::Events->StoreMetadataTableTrimFilesStart(
+                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                    Data::Utilities::ToStringLiteral(*workFolder_));
 
-               KHashSet<KString::SPtr>::SPtr referencedFiles = GetCurrentMetadataFilesSet();
-               KArray<KString::SPtr> filesToBeDeleted(this->GetThisAllocator());
+                KHashSet<KString::SPtr>::SPtr referencedFiles = GetCurrentMetadataFilesSet();
+                KArray<KString::SPtr> filesToBeDeleted(this->GetThisAllocator());
 
-               KSharedArray<KString::SPtr>::SPtr checkpointFilesSPtr = GetCheckpointFiles();
+                KSharedArray<KString::SPtr>::SPtr checkpointFilesSPtr = GetCheckpointFiles();
 
-               for (ULONG32 i = 0; i < checkpointFilesSPtr->Count(); i++)
-               {
-                  KString::SPtr filenameSPtr = (*checkpointFilesSPtr)[i];
-                  if (!referencedFiles->TryRemove(filenameSPtr))
-                  {
-                     // The file does not exist in the set, so it must not be referenced - so delete it
-                     StoreEventSource::Events->StoreMetadataTableTrimFilesToDelete(
+                for (ULONG32 i = 0; i < checkpointFilesSPtr->Count(); i++)
+                {
+                    KString::SPtr filenameSPtr = (*checkpointFilesSPtr)[i];
+                    if (!referencedFiles->TryRemove(filenameSPtr))
+                    {
+                        // The file does not exist in the set, so it must not be referenced - so delete it
+                        StoreEventSource::Events->StoreMetadataTableTrimFilesToDelete(
+                            traceComponent_->PartitionId, traceComponent_->TraceTag,
+                            Data::Utilities::ToStringLiteral(*filenameSPtr));
+
+                        filesToBeDeleted.Append(filenameSPtr);
+                    }
+                }
+
+                // Safety verification - if we didn't find all the currently referenced files, something went wrong
+                // and we should not deleted any files (case mismatch? drive\network path mismatch?)
+                STORE_ASSERT(referencedFiles->Count() == 0, "failed to find all referenced files when trimming unreferenced files. {1} remaining. NOT deleting any files", referencedFiles->Count());
+
+                // We can now assume it's safe to delete the unreferenced files
+                for (ULONG32 i = 0; i < filesToBeDeleted.Count(); i++)
+                {
+                    KString::SPtr tableFileSPtr = filesToBeDeleted[i];
+
+                    StoreEventSource::Events->StoreMetadataTableTrimFilesDeleting(
                         traceComponent_->PartitionId, traceComponent_->TraceTag,
-                        Data::Utilities::ToStringLiteral(*filenameSPtr));
+                        Data::Utilities::ToStringLiteral(*tableFileSPtr));
 
-                     filesToBeDeleted.Append(filenameSPtr);
-                  }
-               }
+                    try
+                    {
+                        Common::File::Delete(tableFileSPtr->operator LPCWSTR(), true);
+                    }
+                    catch (ktl::Exception const & e)
+                    {
+                        TraceException(L"TrimFiles", e);
+                        throw;
+                    }
+                }
 
-               // Safety verification - if we didn't find all the currently referenced files, something went wrong
-               // and we should not deleted any files (case mismatch? drive\network path mismatch?)
-               STORE_ASSERT(referencedFiles->Count() == 0, "failed to find all referenced files when trimming unreferenced files. {1} remaining. NOT deleting any files", referencedFiles->Count());
-
-               // We can now assume it's safe to delete the unreferenced files
-               for (ULONG32 i = 0; i < filesToBeDeleted.Count(); i++)
-               {
-                  KString::SPtr tableFileSPtr = filesToBeDeleted[i];
-
-                  StoreEventSource::Events->StoreMetadataTableTrimFilesDeleting(
-                     traceComponent_->PartitionId, traceComponent_->TraceTag,
-                     Data::Utilities::ToStringLiteral(*tableFileSPtr));
-
-                  try
-                  {
-                     Common::File::Delete(tableFileSPtr->operator LPCWSTR(), true);
-                  }
-                  catch (ktl::Exception const & e)
-                  {
-                     TraceException(L"TrimFiles", e);
-                     throw;
-                  }
-               }
-
-               StoreEventSource::Events->StoreMetadataTableTrimFilesComplete(
-                  traceComponent_->PartitionId, traceComponent_->TraceTag,
-                  Data::Utilities::ToStringLiteral(*workFolder_));
+                StoreEventSource::Events->StoreMetadataTableTrimFilesComplete(
+                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                    Data::Utilities::ToStringLiteral(*workFolder_));
             }
 
             KSharedArray<KString::SPtr>::SPtr GetCheckpointFiles()
             {
-               KString::SPtr keyCheckpointFilePatternSPtr = nullptr;
-               NTSTATUS status = KString::Create(keyCheckpointFilePatternSPtr, this->GetThisAllocator(), L"*");
-               Diagnostics::Validate(status);
-               BOOLEAN result = keyCheckpointFilePatternSPtr->Concat(KeyCheckpointFile::GetFileExtension());
-               STORE_ASSERT(result, "Unable to build key checkpoint file pattern");
+                KString::SPtr keyCheckpointFilePatternSPtr = nullptr;
+                NTSTATUS status = KString::Create(keyCheckpointFilePatternSPtr, this->GetThisAllocator(), L"*");
+                Diagnostics::Validate(status);
+                BOOLEAN result = keyCheckpointFilePatternSPtr->Concat(KeyCheckpointFile::GetFileExtension());
+                STORE_ASSERT(result, "Unable to build key checkpoint file pattern");
 
-               KString::SPtr valueCheckpointFilePatternSPtr = nullptr;
-               status = KString::Create(valueCheckpointFilePatternSPtr, this->GetThisAllocator(), L"*");
-               Diagnostics::Validate(status);
-               result = valueCheckpointFilePatternSPtr->Concat(ValueCheckpointFile::GetFileExtension());
-               STORE_ASSERT(result, "Unable to build key checkpoint file pattern");
+                KString::SPtr valueCheckpointFilePatternSPtr = nullptr;
+                status = KString::Create(valueCheckpointFilePatternSPtr, this->GetThisAllocator(), L"*");
+                Diagnostics::Validate(status);
+                result = valueCheckpointFilePatternSPtr->Concat(ValueCheckpointFile::GetFileExtension());
+                STORE_ASSERT(result, "Unable to build key checkpoint file pattern");
 
-               KSharedArray<KString::SPtr>::SPtr checkpointFiles = _new(this->GetThisAllocationTag(), this->GetThisAllocator()) KSharedArray<KString::SPtr>();
+                KSharedArray<KString::SPtr>::SPtr checkpointFiles = _new(this->GetThisAllocationTag(), this->GetThisAllocator()) KSharedArray<KString::SPtr>();
 
-               vector<wstring> keyFiles = Common::Directory::GetFiles(workFolder_->operator LPCWSTR(), keyCheckpointFilePatternSPtr->operator LPCWSTR(), true, true);
-               vector<wstring> valueFiles = Common::Directory::GetFiles(workFolder_->operator LPCWSTR(), valueCheckpointFilePatternSPtr->operator LPCWSTR(), true, true);
+                vector<wstring> keyFiles = Common::Directory::GetFiles(workFolder_->operator LPCWSTR(), keyCheckpointFilePatternSPtr->operator LPCWSTR(), true, true);
+                vector<wstring> valueFiles = Common::Directory::GetFiles(workFolder_->operator LPCWSTR(), valueCheckpointFilePatternSPtr->operator LPCWSTR(), true, true);
 
-               for (wstring keyFile : keyFiles)
-               {
-                  KString::SPtr keyFileSPtr = nullptr;
-                  status = KString::Create(keyFileSPtr, this->GetThisAllocator(), KStringView(keyFile.c_str()));
-                  status = checkpointFiles->Append(keyFileSPtr);
-                  STORE_ASSERT(NT_SUCCESS(status), "Unable to add key checkpoint file to checkpoint files");
-               }
+                for (wstring keyFile : keyFiles)
+                {
+                    KString::SPtr keyFileSPtr = nullptr;
+                    status = KString::Create(keyFileSPtr, this->GetThisAllocator(), KStringView(keyFile.c_str()));
+                    status = checkpointFiles->Append(keyFileSPtr);
+                    STORE_ASSERT(NT_SUCCESS(status), "Unable to add key checkpoint file to checkpoint files");
+                }
 
-               for (wstring valueFile : valueFiles)
-               {
-                  KString::SPtr valueFileSPtr = nullptr;
-                  status = KString::Create(valueFileSPtr, this->GetThisAllocator(), KStringView(valueFile.c_str()));
-                  status = checkpointFiles->Append(valueFileSPtr);
-                  STORE_ASSERT(NT_SUCCESS(status), "Unable to add value checkpoint file to checkpoint files");
-               }
+                for (wstring valueFile : valueFiles)
+                {
+                    KString::SPtr valueFileSPtr = nullptr;
+                    status = KString::Create(valueFileSPtr, this->GetThisAllocator(), KStringView(valueFile.c_str()));
+                    status = checkpointFiles->Append(valueFileSPtr);
+                    STORE_ASSERT(NT_SUCCESS(status), "Unable to add value checkpoint file to checkpoint files");
+                }
 
-               return checkpointFiles;
+                return checkpointFiles;
             }
 
             KHashSet<KString::SPtr>::SPtr GetCurrentMetadataFilesSet()
             {
-               // Construct a hash set from the currently referenced files.
-               KHashSet<KString::SPtr>::SPtr referencedFilesSPtr = nullptr;
-               KHashSet<KString::SPtr>::Create(32, K_DefaultHashFunction, StringEquals, this->GetThisAllocator(), referencedFilesSPtr);
+                // Construct a hash set from the currently referenced files.
+                KHashSet<KString::SPtr>::SPtr referencedFilesSPtr = nullptr;
+                KHashSet<KString::SPtr>::Create(32, K_DefaultHashFunction, StringEquals, this->GetThisAllocator(), referencedFilesSPtr);
 
-               auto cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
-               if (cachedCurrentMetadataTableSPtr != nullptr)
-               {
-                  auto tableEnumeratorSPtr = cachedCurrentMetadataTableSPtr->Table->GetEnumerator();
-                  STORE_ASSERT(tableEnumeratorSPtr != nullptr, "enumerator should not be null");
-                  while (tableEnumeratorSPtr->MoveNext())
-                  {
-                     auto item = tableEnumeratorSPtr->Current();
-                     auto fileMetadataSPtr = item.Value;
-                     auto keyCheckpointFileName = fileMetadataSPtr->CheckpointFileSPtr->KeyCheckpointFileNameSPtr;
-                     auto valueCheckpointFileName = fileMetadataSPtr->CheckpointFileSPtr->ValueCheckpointFileNameSPtr;
+                auto cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
+                if (cachedCurrentMetadataTableSPtr != nullptr)
+                {
+                    auto tableEnumeratorSPtr = cachedCurrentMetadataTableSPtr->Table->GetEnumerator();
+                    STORE_ASSERT(tableEnumeratorSPtr != nullptr, "enumerator should not be null");
+                    while (tableEnumeratorSPtr->MoveNext())
+                    {
+                        auto item = tableEnumeratorSPtr->Current();
+                        auto fileMetadataSPtr = item.Value;
+                        auto keyCheckpointFileName = fileMetadataSPtr->CheckpointFileSPtr->KeyCheckpointFileNameSPtr;
+                        auto valueCheckpointFileName = fileMetadataSPtr->CheckpointFileSPtr->ValueCheckpointFileNameSPtr;
 
-                     bool added = referencedFilesSPtr->TryAdd(keyCheckpointFileName);
-                     STORE_ASSERT(added, "key checkpoint file should have been added to hash set");
-                     added = referencedFilesSPtr->TryAdd(valueCheckpointFileName);
-                     STORE_ASSERT(added, "value checkpoint file should have been added to hash set");
-                  }
-               }
+                        bool added = referencedFilesSPtr->TryAdd(keyCheckpointFileName);
+                        STORE_ASSERT(added, "key checkpoint file should have been added to hash set");
+                        added = referencedFilesSPtr->TryAdd(valueCheckpointFileName);
+                        STORE_ASSERT(added, "value checkpoint file should have been added to hash set");
+                    }
+                }
 
-               return referencedFilesSPtr;
+                return referencedFilesSPtr;
+            }
+
+            void StartBackgroundSweep()
+            {
+                STORE_ASSERT(sweepManagerSPtr_ != nullptr, "sweep manager has not been initialized");
+                if (hasPersistedState_ && enableSweep_)
+                {
+                    ktl::Awaitable<void> sweepAwaitable = sweepManagerSPtr_->SweepAsync();
+                    ktl::Task sweepTask = ToTask(sweepAwaitable);
+                    STORE_ASSERT(sweepTask.IsTaskStarted(), "Expected sweep task to start");
+                }
             }
 
 #pragma region IStateProvider2 implementation
 
             KUriView const GetName() const override
             {
-               return Name;
+                return Name;
             }
 
             KArray<TxnReplicator::StateProviderInfo> GetChildren(KUriView const & rootName) override
@@ -1257,6 +1553,8 @@ namespace Data
             {
                 transactionalReplicatorSPtr_ = &transactionalReplicatorWRef;
                 STORE_ASSERT(transactionalReplicatorSPtr_->IsAlive(), "transactional replicator expired");
+
+                hasPersistedState_ = GetReplicator()->HasPeristedState;
 
                 STORE_ASSERT(children == nullptr, "children == nullptr");
 
@@ -1306,11 +1604,31 @@ namespace Data
                     return;
                 }
 
-                status = ConsolidationManager<TKey, TValue>::Create(*this, *traceComponent_, this->GetThisAllocator(), consolidationManagerSPtr_);
+                status = ConsolidationManager<TKey, TValue>::Create(
+                    *this,
+                    *traceComponent_,
+                    this->GetThisAllocator(),
+                    consolidationManagerSPtr_);
                 if (!NT_SUCCESS(status))
                 {
-                   this->SetConstructorStatus(status);
-                   return;
+                    this->SetConstructorStatus(status);
+                    return;
+                }
+
+                status = SweepManager<TKey, TValue>::Create(*this, *consolidationManagerSPtr_, *traceComponent_, this->GetThisAllocator(), sweepManagerSPtr_);
+                if (!NT_SUCCESS(status))
+                {
+                    this->SetConstructorStatus(status);
+                    return;
+                }
+
+                KeySizeEstimator::SPtr estimatorSPtr = nullptr;
+                status = KeySizeEstimator::Create(this->GetThisAllocator(), estimatorSPtr);
+                keySizeEstimatorSPtr_.Put(Ktl::Move(estimatorSPtr));
+                if (!NT_SUCCESS(status))
+                {
+                    this->SetConstructorStatus(status);
+                    return;
                 }
 
                 mergeHelperSPtr_ = nullptr;
@@ -1376,22 +1694,16 @@ namespace Data
                     this->SetConstructorStatus(status);
                     return;
                 }
-                
+
                 consolidationTcsSPtr_.Put(nullptr);
                 status = ktl::CancellationTokenSource::Create(this->GetThisAllocator(), this->GetThisAllocationTag(), consolidationTaskCancellationSourceSPtr_);
-                if (!NT_SUCCESS(status))
-                {
-                   this->SetConstructorStatus(status);
-                   return;
-                }
-
-                sweepTcsSPtr_.Put(nullptr);
-                status = ktl::CancellationTokenSource::Create(this->GetThisAllocator(), this->GetThisAllocationTag(), sweepTaskCancellationSourceSPtr_);
                 if (!NT_SUCCESS(status))
                 {
                     this->SetConstructorStatus(status);
                     return;
                 }
+
+                this->StartBackgroundSweep();
             }
 
             ktl::Awaitable<void> OpenAsync(
@@ -1426,8 +1738,46 @@ namespace Data
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     L"starting");
 
+                isClosing_ = true;
+
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = nullptr;
+                NTSTATUS status = StoreTransaction<TKey, TValue>::Create(
+                    CreateTransactionId(),
+                    storeId_,
+                    *keyComparerSPtr_,
+                    *traceComponent_,
+                    this->GetThisAllocator(),
+                    storeTransactionSPtr);
+                Diagnostics::Validate(status);
+                try
+                {
+                    // Drain all existing inflight transactions. Since isClosing_ = true, all new transactions will see SF_STATUS_OBJECT_CLOSED
+                    co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Exclusive, Common::TimeSpan::FromMilliseconds(10000), false);
+                }
+                catch (ktl::Exception const & e)
+                {
+                    // If we fail to acquire the prime lock due to timeout, we still want to proceed with Close
+                    if (e.GetStatus() != SF_STATUS_TIMEOUT)
+                    {
+                        throw;
+                    }
+                    else
+                    {
+                        StoreEventSource::Events->StoreOnCleanupAsyncApiPrimeLockNotAcquired(traceComponent_->PartitionId, traceComponent_->TraceTag);
+                    }
+                }
+
+                // Unlock immediately since lock needs to be released before closing lock manager
+                storeTransactionSPtr->Unlock();
+
+                // OnServiceClose will not be called until all pending activities (i.e. operations) have finished
+                // If there's an operation waiting infinitely for a lock, it will prevent OnServiceClose from proceeding
+                // We'll close lock manager now so that all waiters are expired
+                co_await lockManager_->CloseAsync();
+
+                // Now let ServiceClose be scheduled
                 ktl::kservice::CloseAwaiter::SPtr closeAwaiter;
-                NTSTATUS status = ktl::kservice::CloseAwaiter::Create(GetThisAllocator(), GetThisAllocationTag(), *this, closeAwaiter);
+                status = ktl::kservice::CloseAwaiter::Create(GetThisAllocator(), GetThisAllocationTag(), *this, closeAwaiter);
                 Diagnostics::Validate(status);
                 status = co_await *closeAwaiter;
                 STORE_ASSERT(NT_SUCCESS(status), "Unsuccessful close. Status: {1}", status);
@@ -1450,7 +1800,7 @@ namespace Data
                 __in LONG64 checkpointLSN) override
             {
                 ApiEntry();
-                
+
                 // checkpointLSN=0 is possible on the first checkpoint of a replica after being copied
                 STORE_ASSERT(checkpointLSN >= 0, "checkpointLSN: {1} < 0", checkpointLSN);
 
@@ -1488,6 +1838,8 @@ namespace Data
                     }
 
                     // Differential state should be re-initialized only after consolidated state is made to point to consolidating state.
+                    auto cachedEstimator = keySizeEstimatorSPtr_.Get();
+                    auto lastEstimate = cachedEstimator->GetEstimatedKeySize();
 
                     KSharedPtr<DifferentialStoreComponent<TKey, TValue>> differentialStoreComponentSPtr = nullptr;
                     NTSTATUS status = DifferentialStoreComponent<TKey, TValue>::Create(
@@ -1503,6 +1855,11 @@ namespace Data
 
                     STORE_ASSERT(differentialStoreComponentSPtr != nullptr, "differentialStoreComponentSPtr != nullptr");
                     differentialStoreComponentSPtr_.Put(Ktl::Move(differentialStoreComponentSPtr));
+
+                    KeySizeEstimator::SPtr estimatorSPtr = nullptr;
+                    KeySizeEstimator::Create(this->GetThisAllocator(), estimatorSPtr);
+                    estimatorSPtr->SetInitialEstimate(lastEstimate);
+                    keySizeEstimatorSPtr_.Put(Ktl::Move(estimatorSPtr));
                 }
                 catch (const ktl::Exception & e)
                 {
@@ -1527,15 +1884,25 @@ namespace Data
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     lastPrepareCheckpointLSN_,
                     GetCheckpointLSN());
-                
+
                 co_await CheckpointAsync(cancellationToken);
                 lastPerformCheckpointLSN_ = lastPrepareCheckpointLSN_;
                 lastPrepareCheckpointLSN_ = -1;
 
+                ULONG64 diskSize = co_await GetDiskSizeAsync(nextMetadataTableSPtr_);
+                LONG64 memorySize = this->Size;
+
+                perfCounters_->ItemCount.Value = count_;
+                perfCounters_->DiskSize.Value = diskSize;
+                perfCounters_->MemorySize.Value = memorySize;
+
                 StoreEventSource::Events->StorePerformCheckpointAsyncCompletedApi(
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     fileId_,
-                    stopwatch.ElapsedMilliseconds);
+                    stopwatch.ElapsedMilliseconds,
+                    count_,
+                    diskSize,
+                    memorySize);
             }
 
             ktl::Awaitable<void> CompleteCheckpointAsync(
@@ -1662,7 +2029,12 @@ namespace Data
                 KSharedPtr<MetadataTable> cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
                 STORE_ASSERT(cachedCurrentMetadataTableSPtr != nullptr, "cachedCurrentMetadataTableSPtr != nullptr");
 
-                if (!Common::File::Exists(currentMetadataFilePath_->operator LPCWSTR()))
+                if (hasPersistedState_ == false)
+                {
+                    // TODO: Trace that volatile store has recovered
+                    cachedCurrentMetadataTableSPtr->CheckpointLSN = Constants::ZeroLsn;
+                }
+                else if (!Common::File::Exists(currentMetadataFilePath_->operator LPCWSTR()))
                 {
                     StoreEventSource::Events->StoreRecoverCheckpointAsyncFirstCheckpoint(traceComponent_->PartitionId, traceComponent_->TraceTag);
 
@@ -1704,46 +2076,46 @@ namespace Data
                     Size,
                     cachedCurrentMetadataTableSPtr->CheckpointLSN);
             }
-          
+
             ktl::Awaitable<void> PrepareForRemoveAsync(
-               __in TxnReplicator::TransactionBase const & replicatorTransaction,
-               __in ktl::CancellationToken const & cancellationToken
+                __in TxnReplicator::TransactionBase const & replicatorTransaction,
+                __in ktl::CancellationToken const & cancellationToken
             ) override
             {
-               ApiEntry();
+                ApiEntry();
 
-               KSharedPtr<IStoreTransaction<TKey, TValue>> istoreTransactionSPtr = nullptr;
-               TxnReplicator::TransactionBase & replicatorTransactionCast = const_cast<TxnReplicator::TransactionBase&>(replicatorTransaction);
+                KSharedPtr<IStoreTransaction<TKey, TValue>> istoreTransactionSPtr = nullptr;
+                TxnReplicator::TransactionBase & replicatorTransactionCast = const_cast<TxnReplicator::TransactionBase&>(replicatorTransaction);
 
-               CreateOrFindTransaction(replicatorTransactionCast, istoreTransactionSPtr);
-               KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue> *>(istoreTransactionSPtr.RawPtr());
-               ThrowIfFaulted(*storeTransactionSPtr);
+                CreateOrFindTransaction(replicatorTransactionCast, istoreTransactionSPtr);
+                KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue> *>(istoreTransactionSPtr.RawPtr());
+                ThrowIfFaulted(*storeTransactionSPtr);
 
-               // It should be called on the primary only.
-               ThrowIfNotWritable(storeTransactionSPtr->Id);
+                // It should be called on the primary only.
+                ThrowIfNotWritable(storeTransactionSPtr->Id);
 
-               try
-               {
-                  // Acquire exclusive lock on store component.
-                  ULONG64 remainingTime = co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Exclusive, Common::TimeSpan::FromMilliseconds(1000), true);
+                try
+                {
+                    // Acquire exclusive lock on store component.
+                    ULONG64 remainingTime = co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Exclusive, Common::TimeSpan::FromMilliseconds(1000), true);
 
-                  ThrowIfFaulted(*storeTransactionSPtr);
+                    ThrowIfFaulted(*storeTransactionSPtr);
 
-                  // If the operation was cancelled during the lock wait, then terminate.
-                  cancellationToken.ThrowIfCancellationRequested();
+                    // If the operation was cancelled during the lock wait, then terminate.
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                  if (remainingTime == 0)
-                  {
-                     throw ktl::Exception(SF_STATUS_TIMEOUT);
-                  }
-               }
-               catch (ktl::Exception const & e)
-               {
-                  TraceException(L"TStore.PrepareForRemoveAsync", e);
-                  throw;
-               }
+                    if (remainingTime == 0)
+                    {
+                        throw ktl::Exception(SF_STATUS_TIMEOUT);
+                    }
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"TStore.PrepareForRemoveAsync", e);
+                    throw;
+                }
 
-               co_return;
+                co_return;
             }
 
             ktl::Awaitable<void> RemoveStateAsync(
@@ -1860,6 +2232,9 @@ namespace Data
                         mergeMetadataTableSPtr_.Put(nullptr);
                     }
 
+                    perfCounters_->DiskSize.Value = 0;
+                    perfCounters_->ItemCount.Value = 0;
+
                     StoreEventSource::Events->StoreRemoveStateAsyncApi(
                         traceComponent_->PartitionId, traceComponent_->TraceTag,
                         L"completed");
@@ -1918,6 +2293,7 @@ namespace Data
                         MetadataOperationData const * const metadataOperationDataPtr = static_cast<MetadataOperationData const * const>(metadataPtr);
                         metadataOperationDataCSPtr = metadataOperationDataPtr;
                         STORE_ASSERT(metadataOperationDataCSPtr != nullptr, "metadataOperationDataCSPtr != nullptr");
+
                     }
                     else
                     {
@@ -1988,7 +2364,7 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"ApplyAsync", e);
+                    TraceException(L"ApplyAsync", e, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -1997,10 +2373,10 @@ namespace Data
             {
                 ApiEntry();
 
+                const StoreTransaction<TKey, TValue>& storeTransaction = static_cast<StoreTransaction<TKey, TValue> const &>(operationContext);
+
                 try
                 {
-                    const StoreTransaction<TKey, TValue>& storeTransaction = static_cast<StoreTransaction<TKey, TValue> const &>(operationContext);
-
                     if (storeTransaction.IsCompleted)
                     {
                         return;
@@ -2011,166 +2387,204 @@ namespace Data
                 }
                 catch (ktl::Exception const & e)
                 {
-                    TraceException(L"Unlock", e);
+                    TraceException(L"Unlock", e, storeTransaction.Id);
                     throw;
                 }
             }
 
             TxnReplicator::OperationDataStream::SPtr GetCurrentState() override
             {
-               ApiEntry();
-               try
-               {
-                  StoreCopyStream::SPtr copyStreamSPtr = nullptr;
-                  StoreCopyStream::Create(*this, *traceComponent_, this->GetThisAllocator(), copyStreamSPtr);
+                ApiEntry();
+                try
+                {
+                    TxnReplicator::OperationDataStream::SPtr resultSPtr = nullptr;
 
-                  TxnReplicator::OperationDataStream::SPtr resultSPtr = static_cast<TxnReplicator::OperationDataStream *>(copyStreamSPtr.RawPtr());
+                    if (hasPersistedState_ == false)
+                    {
+                        KSharedPtr<VolatileStoreCopyStream<TKey, TValue>> volatileCopyStream = nullptr;
+                        NTSTATUS status = VolatileStoreCopyStream<TKey, TValue>::Create(
+                            *consolidationManagerSPtr_,
+                            *keyComparerSPtr_,
+                            *keyConverterSPtr_,
+                            *valueConverterSPtr_,
+                            *traceComponent_,
+                            this->GetThisAllocator(),
+                            volatileCopyStream);
+                        Diagnostics::Validate(status);
+                        resultSPtr = static_cast<TxnReplicator::OperationDataStream *>(volatileCopyStream.RawPtr());
+                    }
+                    else
+                    {
+                        StoreCopyStream::SPtr copyStreamSPtr = nullptr;
+                        NTSTATUS status = StoreCopyStream::Create(*this, *traceComponent_, this->GetThisAllocator(), perfCounters_, copyStreamSPtr);
+                        Diagnostics::Validate(status);
+                        resultSPtr = static_cast<TxnReplicator::OperationDataStream *>(copyStreamSPtr.RawPtr());
+                    }
 
-                  StoreEventSource::Events->StoreGetCurrentStateApi(traceComponent_->PartitionId, traceComponent_->TraceTag);
+                    StoreEventSource::Events->StoreGetCurrentStateApi(traceComponent_->PartitionId, traceComponent_->TraceTag);
 
-                  return resultSPtr;
-               }
-               catch (ktl::Exception const & e)
-               {
-                  TraceException(L"GetCurrentState", e);
-                  throw;
-               }
+                    return resultSPtr;
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"GetCurrentState", e);
+                    throw;
+                }
             }
 
-            // TODO: BeginSettingCurrentState should be async     
-            void BeginSettingCurrentState() override
+            ktl::Awaitable<void> BeginSettingCurrentStateAsync() override
             {
-               ApiEntry();
+                ApiEntry();
 
-               StoreEventSource::Events->StoreBeginSettingCurrentStateApi(
-                  traceComponent_->PartitionId, traceComponent_->TraceTag,
-                  L"starting");
+                StoreEventSource::Events->StoreBeginSettingCurrentStateApi(
+                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                    L"starting");
 
-               try
-               {
-                  // Drop all old in-memory state and re-create it.
-                  // Differential state.
-                  KSharedPtr<DifferentialStoreComponent<TKey, TValue>> cachedDifferentialStoreComponentSPtr;
-                  NTSTATUS status = DifferentialStoreComponent<TKey, TValue>::Create(
-                     func_,
-                     *GetReplicator(),
-                     *snapshotContainerSPtr_,
-                     storeId_,
-                     *keyComparerSPtr_,
-                     *traceComponent_,
-                     this->GetThisAllocator(),
-                     cachedDifferentialStoreComponentSPtr);
-                  Diagnostics::Validate(status);
-                  differentialStoreComponentSPtr_.Put(Ktl::Move(cachedDifferentialStoreComponentSPtr));
+                try
+                {
+                    co_await CancelSweepTaskAsync();
 
-                  // Consolidation Manager.
-                  status = ConsolidationManager<TKey, TValue>::Create(*this, *traceComponent_, this->GetThisAllocator(), consolidationManagerSPtr_);
-                  Diagnostics::Validate(status);
+                    // Drop all old in-memory state and re-create it.
+                    // Differential state.
+                    KSharedPtr<DifferentialStoreComponent<TKey, TValue>> cachedDifferentialStoreComponentSPtr;
+                    NTSTATUS status = DifferentialStoreComponent<TKey, TValue>::Create(
+                        func_,
+                        *GetReplicator(),
+                        *snapshotContainerSPtr_,
+                        storeId_,
+                        *keyComparerSPtr_,
+                        *traceComponent_,
+                        this->GetThisAllocator(),
+                        cachedDifferentialStoreComponentSPtr);
+                    Diagnostics::Validate(status);
+                    differentialStoreComponentSPtr_.Put(Ktl::Move(cachedDifferentialStoreComponentSPtr));
 
-                  // Snapshot Container.
-                  ktl::Awaitable<void> snapshotCloseAwaitable = snapshotContainerSPtr_->CloseAsync();
-                  ktl::Task snapshotCloseTask = ToTask(snapshotCloseAwaitable);
-                  STORE_ASSERT(snapshotCloseTask.IsTaskStarted(), "Expected snapshot close task to start");
+                    // Consolidation Manager.
+                    status = ConsolidationManager<TKey, TValue>::Create(
+                        *this,
+                        *traceComponent_,
+                        this->GetThisAllocator(),
+                        consolidationManagerSPtr_);
+                    Diagnostics::Validate(status);
 
-                  status = SnapshotContainer<TKey, TValue>::Create(*valueConverterSPtr_, *traceComponent_, this->GetThisAllocator(), snapshotContainerSPtr_);
-                  Diagnostics::Validate(status);
+                    // Snapshot Container.
+                    co_await snapshotContainerSPtr_->CloseAsync();
 
-                  // Inflight transactions container.
-                  LongComparer::SPtr longComparerSPtr = nullptr;
-                  LongComparer::Create(this->GetThisAllocator(), longComparerSPtr);
-                  IComparer<LONG64>::SPtr txnComparer = static_cast<IComparer<LONG64> *>(longComparerSPtr.RawPtr());
+                    status = SnapshotContainer<TKey, TValue>::Create(*valueConverterSPtr_, *traceComponent_, this->GetThisAllocator(), snapshotContainerSPtr_);
+                    Diagnostics::Validate(status);
 
-                  status = ConcurrentDictionary2<LONG64, KSharedPtr<StoreTransaction<TKey, TValue>>>::Create(
-                      100,
-                      K_DefaultHashFunction,
-                      *txnComparer,
-                      this->GetThisAllocator(),
-                      inflightReadWriteStoreTransactionsSPtr_);
+                    // Inflight transactions container.
+                    LongComparer::SPtr longComparerSPtr = nullptr;
+                    LongComparer::Create(this->GetThisAllocator(), longComparerSPtr);
+                    IComparer<LONG64>::SPtr txnComparer = static_cast<IComparer<LONG64> *>(longComparerSPtr.RawPtr());
 
-                  Diagnostics::Validate(status);
-                  
-                  // Lock Manager.
-                  lockManager_->Close();
+                    status = ConcurrentDictionary2<LONG64, KSharedPtr<StoreTransaction<TKey, TValue>>>::Create(
+                        100,
+                        K_DefaultHashFunction,
+                        *txnComparer,
+                        this->GetThisAllocator(),
+                        inflightReadWriteStoreTransactionsSPtr_);
 
-                  status = LockManager::Create(this->GetThisAllocator(), lockManager_);
-                  Diagnostics::Validate(status);
-  
-                  lockManager_->Open();
+                    Diagnostics::Validate(status);
 
-                  // Prepare the new persisted state management.
-                  // Do not have to lock as there can be no readers yet and no checkpoint yet.
-                  // Should file metadata be derefrenced?
-                  MetadataTable::SPtr cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
-                  if (cachedCurrentMetadataTableSPtr != nullptr)
-                  {
-                     IDictionary<ULONG32, FileMetadata::SPtr>::SPtr table = cachedCurrentMetadataTableSPtr->Table;
-                     IEnumerator<KeyValuePair<ULONG32, FileMetadata::SPtr>>::SPtr tableEnumerator = table->GetEnumerator();
+                    // Lock Manager.
+                    co_await CloseAndReopenLockManagerAsync();
 
-                     while (tableEnumerator->MoveNext())
-                     {
-                        FileMetadata::SPtr fileMetadataSPtr = tableEnumerator->Current().Value;
+                    // Prepare the new persisted state management.
+                    // Do not have to lock as there can be no readers yet and no checkpoint yet.
+                    // Should file metadata be derefrenced?
+                    MetadataTable::SPtr cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
+                    if (cachedCurrentMetadataTableSPtr != nullptr)
+                    {
+                        IDictionary<ULONG32, FileMetadata::SPtr>::SPtr table = cachedCurrentMetadataTableSPtr->Table;
+                        IEnumerator<KeyValuePair<ULONG32, FileMetadata::SPtr>>::SPtr tableEnumerator = table->GetEnumerator();
 
-                        // Set for delete in the next complete cycle.
-                        fileMetadataSPtr->CanBeDeleted = true;
-                        fileMetadataSPtr->AddReference();
+                        while (tableEnumerator->MoveNext())
+                        {
+                            FileMetadata::SPtr fileMetadataSPtr = tableEnumerator->Current().Value;
 
-                        STORE_ASSERT(
-                           fileMetadataSPtr->ReferenceCount == 2,
-                           "Unexpected filemetadata count {1} for file {2}",
-                           fileMetadataSPtr->ReferenceCount,
-                           fileMetadataSPtr->FileId);
+                            // Set for delete in the next complete cycle.
+                            fileMetadataSPtr->CanBeDeleted = true;
+                            fileMetadataSPtr->AddReference();
 
-                        bool added = filesToBeDeletedSPtr_->TryAdd(fileMetadataSPtr, true);
-                        STORE_ASSERT(added, "Failed to add file id {1}", fileMetadataSPtr->FileId);
-                     }
+                            STORE_ASSERT(
+                                fileMetadataSPtr->ReferenceCount == 2,
+                                "Unexpected filemetadata count {1} for file {2}",
+                                fileMetadataSPtr->ReferenceCount,
+                                fileMetadataSPtr->FileId);
 
-                     ktl::Awaitable<void> metadataTableCloseAwaitable = cachedCurrentMetadataTableSPtr->CloseAsync();
-                     ktl::Task metadataTableCloseTask = ToTask(metadataTableCloseAwaitable);
-                     STORE_ASSERT(metadataTableCloseTask.IsTaskStarted(), "Expected metadata table close task to start");
-                  }
+                            bool added = filesToBeDeletedSPtr_->TryAdd(fileMetadataSPtr, true);
+                            STORE_ASSERT(added, "Failed to add file id {1}", fileMetadataSPtr->FileId);
+                        }
 
-                  // Reset current metadata table.
-                  currentMetadataTableSPtr_.Put(nullptr);
+                        co_await cachedCurrentMetadataTableSPtr->CloseAsync();
+                        this->StartBackgroundSweep();
+                    }
 
-                  // Prepare for set current state.
-                  status = CopyManager::Create(*traceComponent_, this->GetThisAllocator(), copyManagerSPtr_);
-                  Diagnostics::Validate(status);
-               }
-               catch (ktl::Exception const & e)
-               {
-                  TraceException(L"BeginSettingCurrentState", e);
-                  throw;
-               }
+                    // Reset current metadata table.
+                    currentMetadataTableSPtr_.Put(nullptr);
 
-               StoreEventSource::Events->StoreBeginSettingCurrentStateApi(
-                  traceComponent_->PartitionId, traceComponent_->TraceTag,
-                  L"completed");
+                    // Prepare for set current state.
+                    if (hasPersistedState_ == false)
+                    {
+                        KSharedPtr<VolatileCopyManager<TKey, TValue>> volatileCopyManager = nullptr;
+                        status = VolatileCopyManager<TKey, TValue>::Create(
+                            *consolidationManagerSPtr_,
+                            *keyConverterSPtr_,
+                            *valueConverterSPtr_,
+                            *traceComponent_,
+                            this->GetThisAllocator(),
+                            volatileCopyManager);
+                        Diagnostics::Validate(status);
+
+                        copyManagerSPtr_ = static_cast<ICopyManager *>(volatileCopyManager.RawPtr());
+                    }
+                    else
+                    {
+                        CopyManager::SPtr persistentCopyManager = nullptr;
+                        status = CopyManager::Create(*workFolder_, *traceComponent_, this->GetThisAllocator(), perfCounters_, persistentCopyManager);
+                        Diagnostics::Validate(status);
+
+                        copyManagerSPtr_ = static_cast<ICopyManager *>(persistentCopyManager.RawPtr());
+                    }
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"BeginSettingCurrentState", e);
+                    throw;
+                }
+
+                StoreEventSource::Events->StoreBeginSettingCurrentStateApi(
+                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                    L"completed");
+
+                co_return;
             }
 
             ktl::Awaitable<void> SetCurrentStateAsync(
-               __in LONG64 stateRecordNumber,
-               __in OperationData const & operationData,
-               __in ktl::CancellationToken const & cancellationToken
+                __in LONG64 stateRecordNumber,
+                __in OperationData const & operationData,
+                __in ktl::CancellationToken const & cancellationToken
             )  override
             {
-               ApiEntry();
-               try
-               {
-                  STORE_ASSERT(copyManagerSPtr_ != nullptr, "unexpectedly no longer building a new master table");
-                  OperationData::CSPtr operationDataCSPtr = &operationData;
-                  co_await copyManagerSPtr_->AddCopyDataAsync(*workFolder_, *operationDataCSPtr);
-               }
-               catch (ktl::Exception const & e)
-               {
-                  TraceException(L"SetCurrentStateAsync", e);
-                  throw;
-               }
+                ApiEntry();
+                try
+                {
+                    STORE_ASSERT(copyManagerSPtr_ != nullptr, "unexpectedly no longer building a new master table");
+                    OperationData::CSPtr operationDataCSPtr = &operationData;
+                    co_await copyManagerSPtr_->AddCopyDataAsync(*operationDataCSPtr);
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"SetCurrentStateAsync", e);
+                    throw;
+                }
 
-               co_return;
+                co_return;
             }
 
             ktl::Awaitable<void> EndSettingCurrentStateAsync(
-               __in ktl::CancellationToken const & cancellationToken
+                __in ktl::CancellationToken const & cancellationToken
             ) override
             {
                 ApiEntry();
@@ -2185,13 +2599,27 @@ namespace Data
                     if (wasCopyAborted_)
                     {
                         StoreEventSource::Events->StoreEndSettingCurrentStateAsyncAbortedApi(
-                            traceComponent_->PartitionId, 
+                            traceComponent_->PartitionId,
                             traceComponent_->TraceTag);
                         co_await copyManagerSPtr_->CloseAsync();
                     }
-                    else
+                    else if (hasPersistedState_)
                     {
                         co_await RecoverCopyStateAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        // Create an empty metadata table for the volatile store
+                        KSharedPtr<MetadataTable> currentMetadataTableSPtr = nullptr;
+                        NTSTATUS status = MetadataTable::Create(this->GetThisAllocator(), currentMetadataTableSPtr);
+                        Diagnostics::Validate(status);
+
+                        currentMetadataTableSPtr_.Put(Ktl::Move(currentMetadataTableSPtr));
+
+                        // Update count
+                        KSharedPtr<VolatileCopyManager<TKey, TValue>> volatileCopyManager = dynamic_cast<VolatileCopyManager<TKey, TValue> *>(copyManagerSPtr_.RawPtr());
+                        STORE_ASSERT(volatileCopyManager != nullptr, "Volatile copy manager is null");
+                        count_ = volatileCopyManager->Count;
                     }
 
                     StoreEventSource::Events->StoreEndSettingCurrentStateAsyncApi(
@@ -2224,7 +2652,7 @@ namespace Data
             }
 
             NTSTATUS SetLangTypeInfo(
-                __in KStringView const & lang, 
+                __in KStringView const & lang,
                 __in KStringView const & typeInfo)  override
             {
                 NTSTATUS status = KString::Create(lang_, GetThisAllocator(), lang);
@@ -2256,57 +2684,6 @@ namespace Data
                 co_return snapshotMetadataTable;
             }
 
-           void Sweep()
-           {
-               try
-               {
-                   // TryStartSweep sets sweepInProgress_ to 1
-                   KFinally([&] 
-                   {
-                       LONG64 wasInProgress = InterlockedCompareExchange64(&sweepInProgress_, 0, 1);
-                       STORE_ASSERT(wasInProgress == 1, "Sweep should have been in progress");
-                   });
-
-                   ktl::CancellationToken cancellationToken = sweepTaskCancellationSourceSPtr_->Token;
-                   if (!cancellationToken.IsCancellationRequested)
-                   {
-                       ktl::AwaitableCompletionSource<bool>::SPtr newSweepCompletionSource = nullptr;
-                       ktl::AwaitableCompletionSource<bool>::Create(this->GetThisAllocator(), this->GetThisAllocationTag(), newSweepCompletionSource);
-                       sweepTcsSPtr_.Put(Ktl::Move(newSweepCompletionSource));
-
-                       auto cachedCompletionSource = sweepTcsSPtr_.Get();
-                       StoreEventSource::Events->StoreSweep(traceComponent_->PartitionId, traceComponent_->TraceTag, L"starting");
-                       consolidationManagerSPtr_->Sweep(cancellationToken, *cachedCompletionSource);
-                       StoreEventSource::Events->StoreSweep(traceComponent_->PartitionId, traceComponent_->TraceTag, L"completed");
-                   }
-               }
-               catch (ktl::Exception const & e)
-               {
-                   TraceException(L"Sweep", e);
-
-                   // Do not assert.
-               }
-           }
-
-           // Exposing for testability
-           ktl::Task TryStartSweepAsync() override
-           {
-               try
-               {
-                   // Sweep() sets sweepInProgress_ to 0
-                   if (enableSweep_ && InterlockedCompareExchange64(&sweepInProgress_, 1, 0) == 0)
-                   {
-                       KThreadPool & threadPool = this->GetThisAllocator().GetKtlSystem().DefaultSystemThreadPool();
-                       co_await ktl::CorHelper::ThreadPoolThread(threadPool); // Switch to another thread
-                       Sweep();
-                   }
-               }
-               catch (ktl::Exception const & e)
-               {
-                   AssertException(L"TryStartSweep", e);
-               }
-           }
-
             OperationData::SPtr GetKeyBytes(__in TKey& key)
             {
                 Utilities::BinaryWriter binaryWriter(this->GetThisAllocator());
@@ -2329,18 +2706,18 @@ namespace Data
                 return operationDataSPtr;
             }
 
-    protected:
-          void OnServiceOpen() override
-          {
-              OnServiceOpenAsync();
-          }
+        protected:
+            void OnServiceOpen() override
+            {
+                OnServiceOpenAsync();
+            }
 
             void OnServiceClose() override
             {
                 OnServiceCloseAsync();
             }
 
-    private:
+        private:
             ktl::Task OnServiceOpenAsync() noexcept
             {
                 SetDeferredCloseBehavior();
@@ -2349,16 +2726,17 @@ namespace Data
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     L"starting");
 
-                try
+                co_await lockManager_->OpenAsync();
+
+                if (hasPersistedState_)
                 {
-                    lockManager_->Open();
                     STORE_ASSERT(Common::Directory::Exists(WorkingDirectoryCSPtr->operator LPCWSTR()), "working directory should exist");
                 }
-                catch (ktl::Exception& e)
-                {
-                    TraceException(L"TStore.OnServiceOpenAsync", e);
-                    CompleteClose(e.GetStatus());
-                }
+
+                perfCounters_ = StorePerformanceCounters::CreateInstance(
+                    traceComponent_->PartitionId,
+                    ReplicaId,
+                    storeId_);
 
                 CompleteOpen(STATUS_SUCCESS);
                 StoreEventSource::Events->StoreOnServiceOpenAsync(
@@ -2391,143 +2769,6 @@ namespace Data
                 co_return;
             }
 
-            ktl::Awaitable<bool> TryGetValueAsync(
-                __in IStoreTransaction<TKey, TValue>& storeTransaction,
-                __in TKey key,
-                __in Common::TimeSpan timeout,
-                __out KeyValuePair<LONG64, TValue>& value,
-                __in ReadMode readMode,
-                __in ktl::CancellationToken const & cancellationToken)
-            {
-                try
-                {
-                    KSharedPtr<DifferentialStoreComponent<TKey, TValue>> componentSPtr = differentialStoreComponentSPtr_.Get();
-                    KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = static_cast<StoreTransaction<TKey, TValue>*>(&storeTransaction);
-
-                    ThrowIfFaulted(*storeTransactionSPtr);
-                    ThrowIfNotReadable(*storeTransactionSPtr);
-
-                    co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Shared, timeout, false);
-
-                    ThrowIfFaulted(*storeTransactionSPtr);
-
-                    KSharedPtr<VersionedItem<TValue>> versionedItemSPtr = nullptr;
-                    KSharedPtr<StoreComponentReadResult<TValue>> readResultSPtr = nullptr;
-
-                    auto keyBytes = GetKeyBytes(key);
-                    ULONG64 keyLockResourceNameHash = GetHash(*keyBytes);
-
-                    if (!storeTransactionSPtr->IsWriteSetEmpty)
-                    {
-                        auto writeset = storeTransactionSPtr->GetComponent(func_);
-                        STORE_ASSERT(writeset != nullptr, "writeset != nullptr");
-                        versionedItemSPtr = writeset->Read(key);
-
-                        if (versionedItemSPtr != nullptr)
-                        {
-                            if (versionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion)
-                            {
-                                StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
-                                    traceComponent_->PartitionId, traceComponent_->TraceTag,
-                                    storeTransactionSPtr->Id,
-                                    keyLockResourceNameHash,
-                                    static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
-                                    -1,
-                                    L"keyfounddeleted");
-
-                                value.Key = versionedItemSPtr->GetVersionSequenceNumber();
-                                value.Value = TValue();
-                                co_return false;
-                            }
-                            else
-                            {
-                                // Key exists
-                                // Safe to get the value from versioned item since it is in the write set
-                                value.Key = versionedItemSPtr->GetVersionSequenceNumber();
-                                value.Value = versionedItemSPtr->GetValue();
-                                co_return true;
-                            }
-                        }
-                    }
-
-                    if (versionedItemSPtr == nullptr)
-                    {
-                        if (storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::Snapshot)
-                        {
-                            TxnReplicator::Transaction::SPtr transaction = static_cast<TxnReplicator::Transaction *>(storeTransactionSPtr->ReplicatorTransaction.RawPtr());
-                            LONG64 visibilitySequenceNumber;
-                            Diagnostics::Validate(co_await transaction->GetVisibilitySequenceNumberAsync(visibilitySequenceNumber));
-
-                            readResultSPtr = co_await TryGetValueForReadOnlyTransactionsAsync(key, visibilitySequenceNumber, true, readMode, cancellationToken);
-                            versionedItemSPtr = readResultSPtr->VersionedItem;
-
-                            // Check if transaction has been disposed since replicator can dispose  a long running tx or 
-                            // on change role and it can race with a read, 
-                            // so checking here coz read from the snapshot container has already completed.
-                            ThrowIfFaulted(*storeTransactionSPtr);
-                        }
-                        else
-                        {
-                            STORE_ASSERT(storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadRepeatable,
-                                //|| storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadCommitted,
-                                "store transaction should be read committed or repeatable read");
-                            co_await AcquireKeyReadLockAsync(*lockManager_, keyLockResourceNameHash, *storeTransactionSPtr, timeout);
-
-                            // todo read past lock
-                            readResultSPtr = co_await TryGetValueForReadOnlyTransactionsAsync(key, -1, false, readMode, cancellationToken);
-                            versionedItemSPtr = readResultSPtr->VersionedItem;
-
-                            //if (storeTransactionSPtr->ReadIsolationLevel == StoreTransactionReadIsolationLevel::Enum::ReadCommitted)
-                            //{
-                            //   lockManager_->ReleaseLock(readLock);
-                            //}
-                        }
-                    }
-
-                    // Make sure a read does not start in primary role and completes in secondary role.
-                    ThrowIfNotReadable(*storeTransactionSPtr);
-
-
-                    if (versionedItemSPtr != nullptr)
-                    {
-                        if (versionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion)
-                        {
-                            StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
-                                traceComponent_->PartitionId, traceComponent_->TraceTag,
-                                storeTransactionSPtr->Id,
-                                keyLockResourceNameHash,
-                                static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
-                                -1,
-                                L"keyfounddeleted");
-                            co_return false;
-                        }
-                        else
-                        {
-                            STORE_ASSERT(readResultSPtr != nullptr, "Read result should not be null");
-                            STORE_ASSERT(readResultSPtr->HasValue(), "Read result should have a value");
-                            value.Key = versionedItemSPtr->GetVersionSequenceNumber();
-                            value.Value = readResultSPtr->Value;
-                            co_return true;
-                        }
-                    }
-
-                    StoreEventSource::Events->StoreTryGetValueAsyncNotFound(
-                        traceComponent_->PartitionId, traceComponent_->TraceTag,
-                        storeTransactionSPtr->Id,
-                        keyLockResourceNameHash,
-                        static_cast<ULONG32>(storeTransactionSPtr->ReadIsolationLevel),
-                        -1,
-                        L"keydoesnotexist");
-                    co_return false;
-                }
-                catch (ktl::Exception const & e)
-                {
-                    TraceException(L"TryGetValueAsync", e);
-                    throw;
-                }
-            }
-
-
             ktl::Awaitable<KSharedPtr<StoreComponentReadResult<TValue>>> TryGetValueForReadOnlyTransactionsAsync(
                 __in TKey& key,
                 __in LONG64 visibilitySequenceNumber,
@@ -2535,6 +2776,7 @@ namespace Data
                 __in ReadMode readMode,
                 __in ktl::CancellationToken const & cancellationToken)
             {
+                bool itemPresentInSnapshotComponent = false;
                 KSharedPtr<StoreComponentReadResult<TValue>> readResultSPtr = nullptr;
                 TValue defaultValue = TValue();
                 StoreComponentReadResult<TValue>::Create(nullptr, defaultValue, this->GetThisAllocator(), readResultSPtr);
@@ -2552,7 +2794,7 @@ namespace Data
                 {
                     versionedItem = cachedDifferentialStoreComponentSPtr_->Read(key, visibilitySequenceNumber);
                 }
-                
+
                 if (versionedItem != nullptr)
                 {
                     // Found in differential state, build return value
@@ -2566,9 +2808,6 @@ namespace Data
                 }
                 else
                 {
-                    readResultSPtr = co_await ReadFromConsolidatedStateAsync(key, visibilitySequenceNumber, readMode, cancellationToken);
-                    
-                    // TODO: Refactor this when VersionedItem becomes ReadMode aware
                     if (includeSnapshotContainer)
                     {
                         STORE_ASSERT(visibilitySequenceNumber != Constants::InvalidLsn, "visibilitySequenceNumber != Constants::InvalidLsn");
@@ -2580,37 +2819,21 @@ namespace Data
 
                         if (snapshotComponent != nullptr)
                         {
-                            KSharedPtr<VersionedItem<TValue>> versionedItemFromSnapshotComponent = nullptr;
-                            TValue userValue = TValue();
+                            auto readResultFromSnapshotComponent = co_await snapshotComponent->ReadAsync(key, visibilitySequenceNumber, readMode);
+                            if (readResultFromSnapshotComponent->HasValue())
+                            {
+                                KSharedPtr<VersionedItem<TValue>> versionedItemFromSnapshotComponent = readResultFromSnapshotComponent->VersionedItem;
+                                STORE_ASSERT(versionedItemFromSnapshotComponent != nullptr, "versionedItemFromSnapshotComponent != nullptr");
 
-                            if (readMode == ReadMode::CacheResult)
-                            {
-                                auto readResultFromSnaphotComponent = co_await snapshotComponent->ReadAsync(key, visibilitySequenceNumber);
-                                versionedItemFromSnapshotComponent = readResultFromSnaphotComponent->VersionedItem;
-
-                                if (readResultFromSnaphotComponent->HasValue())
-                                {
-                                    userValue = readResultFromSnaphotComponent->Value;
-                                }
-                            }
-                            else if (readMode == ReadMode::Off)
-                            {
-                                versionedItemFromSnapshotComponent = snapshotComponent->Read(key, visibilitySequenceNumber);
-                            }
-                            else
-                            {
-                                STORE_ASSERT(false, "Unhandled ReadMode={1}", static_cast<int>(readMode));
-                            }
-
-                            if (versionedItemFromSnapshotComponent != nullptr)
-                            {
-                                if ((versionedItem != nullptr && versionedItemFromSnapshotComponent->GetVersionSequenceNumber() > versionedItem->GetVersionSequenceNumber()) || versionedItem == nullptr)
-                                {
-                                    versionedItem = versionedItemFromSnapshotComponent;
-                                    StoreComponentReadResult<TValue>::Create(versionedItem, userValue, this->GetThisAllocator(), readResultSPtr);
-                                }
+                                readResultSPtr = readResultFromSnapshotComponent;
+                                itemPresentInSnapshotComponent = true;
                             }
                         }
+                    }
+
+                    if (!itemPresentInSnapshotComponent)
+                    {
+                        readResultSPtr = co_await ReadFromConsolidatedStateAsync(key, visibilitySequenceNumber, readMode, cancellationToken);
                     }
                 }
 
@@ -2625,7 +2848,7 @@ namespace Data
             {
                 KSharedPtr<VersionedItem<TValue>> versionedItem = nullptr;
                 TValue value = TValue();
-                
+
                 // Note: Retry needs to be done at this layer since every time a load fails due to AddRef failure, the versioned item needs to be re-read
                 while (true)
                 {
@@ -2663,12 +2886,15 @@ namespace Data
 
                     if (shouldValueBeLoaded)
                     {
-                        bool hasValue = co_await TryLoadValueAsync(*versionedItem, value);
+                        bool hasValue = co_await TryLoadValueAsync(*versionedItem, readMode, value);
                         if (hasValue)
                         {
-                            versionedItem->SetInUse(true);
-                            // If there are multiple loads in progress there could be some overcounting here - not worth locking for it.
-                            consolidationManagerSPtr_->AddToMemorySize(versionedItem->GetValueSize());
+                            if (readMode == ReadMode::CacheResult)
+                            {
+                                // If there are multiple loads in progress there could be some overcounting here - not worth locking for it.
+                                consolidationManagerSPtr_->AddToMemorySize(versionedItem->GetValueSize());
+                            }
+
                             break;
                         }
                     }
@@ -2679,125 +2905,125 @@ namespace Data
                 co_return resultSPtr;
             }
 
-           ktl::Awaitable<bool> TryLoadValueAsync(__in VersionedItem<TValue> & versionedItem, __out TValue & value)
-           {
-               SharedException::CSPtr exceptionCSPtr = nullptr;
-               bool currentAddRefSucceeded = false;
-               bool nextAddRefSucceeded = false;
-               bool mergeAddRefSucceeded = false;
-               value = TValue();
+            ktl::Awaitable<bool> TryLoadValueAsync(__in VersionedItem<TValue> & versionedItem, __in ReadMode readMode, __out TValue & value)
+            {
+                SharedException::CSPtr exceptionCSPtr = nullptr;
+                bool currentAddRefSucceeded = false;
+                bool nextAddRefSucceeded = false;
+                bool mergeAddRefSucceeded = false;
+                value = TValue();
 
-               bool useMergeTable = false;
-               bool useNextTable = false;
-               bool useCurrentTable = false;
+                bool useMergeTable = false;
+                bool useNextTable = false;
+                bool useCurrentTable = false;
 
-               bool successful = true;
+                bool successful = true;
 
-               // Snap tables upfront so that the current does not become nextby the time this function completes
-               MetadataTable::SPtr cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
-               STORE_ASSERT(cachedCurrentMetadataTableSPtr != nullptr, "current metadata table cannot be null");
+                // Snap tables upfront so that the current does not become nextby the time this function completes
+                MetadataTable::SPtr cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
+                STORE_ASSERT(cachedCurrentMetadataTableSPtr != nullptr, "current metadata table cannot be null");
 
-               MetadataTable::SPtr cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
-               MetadataTable::SPtr cachedMergeMetadataTableSPtr = mergeMetadataTableSPtr_.Get();
+                MetadataTable::SPtr cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
+                MetadataTable::SPtr cachedMergeMetadataTableSPtr = mergeMetadataTableSPtr_.Get();
 
-               try
-               {
-                   STORE_ASSERT(versionedItem.GetRecordKind() != RecordKind::DeletedVersion, "Versioned item should not be a deleted kind");
-                   KSharedPtr<VersionedItem<TValue>> versionedItemSPtr = &versionedItem;
-                   // Snap the current and next table upfront in the order of current first and then next.
-                   // Snap current and the next upfront so that current does not become next by the time this function completes
-                   cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
+                try
+                {
+                    STORE_ASSERT(versionedItem.GetRecordKind() != RecordKind::DeletedVersion, "Versioned item should not be a deleted kind");
+                    KSharedPtr<VersionedItem<TValue>> versionedItemSPtr = &versionedItem;
+                    // Snap the current and next table upfront in the order of current first and then next.
+                    // Snap current and the next upfront so that current does not become next by the time this function completes
+                    cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
 
-                   currentAddRefSucceeded = cachedCurrentMetadataTableSPtr->TryAddReference();
-                   if (!currentAddRefSucceeded)
-                   {
-                       successful = false;
-                   }
-                   else
-                   {
-                       useCurrentTable = true;
+                    currentAddRefSucceeded = cachedCurrentMetadataTableSPtr->TryAddReference();
+                    if (!currentAddRefSucceeded)
+                    {
+                        successful = false;
+                    }
+                    else
+                    {
+                        useCurrentTable = true;
 
-                       if (cachedNextMetadataTableSPtr != nullptr)
-                       {
-                           nextAddRefSucceeded = cachedNextMetadataTableSPtr->TryAddReference();
-                           if (!nextAddRefSucceeded)
-                           {
-                               successful = false;
-                           }
-                       }
-                       
-                       if (successful)
-                       {
-                           useNextTable = nextAddRefSucceeded;
+                        if (cachedNextMetadataTableSPtr != nullptr)
+                        {
+                            nextAddRefSucceeded = cachedNextMetadataTableSPtr->TryAddReference();
+                            if (!nextAddRefSucceeded)
+                            {
+                                successful = false;
+                            }
+                        }
 
-                           if (cachedMergeMetadataTableSPtr != nullptr)
-                           {
-                               mergeAddRefSucceeded = cachedMergeMetadataTableSPtr->TryAddReference();
-                               if (!mergeAddRefSucceeded)
-                               {
-                                   successful = false;
-                               }
-                               else
-                               {
-                                   useMergeTable = true;
-                               }
-                           }
-                       }
-                   }
-                    
-                   if (successful)
-                   {
-                       // Order is important. Check the merge table first and then next
-                       if (useMergeTable && cachedMergeMetadataTableSPtr != nullptr && cachedMergeMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()))
-                       {
-                           value = co_await versionedItemSPtr->GetValueAsync(*cachedMergeMetadataTableSPtr, *valueConverterSPtr_, *traceComponent_, ktl::CancellationToken::None);
-                       }
-                       else
-                       {
-                           // Load from next metadata table
-                           if (useNextTable && cachedNextMetadataTableSPtr != nullptr && cachedNextMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()))
-                           {
-                               value = co_await versionedItemSPtr->GetValueAsync(*cachedNextMetadataTableSPtr, *valueConverterSPtr_, *traceComponent_, ktl::CancellationToken::None);
-                           }
-                           else if (useCurrentTable)
-                           {
-                               // Load using current metadata table
-                               STORE_ASSERT(cachedCurrentMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()), "Current metadata table must contain the file id");
-                               value = co_await versionedItemSPtr->GetValueAsync(*cachedCurrentMetadataTableSPtr, *valueConverterSPtr_, *traceComponent_, ktl::CancellationToken::None);
-                           }
-                       }
-                   }
-               }
-               catch (ktl::Exception const & e)
-               {
-                   TraceException(L"TryLoadValueAsync", e);
-                   exceptionCSPtr = SharedException::Create(e, this->GetThisAllocator());
-                   successful = false;
-               }
+                        if (successful)
+                        {
+                            useNextTable = nextAddRefSucceeded;
 
-               if (currentAddRefSucceeded)
-               {
-                   co_await cachedCurrentMetadataTableSPtr->ReleaseReferenceAsync();
-               }
+                            if (cachedMergeMetadataTableSPtr != nullptr)
+                            {
+                                mergeAddRefSucceeded = cachedMergeMetadataTableSPtr->TryAddReference();
+                                if (!mergeAddRefSucceeded)
+                                {
+                                    successful = false;
+                                }
+                                else
+                                {
+                                    useMergeTable = true;
+                                }
+                            }
+                        }
+                    }
 
-               if (nextAddRefSucceeded)
-               {
-                   co_await cachedNextMetadataTableSPtr->ReleaseReferenceAsync();
-               }
+                    if (successful)
+                    {
+                        // Order is important. Check the merge table first and then next
+                        if (useMergeTable && cachedMergeMetadataTableSPtr != nullptr && cachedMergeMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()))
+                        {
+                            value = co_await versionedItemSPtr->GetValueAsync(*cachedMergeMetadataTableSPtr, *valueConverterSPtr_, readMode, *traceComponent_, ktl::CancellationToken::None);
+                        }
+                        else
+                        {
+                            // Load from next metadata table
+                            if (useNextTable && cachedNextMetadataTableSPtr != nullptr && cachedNextMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()))
+                            {
+                                value = co_await versionedItemSPtr->GetValueAsync(*cachedNextMetadataTableSPtr, *valueConverterSPtr_, readMode, *traceComponent_, ktl::CancellationToken::None);
+                            }
+                            else if (useCurrentTable)
+                            {
+                                // Load using current metadata table
+                                STORE_ASSERT(cachedCurrentMetadataTableSPtr->Table->ContainsKey(versionedItemSPtr->GetFileId()), "Current metadata table must contain the file id");
+                                value = co_await versionedItemSPtr->GetValueAsync(*cachedCurrentMetadataTableSPtr, *valueConverterSPtr_, readMode, *traceComponent_, ktl::CancellationToken::None);
+                            }
+                        }
+                    }
+                }
+                catch (ktl::Exception const & e)
+                {
+                    TraceException(L"TryLoadValueAsync", e);
+                    exceptionCSPtr = SharedException::Create(e, this->GetThisAllocator());
+                    successful = false;
+                }
 
-               if (mergeAddRefSucceeded)
-               {
-                   co_await cachedMergeMetadataTableSPtr->ReleaseReferenceAsync();
-               }
+                if (currentAddRefSucceeded)
+                {
+                    co_await cachedCurrentMetadataTableSPtr->ReleaseReferenceAsync();
+                }
 
-               if (exceptionCSPtr != nullptr)
-               {
-                   auto exec = exceptionCSPtr->Info;
-                   throw exec;
-               }
+                if (nextAddRefSucceeded)
+                {
+                    co_await cachedNextMetadataTableSPtr->ReleaseReferenceAsync();
+                }
 
-               co_return successful;
-           }
+                if (mergeAddRefSucceeded)
+                {
+                    co_await cachedMergeMetadataTableSPtr->ReleaseReferenceAsync();
+                }
+
+                if (exceptionCSPtr != nullptr)
+                {
+                    auto exec = exceptionCSPtr->Info;
+                    throw exec;
+                }
+
+                co_return successful;
+            }
 
             ktl::Awaitable<void> CheckpointAsync(__in ktl::CancellationToken const & cancellationToken)
             {
@@ -2806,7 +3032,13 @@ namespace Data
 
                 try
                 {
-                    NTSTATUS status = StoreTransaction<TKey, TValue>::Create(CreateTransactionId(), storeId_, *keyComparerSPtr_, this->GetThisAllocator(), storeTransactionSPtr);
+                    NTSTATUS status = StoreTransaction<TKey, TValue>::Create(
+                        CreateTransactionId(),
+                        storeId_,
+                        *keyComparerSPtr_,
+                        *traceComponent_,
+                        this->GetThisAllocator(),
+                        storeTransactionSPtr);
                     Diagnostics::Validate(status);
 
                     co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Shared, Common::TimeSpan::FromMilliseconds(1000), false);
@@ -2836,6 +3068,23 @@ namespace Data
                     // Sort
                     STORE_ASSERT(deltaStateSPtr != nullptr, "Delta state cannot be null");
                     deltaStateSPtr->Sort();
+
+                    if (hasPersistedState_ == false)
+                    {
+                        // Once the delta state has been sorted, skip writing to disk
+
+                        // Reset delta state.
+                        deltaDifferentialStoreComponentSPtr_.Put(nullptr);
+
+                        MetadataTable::SPtr tempMetadataTableSPtr = nullptr;
+                        NTSTATUS status = MetadataTable::Create(this->GetThisAllocator(), tempMetadataTableSPtr, GetCheckpointLSN());
+                        Diagnostics::Validate(status);
+
+                        co_await ConsolidateAndSetNextMetadataTableAsync(*tempMetadataTableSPtr, true);
+
+                        co_return;
+                    }
+
                     auto diffItemsEnumeratorSPtr = deltaStateSPtr->GetKeyAndValues();
                     KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> itemsEnumeratorSPtr =
                         static_cast<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>> *>(diffItemsEnumeratorSPtr.RawPtr());
@@ -2843,101 +3092,102 @@ namespace Data
                     STORE_ASSERT(itemsEnumeratorSPtr != nullptr, "itemsEnumeratorSPtr != nullptr");
 
                     auto cachedCurrentMetadataTableSPtr = currentMetadataTableSPtr_.Get();
-                    STORE_ASSERT(cachedCurrentMetadataTableSPtr != nullptr, "cachedCurrentMetadataTableSPtr != nullptr")
+                    STORE_ASSERT(cachedCurrentMetadataTableSPtr != nullptr, "cachedCurrentMetadataTableSPtr != nullptr");
 
-                        // When there are items to be checkpointed.
-                        if (deltaStateSPtr->isReadOnlyListNonEmpty())
-                        {
-                            KGuid fileGuid;
-                            fileGuid.CreateNew();
+                    // When there are items to be checkpointed.
+                    if (deltaStateSPtr->isReadOnlyListNonEmpty())
+                    {
+                        KGuid fileGuid;
+                        fileGuid.CreateNew();
 
-                            KString::SPtr name = nullptr;
-                            NTSTATUS status = KString::Create(name, this->GetThisAllocator(), KStringView::MaxGuidString);
+                        KString::SPtr name = nullptr;
+                        NTSTATUS status = KString::Create(name, this->GetThisAllocator(), KStringView::MaxGuidString);
 
-                            Diagnostics::Validate(status);
+                        Diagnostics::Validate(status);
 
-                            BOOLEAN result = name->FromGUID(fileGuid);
-                            STORE_ASSERT(result == TRUE, "Unable to get string from GUID");
+                        BOOLEAN result = name->FromGUID(fileGuid);
+                        STORE_ASSERT(result == TRUE, "Unable to get string from GUID");
 
-                            KStringView fileName(*name);
+                        KStringView fileName(*name);
 
-                            auto fileId = IncrementFileId();
-                            auto fileStamp = IncrementFileStamp();
-                            auto path = GetCheckpointFilePath(fileName);
+                        auto fileId = IncrementFileId();
+                        auto fileStamp = IncrementFileStamp();
+                        auto path = GetCheckpointFilePath(fileName);
 
-                            // todo: fix checkpoint to take in const path.
-                            KString& filePath = const_cast<KString&>(*path);
+                        // todo: fix checkpoint to take in const path.
+                        KString& filePath = const_cast<KString&>(*path);
 
-                            CheckpointFile::SPtr checkpointFileSPtr = co_await CheckpointFile::CreateAsync<TKey, TValue>(
-                                fileId,
-                                filePath,
-                                *itemsEnumeratorSPtr,
-                                *keyConverterSPtr_,
-                                *valueConverterSPtr_,
-                                fileStamp,
-                                this->GetThisAllocator(),
-                                *traceComponent_,
-                                true);
+                        CheckpointFile::SPtr checkpointFileSPtr = co_await CheckpointFile::CreateAsync<TKey, TValue>(
+                            fileId,
+                            filePath,
+                            *itemsEnumeratorSPtr,
+                            *keyConverterSPtr_,
+                            *valueConverterSPtr_,
+                            fileStamp,
+                            this->GetThisAllocator(),
+                            *traceComponent_,
+                            perfCounters_,
+                            true);
 
-                            ASSERT_IF(checkpointFileSPtr == nullptr, "Checkpoint file cannot be null");
+                        ASSERT_IF(checkpointFileSPtr == nullptr, "Checkpoint file cannot be null");
 
-                            KSharedPtr<KString> keyFileNameSPtr = nullptr;
-                            status = KString::Create(keyFileNameSPtr, this->GetThisAllocator(), fileName);
-                            Diagnostics::Validate(status);
+                        KSharedPtr<KString> keyFileNameSPtr = nullptr;
+                        status = KString::Create(keyFileNameSPtr, this->GetThisAllocator(), fileName);
+                        Diagnostics::Validate(status);
 
-                            // Update  metadata to include the new id and checkpoint it.
-                            FileMetadata::SPtr fileMetadataSPtr = nullptr;
+                        // Update  metadata to include the new id and checkpoint it.
+                        FileMetadata::SPtr fileMetadataSPtr = nullptr;
 
-                    status = FileMetadata::Create(
-                        fileId,
-                        *keyFileNameSPtr,
-                        checkpointFileSPtr->KeyCount,
-                        checkpointFileSPtr->KeyCount,
-                        fileStamp,
-                        checkpointFileSPtr->DeletedKeyCount,
-                        false,
-                        this->GetThisAllocator(),
-                        *traceComponent_,
-                        fileMetadataSPtr);
-                    Diagnostics::Validate(status);
+                        status = FileMetadata::Create(
+                            fileId,
+                            *keyFileNameSPtr,
+                            checkpointFileSPtr->KeyCount,
+                            checkpointFileSPtr->KeyCount,
+                            fileStamp,
+                            checkpointFileSPtr->DeletedKeyCount,
+                            false,
+                            this->GetThisAllocator(),
+                            *traceComponent_,
+                            fileMetadataSPtr);
+                        Diagnostics::Validate(status);
 
-                            fileMetadataSPtr->CheckpointFileSPtr = *checkpointFileSPtr;
+                        fileMetadataSPtr->CheckpointFileSPtr = *checkpointFileSPtr;
 
-                            // Populate next metadata table
-                            MetadataTable::SPtr tempMetadataTableSPtr = nullptr;
-                            status = MetadataTable::Create(this->GetThisAllocator(), tempMetadataTableSPtr, GetCheckpointLSN());
-                            Diagnostics::Validate(status);
+                        // Populate next metadata table
+                        MetadataTable::SPtr tempMetadataTableSPtr = nullptr;
+                        status = MetadataTable::Create(this->GetThisAllocator(), tempMetadataTableSPtr, GetCheckpointLSN());
+                        Diagnostics::Validate(status);
 
-                            CopyMetadataTable(*cachedCurrentMetadataTableSPtr, *tempMetadataTableSPtr);
-                            MetadataManager::AddFile(*(tempMetadataTableSPtr->Table), fileId, *fileMetadataSPtr);
+                        CopyMetadataTable(*cachedCurrentMetadataTableSPtr, *tempMetadataTableSPtr);
+                        MetadataManager::AddFile(*(tempMetadataTableSPtr->Table), fileId, *fileMetadataSPtr);
 
-                            co_await ConsolidateAndSetNextMetadataTableAsync(*tempMetadataTableSPtr, true);
+                        co_await ConsolidateAndSetNextMetadataTableAsync(*tempMetadataTableSPtr, true);
 
-                            auto cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
-                            STORE_ASSERT(cachedNextMetadataTableSPtr != nullptr, "cachedNextMetadataTableSPtr != nullptr");
+                        auto cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
+                        STORE_ASSERT(cachedNextMetadataTableSPtr != nullptr, "cachedNextMetadataTableSPtr != nullptr");
 
-                            // Checkpoint metadata table
-                            co_await MetadataManager::WriteAsync(*cachedNextMetadataTableSPtr, *tmpMetadataFilePath_, this->GetThisAllocator());
-                        }
-                        else
-                        {
-                            // Following copy, updated checkpoint file needs to be written even there is no delta and no clear.
+                        // Checkpoint metadata table
+                        co_await MetadataManager::WriteAsync(*cachedNextMetadataTableSPtr, *tmpMetadataFilePath_, this->GetThisAllocator());
+                    }
+                    else
+                    {
+                        // Following copy, updated checkpoint file needs to be written even there is no delta and no clear.
 
-                            // Populate next metadata table so that current reference is not changed.
-                            MetadataTable::SPtr tempMetadataTableSPtr = nullptr;
-                            NTSTATUS status = MetadataTable::Create(this->GetThisAllocator(), tempMetadataTableSPtr, GetCheckpointLSN());
-                            Diagnostics::Validate(status);
+                        // Populate next metadata table so that current reference is not changed.
+                        MetadataTable::SPtr tempMetadataTableSPtr = nullptr;
+                        NTSTATUS status = MetadataTable::Create(this->GetThisAllocator(), tempMetadataTableSPtr, GetCheckpointLSN());
+                        Diagnostics::Validate(status);
 
-                            CopyMetadataTable(*cachedCurrentMetadataTableSPtr, *tempMetadataTableSPtr);
+                        CopyMetadataTable(*cachedCurrentMetadataTableSPtr, *tempMetadataTableSPtr);
 
-                            co_await ConsolidateAndSetNextMetadataTableAsync(*tempMetadataTableSPtr, true);
+                        co_await ConsolidateAndSetNextMetadataTableAsync(*tempMetadataTableSPtr, true);
 
-                            auto cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
-                            STORE_ASSERT(cachedNextMetadataTableSPtr != nullptr, "cachedNextMetadataTableSPtr != nullptr");
+                        auto cachedNextMetadataTableSPtr = nextMetadataTableSPtr_.Get();
+                        STORE_ASSERT(cachedNextMetadataTableSPtr != nullptr, "cachedNextMetadataTableSPtr != nullptr");
 
-                            // Checkpoint metadata table
-                            co_await MetadataManager::WriteAsync(*cachedNextMetadataTableSPtr, *tmpMetadataFilePath_, this->GetThisAllocator());
-                        }
+                        // Checkpoint metadata table
+                        co_await MetadataManager::WriteAsync(*cachedNextMetadataTableSPtr, *tmpMetadataFilePath_, this->GetThisAllocator());
+                    }
 
                     // Reset delta state.
                     deltaDifferentialStoreComponentSPtr_.Put(nullptr);
@@ -2960,180 +3210,166 @@ namespace Data
             }
 
             ktl::Awaitable<void> ConsolidateAndSetNextMetadataTableAsync(
-               __in MetadataTable& tempMetadataTable,
-               __in bool consolidate = true)
+                __in MetadataTable& tempMetadataTable,
+                __in bool consolidate = true)
             {
-               MetadataTable::SPtr tempMetadataTableSPtr = &tempMetadataTable;
+                MetadataTable::SPtr tempMetadataTableSPtr = &tempMetadataTable;
 
-               if (EnableBackgroundConsolidation)
-               {
-                  ProcessConsolidationTask(*tempMetadataTableSPtr);
+                if (EnableBackgroundConsolidation)
+                {
+                    ProcessConsolidationTask(*tempMetadataTableSPtr);
 
                   // Update the consolidated state only after assigning the next metadata table.
                   // Set next metadatatable only after adding and merging of items.
                   // Merge metadata table gets updated as part of processing consolidation task.
+
                   nextMetadataTableSPtr_.Put(Ktl::Move(tempMetadataTableSPtr));
+
                   if (consolidate)
                   {
                      auto cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
 
-                     // Do not start consolidation task, if it is already in progress
-                     if (cachedConsolidationTcsSPtr == nullptr)
-                     {
-                        mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
+                        // Do not start consolidation task, if it is already in progress
+                        if (cachedConsolidationTcsSPtr == nullptr)
+                        {
+                            mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
 
+                            ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::SPtr newConsolidationTcsSPtr = nullptr;
+
+                            // Consolidate after writing file so that the correct offset can be updated
+                            NTSTATUS status = ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::Create(this->GetThisAllocator(), STORE_TAG, newConsolidationTcsSPtr);
+                            Diagnostics::Validate(status);
+
+                            auto cachedTempMetadataTableSPtr = nextMetadataTableSPtr_.Get();
+                            auto cancellationToken = consolidationTaskCancellationSourceSPtr_->Token;
+                            consolidationTcsSPtr_.Put(Ktl::Move(newConsolidationTcsSPtr));
+
+                            cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
+                            ktl::Task task = consolidationManagerSPtr_->ConsolidateAsync(*cachedTempMetadataTableSPtr, *cachedConsolidationTcsSPtr, perfCounters_, cancellationToken);
+                            STORE_ASSERT(task.IsTaskStarted(), "Expected consolidation task to start");
+                        }
+                    }
+                }
+                else
+                {
+                    auto cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
+
+                    STORE_ASSERT(cachedConsolidationTaskSPtr == nullptr, "ConsolidationTask should be null");
+                    mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
+
+                    if (consolidate)
+                    {
                         ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::SPtr newConsolidationTcsSPtr = nullptr;
 
                         // Consolidate after writing file so that the correct offset can be updated
                         NTSTATUS status = ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::Create(this->GetThisAllocator(), STORE_TAG, newConsolidationTcsSPtr);
                         Diagnostics::Validate(status);
-
-                        auto cachedTempMetadataTableSPtr = nextMetadataTableSPtr_.Get();
-                        auto cancellationToken = consolidationTaskCancellationSourceSPtr_->Token;
-                        consolidationTcsSPtr_.Put(Ktl::Move(newConsolidationTcsSPtr));
-
-                        cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
-                        ktl::Task task = consolidationManagerSPtr_->ConsolidateAsync(*cachedTempMetadataTableSPtr, *cachedConsolidationTcsSPtr, cancellationToken);
+                        auto token = consolidationTaskCancellationSourceSPtr_->Token;
+                        ktl::Task task = consolidationManagerSPtr_->ConsolidateAsync(*tempMetadataTableSPtr, *newConsolidationTcsSPtr, perfCounters_, token);
                         STORE_ASSERT(task.IsTaskStarted(), "Expected consolidation task to start");
-                     }
-                  }
-               }
-               else
-               {
-                  auto cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
-
-                  STORE_ASSERT(cachedConsolidationTaskSPtr == nullptr, "ConsolidationTask should be null");
-                  mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
-
-                  if (consolidate)
-                  {
-                     ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::SPtr newConsolidationTcsSPtr = nullptr;
-
-                     // Consolidate after writing file so that the correct offset can be updated
-                     NTSTATUS status = ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>::Create(this->GetThisAllocator(), STORE_TAG, newConsolidationTcsSPtr);
-                     Diagnostics::Validate(status);
-                     auto token = consolidationTaskCancellationSourceSPtr_->Token;
-                     ktl::Task task = consolidationManagerSPtr_->ConsolidateAsync(*tempMetadataTableSPtr, *newConsolidationTcsSPtr, token);
-                     STORE_ASSERT(task.IsTaskStarted(), "Expected consolidation task to start");
-                     co_await newConsolidationTcsSPtr->GetAwaitable();
-                     consolidationTcsSPtr_.Put(Ktl::Move(newConsolidationTcsSPtr));
-                     ProcessConsolidationTask(*tempMetadataTableSPtr);
-                     mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
-                  }
+                        co_await newConsolidationTcsSPtr->GetAwaitable();
+                        consolidationTcsSPtr_.Put(Ktl::Move(newConsolidationTcsSPtr));
+                        ProcessConsolidationTask(*tempMetadataTableSPtr);
+                        mergeMetadataTableSPtr_.Put(Ktl::Move(nullptr));
+                    }
 
                   // Update the consolidated state only after assigning the next metadata table.
                   // Set next metadata table only after adding and merging of items.
                   // Merge metadata table gets updated as a part of processing consolidation task
                   nextMetadataTableSPtr_.Put(Ktl::Move(tempMetadataTableSPtr));
+
                   if (consolidate)
                   {
                      consolidationManagerSPtr_->ResetToNewAggregatedState();
                   }
 
-                  cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
-                  STORE_ASSERT(cachedConsolidationTaskSPtr == nullptr, "ConsolidationTask should be null");
-               }
+                    cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
+                    STORE_ASSERT(cachedConsolidationTaskSPtr == nullptr, "ConsolidationTask should be null");
+                }
 
-               co_return;
+                co_return;
             }
 
             void ProcessConsolidationTask(__in MetadataTable & tmpMetadataTable)
             {
-               PostMergeMetadataTableInformation::SPtr mergeMetadataTableInformationSPtr = nullptr;
-               auto cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
+                PostMergeMetadataTableInformation::SPtr mergeMetadataTableInformationSPtr = nullptr;
+                auto cachedConsolidationTaskSPtr = consolidationTcsSPtr_.Get();
 
-               // Check if previous consolidation task has completed
-               if (cachedConsolidationTaskSPtr != nullptr && cachedConsolidationTaskSPtr->IsCompleted())
-               {
-                  if (cachedConsolidationTaskSPtr->IsExceptionSet())
-                  {
-                     ktl::Exception exception = ktl::Exception::ToException(cachedConsolidationTaskSPtr->GetAwaitable().GetExceptionHandle());
-                     consolidationTcsSPtr_.Put(nullptr);
-                     throw exception;
-                  }
-                  else
-                  {
-                     mergeMetadataTableInformationSPtr = cachedConsolidationTaskSPtr->GetResult();
-                     consolidationTcsSPtr_.Put(nullptr);
-                  }
-               }
+                // Check if previous consolidation task has completed
+                if (cachedConsolidationTaskSPtr != nullptr && cachedConsolidationTaskSPtr->IsCompleted())
+                {
+                    if (cachedConsolidationTaskSPtr->IsExceptionSet())
+                    {
+                        ktl::Exception exception = ktl::Exception::ToException(cachedConsolidationTaskSPtr->GetAwaitable().GetExceptionHandle());
+                        consolidationTcsSPtr_.Put(nullptr);
+                        throw exception;
+                    }
+                    else
+                    {
+                        mergeMetadataTableInformationSPtr = cachedConsolidationTaskSPtr->GetResult();
+                        consolidationTcsSPtr_.Put(nullptr);
+                    }
+                }
 
-               if (mergeMetadataTableInformationSPtr != nullptr)
-               {
-                  if (mergeMetadataTableInformationSPtr->NewMergedFileSPtr != nullptr)
-                  {
-                     auto fileMetadataSPtr = mergeMetadataTableInformationSPtr->NewMergedFileSPtr;
-                     MetadataManager::AddFile(*tmpMetadataTable.Table, fileMetadataSPtr->FileId, *fileMetadataSPtr);
-                  }
+                if (mergeMetadataTableInformationSPtr != nullptr)
+                {
+                    if (mergeMetadataTableInformationSPtr->NewMergedFileSPtr != nullptr)
+                    {
+                        auto fileMetadataSPtr = mergeMetadataTableInformationSPtr->NewMergedFileSPtr;
+                        MetadataManager::AddFile(*tmpMetadataTable.Table, fileMetadataSPtr->FileId, *fileMetadataSPtr);
+                    }
 
-                  auto deletedFileIdsSPtr = mergeMetadataTableInformationSPtr->DeletedFileIdsSPtr;
+                    auto deletedFileIdsSPtr = mergeMetadataTableInformationSPtr->DeletedFileIdsSPtr;
 
-                  for (ULONG32 i = 0; i < deletedFileIdsSPtr->Count(); i++)
-                  {
-                     auto fileId = (*deletedFileIdsSPtr)[i];
+                    for (ULONG32 i = 0; i < deletedFileIdsSPtr->Count(); i++)
+                    {
+                        auto fileId = (*deletedFileIdsSPtr)[i];
 
-                     // Mark the file as about to be deleted, and remove it from the metadata table.
-                     FileMetadata::SPtr fileMetadataSPtr = nullptr;
-                     STORE_ASSERT(tmpMetadataTable.Table->TryGetValue(fileId, fileMetadataSPtr), "Expected to find {1} in table", fileId);
-                     fileMetadataSPtr->CanBeDeleted = true;
+                        // Mark the file as about to be deleted, and remove it from the metadata table.
+                        FileMetadata::SPtr fileMetadataSPtr = nullptr;
+                        STORE_ASSERT(tmpMetadataTable.Table->TryGetValue(fileId, fileMetadataSPtr), "Expected to find {1} in table", fileId);
+                        fileMetadataSPtr->CanBeDeleted = true;
 
-                     // Add ref for files to be deleted. These are commneted out because the AddRef and ReleaseRef cancel eaco other out.
-                     //fileMetadataSPtr->AddReference();
-                     bool add = filesToBeDeletedSPtr_->TryAdd(fileMetadataSPtr, /*immediate:*/ true);
-                     STORE_ASSERT(add, "Failed to add file id {1} to files to be deleted", fileMetadataSPtr->FileId);
+                        // Add ref for files to be deleted. These are commneted out because the AddRef and ReleaseRef cancel eaco other out.
+                        //fileMetadataSPtr->AddReference();
+                        bool add = filesToBeDeletedSPtr_->TryAdd(fileMetadataSPtr, /*immediate:*/ true);
+                        STORE_ASSERT(add, "Failed to add file id {1} to files to be deleted", fileMetadataSPtr->FileId);
 
-                     // Release ref for file metadata, but it will be deleted on complete checkpoint along wtih current metadatatale being replaced
-                     // co_await fileMetadataSPtr->ReleaseReferenceAsync();
-                     MetadataManager::RemoveFile(*tmpMetadataTable.Table, fileId);
-                  }
+                        // Release ref for file metadata, but it will be deleted on complete checkpoint along wtih current metadatatale being replaced
+                        // co_await fileMetadataSPtr->ReleaseReferenceAsync();
+                        MetadataManager::RemoveFile(*tmpMetadataTable.Table, fileId);
+                    }
 
-                  auto cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
-                  STORE_ASSERT(cachedConsolidationTcsSPtr == nullptr, "ConsolidationTask should be null");
-               }
+                    auto cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
+                    STORE_ASSERT(cachedConsolidationTcsSPtr == nullptr, "ConsolidationTask should be null");
+                }
             }
 
-           ktl::Awaitable<void> CancelBackgroundConsolidationTaskAsync()
-           {
+            ktl::Awaitable<void> CancelBackgroundConsolidationTaskAsync()
+            {
                 // If consolidation task is in progress, then cancel it
-               consolidationTaskCancellationSourceSPtr_->Cancel();
-               KSharedPtr<ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>> cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
+                consolidationTaskCancellationSourceSPtr_->Cancel();
+                KSharedPtr<ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>> cachedConsolidationTcsSPtr = consolidationTcsSPtr_.Get();
 
-               try
-               {
-                   if (cachedConsolidationTcsSPtr != nullptr)
-                   {
-                      co_await cachedConsolidationTcsSPtr->GetAwaitable();
-                   }
-               }
-               catch (ktl::Exception const & e)
-               {
-                   // Trace and swallow exception
-                   TraceException(L"TStore.Cleanup - cancelling consolidation task", e);
-               }
-           }
+                try
+                {
+                    if (cachedConsolidationTcsSPtr != nullptr)
+                    {
+                        co_await cachedConsolidationTcsSPtr->GetAwaitable();
+                    }
+                }
+                catch (ktl::Exception const & e)
+                {
+                    // Trace and swallow exception
+                    TraceException(L"TStore.Cleanup - cancelling consolidation task", e);
+                }
+            }
 
-           ktl::Awaitable<void> CancelSweepTaskAsync()
-           {
-               // If sweep task is in progress, then cancel it
-               sweepTaskCancellationSourceSPtr_->Cancel();
-               ktl::AwaitableCompletionSource<bool>::SPtr cachedSweepTcsSPtr = sweepTcsSPtr_.Get();
-
-               try
-               {
-                   if (cachedSweepTcsSPtr != nullptr)
-                   {
-                       co_await cachedSweepTcsSPtr->GetAwaitable();
-                   }
-               }
-               catch (ktl::Exception const & e)
-               {
-                   // Trace and swallow exception
-                   TraceException(L"TStore.Cleanup - cancelling sweep task", e);
-               }
-
-               NTSTATUS status = ktl::CancellationTokenSource::Create(this->GetThisAllocator(), this->GetThisAllocationTag(), sweepTaskCancellationSourceSPtr_);
-               Diagnostics::Validate(status);
-           }
+            ktl::Awaitable<void> CancelSweepTaskAsync()
+            {
+                // If sweep task is in progress, then cancel it
+                co_await sweepManagerSPtr_->CancelSweepTaskAsync();
+            }
 
             TxnReplicator::ITransactionalReplicator::SPtr GetReplicator() const
             {
@@ -3231,6 +3467,10 @@ namespace Data
                 if (metadataOperationDataKCSPtr->ModificationType == StoreModificationType::Add)
                 {
                     IncrementCount(replicatorTransaction.TransactionId, sequenceNumber);
+
+                    auto keySize = (*metadataOperationDataKCSPtr->KeyBytes)[0]->QuerySize();
+                    auto cachedEstimator = keySizeEstimatorSPtr_.Get();
+                    cachedEstimator->AddKeySize(keySize);
                 }
                 else if (metadataOperationDataKCSPtr->ModificationType == StoreModificationType::Remove)
                 {
@@ -3338,7 +3578,7 @@ namespace Data
 
                 STORE_ASSERT(storeTransactionSPtr != nullptr, "storeTransactionSPtr != nullptr");
 
-               auto keyLockResourceNameHash = GetHash(*metadataOperationData.KeyBytes);
+                auto keyLockResourceNameHash = GetHash(*metadataOperationData.KeyBytes);
 
                 if (firstCreated)
                 {
@@ -3360,7 +3600,7 @@ namespace Data
                         keyLockResourceNameHash,
                         static_cast<ULONG32>(modificationType));
                 }
-                
+
                 MetadataOperationData::CSPtr metadataOperationDataCSPtr = &metadataOperationData;
                 RedoUndoOperationData::CSPtr redoUndoDataCSPtr = &operationRedoUndo;
 
@@ -3468,22 +3708,44 @@ namespace Data
                         co_return;
                     }
 
-                    KSharedPtr<VersionedItem<TValue>> currentVersionedItem = cachedDifferentialState->Read(key);
-                    if (currentVersionedItem == nullptr)
+                    KSharedPtr<VersionedItem<TValue>> differentialVersionedItemSPtr = cachedDifferentialState->Read(key);
+                    KSharedPtr<StoreComponentReadResult<TValue>> readResultSPtr;
+
+                    if (differentialVersionedItemSPtr != nullptr)
                     {
-                        currentVersionedItem = consolidationManagerSPtr_->Read(key);
+                        auto value = differentialVersionedItemSPtr->GetRecordKind() != RecordKind::DeletedVersion
+                            ? differentialVersionedItemSPtr->GetValue()
+                            : TValue();
+                        auto status = StoreComponentReadResult<TValue>::Create(
+                            differentialVersionedItemSPtr,
+                            value,
+                            this->GetThisAllocator(),
+                            readResultSPtr);
+
+                        if (!NT_SUCCESS(status))
+                        {
+                            throw ktl::Exception(status);
+                        }
+                    }
+                    else
+                    {
+                        readResultSPtr = co_await ReadFromConsolidatedStateAsync(
+                            key,
+                            Constants::InvalidLsn,
+                            ReadMode::CacheResult,
+                            ktl::CancellationToken::None);
                     }
 
                     KSharedPtr<StoreTransaction<TKey, TValue>> rwtxSPtr = &rwtx;
                     MetadataOperationData::CSPtr metadataOperationDataCSPtr = &metadataOperationData;
 
-                    co_await FireUndoNotificationsAsync(*rwtx.ReplicatorTransaction, key, *metadataOperationDataCSPtr, currentVersionedItem, sequenceNumber);
-                    UpdateCountForUndoOperation(rwtxSPtr->Id, sequenceNumber, *metadataOperationDataCSPtr, currentVersionedItem);
+                    co_await FireUndoNotificationsAsync(*rwtx.ReplicatorTransaction, key, *metadataOperationDataCSPtr, readResultSPtr, sequenceNumber);
+                    UpdateCountForUndoOperation(rwtxSPtr->Id, sequenceNumber, *metadataOperationDataCSPtr, readResultSPtr->VersionedItem);
                 }
                 catch (const ktl::Exception & e)
                 {
                     // Check inner exception
-                    TraceException(L"OnUndoFalseProgress", e);
+                    TraceException(L"OnUndoFalseProgress", e, rwtx.Id);
                     STORE_ASSERT(e.GetStatus() == SF_STATUS_OBJECT_CLOSED || e.GetStatus() == SF_STATUS_TIMEOUT, "Unexpected exception");
 
                     // Rethrow inner exception
@@ -3520,84 +3782,88 @@ namespace Data
             }
 
             ktl::Awaitable<void> OnApplyAddAsync(
-               __in LONG64 sequenceNumber,
-               __in StoreTransaction<TKey, TValue> const & storeTransaction,
-               __in MetadataOperationData const & metadataOperationData,
-               __in RedoUndoOperationData const & data,
-               __in bool isIdempotent)
+                __in LONG64 sequenceNumber,
+                __in StoreTransaction<TKey, TValue> const & storeTransaction,
+                __in MetadataOperationData const & metadataOperationData,
+                __in RedoUndoOperationData const & data,
+                __in bool isIdempotent)
             {
-               TKey key;
-               TValue value;
-               try
-               {
-                  key = GetKeyFromBytes(*metadataOperationData.KeyBytes);
-                  value = GetValueFromBytes(*data.ValueOperationData);
-               }
-               catch (ktl::Exception& e)
-               {
-                  StoreEventSource::Events->StoreOnApplyAddError(
-                      traceComponent_->PartitionId, traceComponent_->TraceTag,
-                      storeTransaction.Id,
-                      L"deserialization");
+                TKey key;
+                TValue value;
+                try
+                {
+                    key = GetKeyFromBytes(*metadataOperationData.KeyBytes);
+                    value = GetValueFromBytes(*data.ValueOperationData);
+                }
+                catch (ktl::Exception& e)
+                {
+                    StoreEventSource::Events->StoreOnApplyAddError(
+                        traceComponent_->PartitionId, traceComponent_->TraceTag,
+                        storeTransaction.Id,
+                        L"deserialization");
 
-                  TraceException(L"OnApplyAdd", e);
-                  throw;
-               }
+                    TraceException(L"OnApplyAdd", e, storeTransaction.Id);
+                    throw;
+                }
 
-               auto keyLockResourceNameHash = GetHash(*metadataOperationData.KeyBytes);
+                auto keyLockResourceNameHash = GetHash(*metadataOperationData.KeyBytes);
 
-               try
-               {
-                  auto cachedDifferentialStoreComponentSPtr = differentialStoreComponentSPtr_.Get();
-                  STORE_ASSERT(cachedDifferentialStoreComponentSPtr != nullptr, "cachedDifferentialStoreComponentSPtr != nullptr");
+                try
+                {
+                    auto cachedDifferentialStoreComponentSPtr = differentialStoreComponentSPtr_.Get();
+                    STORE_ASSERT(cachedDifferentialStoreComponentSPtr != nullptr, "cachedDifferentialStoreComponentSPtr != nullptr");
 
-                  if (!isIdempotent)
-                  {
-                     KSharedPtr<VersionedItem<TValue>> currentVersionedItemSPtr = cachedDifferentialStoreComponentSPtr->Read(key);
-                     if (currentVersionedItemSPtr == nullptr)
-                     {
-                        currentVersionedItemSPtr = consolidationManagerSPtr_->Read(key);
-                     }
+                    if (!isIdempotent)
+                    {
+                        KSharedPtr<VersionedItem<TValue>> currentVersionedItemSPtr = cachedDifferentialStoreComponentSPtr->Read(key);
+                        if (currentVersionedItemSPtr == nullptr)
+                        {
+                            currentVersionedItemSPtr = consolidationManagerSPtr_->Read(key);
+                        }
 
-                     STORE_ASSERT(currentVersionedItemSPtr == nullptr || currentVersionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion,
-                        "Cannot add an item that already exists. lsn={1} txn={2} key={3}", sequenceNumber, storeTransaction.Id, keyLockResourceNameHash);
-                  }
+                        STORE_ASSERT(currentVersionedItemSPtr == nullptr || currentVersionedItemSPtr->GetRecordKind() == RecordKind::DeletedVersion,
+                            "Cannot add an item that already exists. lsn={1} txn={2} key={3}", sequenceNumber, storeTransaction.Id, keyLockResourceNameHash);
+                    }
 
-                  if (!isIdempotent || (isIdempotent && ShouldValueBeAddedToDifferentialState(key, sequenceNumber)))
-                  {
-                     // Add the change to the store transaction write-set.
-                     KSharedPtr<InsertedVersionedItem<TValue>> insertedVersionedItemSPtr = nullptr;
-                     NTSTATUS status = InsertedVersionedItem<TValue>::Create(this->GetThisAllocator(), insertedVersionedItemSPtr);
-                     Diagnostics::Validate(status);
+                    if (!isIdempotent || ShouldValueBeAddedToDifferentialState(key, sequenceNumber))
+                    {
+                        // Add the change to the store transaction write-set.
+                        KSharedPtr<InsertedVersionedItem<TValue>> insertedVersionedItemSPtr = nullptr;
+                        NTSTATUS status = InsertedVersionedItem<TValue>::Create(this->GetThisAllocator(), insertedVersionedItemSPtr);
+                        Diagnostics::Validate(status);
 
-                     insertedVersionedItemSPtr->InitializeOnApply(sequenceNumber, value);
-                     insertedVersionedItemSPtr->SetValueSize(GetValueSize(data.ValueOperationData));
-                     cachedDifferentialStoreComponentSPtr->Add(key, *insertedVersionedItemSPtr, *consolidationManagerSPtr_);
+                        insertedVersionedItemSPtr->InitializeOnApply(sequenceNumber, value);
+                        insertedVersionedItemSPtr->SetValueSize(GetValueSize(data.ValueOperationData));
+                        cachedDifferentialStoreComponentSPtr->Add(key, *insertedVersionedItemSPtr, *consolidationManagerSPtr_);
 
-                     // Update count, notifications and trace
-                     LONG64 newCount = IncrementCount(storeTransaction.ReplicatorTransaction->TransactionId, storeTransaction.ReplicatorTransaction->CommitSequenceNumber);
-                     UNREFERENCED_PARAMETER(newCount);
+                        // Update count, notifications and trace
+                        LONG64 newCount = IncrementCount(storeTransaction.ReplicatorTransaction->TransactionId, storeTransaction.ReplicatorTransaction->CommitSequenceNumber);
+                        UNREFERENCED_PARAMETER(newCount);
 
-                     co_await FireItemAddedNotificationOnSecondaryAsync(*storeTransaction.ReplicatorTransaction, key, value, sequenceNumber);
+                        auto keySize = (*metadataOperationData.KeyBytes)[0]->QuerySize();
+                        auto cachedEstimator = keySizeEstimatorSPtr_.Get();
+                        cachedEstimator->AddKeySize(keySize);
 
-                     //StoreEventSource::Events->StoreOnApplyAdd(
-                     //    traceComponent_->PartitionId, traceComponent_->TraceTag,
-                     //    sequenceNumber,
-                     //    storeTransaction.Id,
-                     //    keyLockResourceNameHash,
-                     //    newCount);
-                  }
-               }
-               catch (ktl::Exception& e)
-               {
-                  TraceException(L"OnApplyAdd", e);
-                  STORE_ASSERT(
-                      e.GetStatus() == SF_STATUS_OBJECT_CLOSED ||
-                      e.GetStatus() == SF_STATUS_TIMEOUT,
-                      "Unexpected exception in AcquireKeyReadLockAsync");
+                        co_await FireItemAddedNotificationOnSecondaryAsync(*storeTransaction.ReplicatorTransaction, key, value, sequenceNumber);
 
-                  throw;
-               }
+                        //StoreEventSource::Events->StoreOnApplyAdd(
+                        //    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                        //    sequenceNumber,
+                        //    storeTransaction.Id,
+                        //    keyLockResourceNameHash,
+                        //    newCount);
+                    }
+                }
+                catch (ktl::Exception& e)
+                {
+                    TraceException(L"OnApplyAdd", e, storeTransaction.Id, keyLockResourceNameHash);
+                    STORE_ASSERT(
+                        e.GetStatus() == SF_STATUS_OBJECT_CLOSED ||
+                        e.GetStatus() == SF_STATUS_TIMEOUT,
+                        "Unexpected exception in AcquireKeyReadLockAsync");
+
+                    throw;
+                }
             }
 
             ktl::Awaitable<void> OnApplyUpdateAsync(
@@ -3621,7 +3887,7 @@ namespace Data
                         storeTransaction.Id,
                         L"deserialization");
 
-                    TraceException(L"OnApplyUpdate", e);
+                    TraceException(L"OnApplyUpdate", e, storeTransaction.Id);
                     throw;
                 }
 
@@ -3641,8 +3907,8 @@ namespace Data
                         }
 
                         STORE_ASSERT(
-                            currentVersionedItemSPtr->GetRecordKind() != RecordKind::DeletedVersion, 
-                            "Cannot update an item that does not exist (deleteVersion). lsn={1} txn={2} key={3}", 
+                            currentVersionedItemSPtr->GetRecordKind() != RecordKind::DeletedVersion,
+                            "Cannot update an item that does not exist (deleteVersion). lsn={1} txn={2} key={3}",
                             sequenceNumber, storeTransaction.Id, keyLockResourceNameHash);
                     }
 
@@ -3671,7 +3937,7 @@ namespace Data
                 }
                 catch (ktl::Exception& e)
                 {
-                    TraceException(L"OnApplyUpdate", e);
+                    TraceException(L"OnApplyUpdate", e, storeTransaction.Id, keyLockResourceNameHash);
                     STORE_ASSERT(
                         e.GetStatus() == SF_STATUS_OBJECT_CLOSED ||
                         e.GetStatus() == SF_STATUS_TIMEOUT,
@@ -3701,7 +3967,7 @@ namespace Data
                         traceComponent_->PartitionId, traceComponent_->TraceTag,
                         storeTransaction.Id,
                         L"deserialization");
-                    TraceException(L"OnApplyRemove", e);
+                    TraceException(L"OnApplyRemove", e, storeTransaction.Id);
                     throw;
                 }
 
@@ -3726,7 +3992,7 @@ namespace Data
                             sequenceNumber, storeTransaction.Id, keyLockResourceNameHash);
                     }
 
-                    if (!isIdempotent || (isIdempotent && ShouldValueBeAddedToDifferentialState(key, sequenceNumber)))
+                    if (!isIdempotent || ShouldValueBeAddedToDifferentialState(key, sequenceNumber))
                     {
                         // Add the change to the store transaction write-set.
                         KSharedPtr<DeletedVersionedItem<TValue>> deletedVersionedItemSPtr = nullptr;
@@ -3752,7 +4018,7 @@ namespace Data
                 }
                 catch (ktl::Exception& e)
                 {
-                    TraceException(L"OnApplyRemove", e);
+                    TraceException(L"OnApplyRemove", e, storeTransaction.Id, keyLockResourceNameHash);
                     STORE_ASSERT(
                         e.GetStatus() == SF_STATUS_OBJECT_CLOSED ||
                         e.GetStatus() == SF_STATUS_TIMEOUT,
@@ -3866,6 +4132,11 @@ namespace Data
                 KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr(&storeTransaction);
                 LockManager::SPtr lockManagerSPtr(&lockManager);
 
+                if (timeout < Common::TimeSpan::Zero)
+                {
+                    timeout = Common::TimeSpan::MaxValue;
+                }
+
                 STORE_ASSERT(
                     storeModificationType == StoreModificationType::Enum::Add ||
                     storeModificationType == StoreModificationType::Enum::Update ||
@@ -3880,7 +4151,7 @@ namespace Data
                 }
                 catch (ktl::Exception& e)
                 {
-                    TraceException(L"AcquireKeyModificationLockAsync", e);
+                    TraceException(L"AcquireKeyModificationLockAsync", e, storeTransaction.Id, keyLockResourceNameHash);
                     throw;
                 }
             }
@@ -3894,22 +4165,26 @@ namespace Data
                 // tood: this implementation is incomplete.
                 KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr(&storeTransaction);
                 LockManager::SPtr lockManagerSPtr(&lockManager);
-                
+
                 LockMode::Enum lockMode = LockMode::Enum::Shared;
                 if ((storeTransactionSPtr->LockingHints & LockingHints::Enum::UpdateLock) != 0)
                 {
                     lockMode = LockMode::Enum::Update;
                 }
 
-                // todo: If the caller assumes locking responsability, then return immediately.
+                if (timeout < Common::TimeSpan::Zero)
+                {
+                    timeout = Common::TimeSpan::MaxValue;
+                }
 
+                // todo: If the caller assumes locking responsability, then return immediately.
                 try
                 {
                     co_await storeTransactionSPtr->AcquireKeyLockAsync(*lockManagerSPtr, keyLockResourceNameHash, lockMode, timeout);
                 }
                 catch (ktl::Exception& e)
                 {
-                    TraceException(L"AcquireKeyReadLockAsync", e);
+                    TraceException(L"AcquireKeyReadLockAsync", e, storeTransaction.Id, keyLockResourceNameHash);
                     STORE_ASSERT(
                         e.GetStatus() == STATUS_INVALID_PARAMETER_3 ||
                         e.GetStatus() == STATUS_INVALID_PARAMETER_4 ||
@@ -3917,8 +4192,18 @@ namespace Data
                         e.GetStatus() == SF_STATUS_TIMEOUT,
                         "Unexpected exception in AcquireKeyReadLockAsync");
 
-                  throw;
-               }
+                    throw;
+                }
+            }
+
+            ktl::Awaitable<void> CloseAndReopenLockManagerAsync() noexcept
+            {
+                co_await lockManager_->CloseAsync();
+
+                NTSTATUS status = LockManager::Create(this->GetThisAllocator(), lockManager_);
+                Diagnostics::Validate(status);
+
+                co_await lockManager_->OpenAsync();
             }
 
             TKey GetKeyFromBytes(OperationData& data)
@@ -3972,27 +4257,6 @@ namespace Data
                 LONG64 newCount = InterlockedDecrement64(&count_);
                 STORE_ASSERT(newCount >= 0, "New count {1} cannot be negative. TxnID: {2}, CommitLSN: {3}", newCount, txnId, commitLSN);
                 return newCount;
-            }
-
-            LONG64 ComputeMemorySize()
-            {
-                LONG64 differentialSize = 0;
-                LONG64 consolidatedSize = 0;
-                LONG64 snapshotSize = 0;
-
-                auto cachedDifferentialStoreComponentSPtr = differentialStoreComponentSPtr_.Get();
-                STORE_ASSERT(cachedDifferentialStoreComponentSPtr != nullptr, "differential store component cannot be null");
-
-                differentialSize = cachedDifferentialStoreComponentSPtr->Size;
-                STORE_ASSERT(differentialSize >= 0, "Differential size {1} should not be negative", differentialSize);
-
-                consolidatedSize = consolidationManagerSPtr_->GetMemorySize();
-                STORE_ASSERT(consolidatedSize >= 0, "Consolidated size {1} should not be negative", consolidatedSize);
-
-                snapshotSize = snapshotContainerSPtr_->GetMemorySize();
-                STORE_ASSERT(snapshotSize >= 0, "Snapshot size {1} should not be negative", snapshotSize);
-
-                return differentialSize + consolidatedSize + snapshotSize;
             }
 
             //
@@ -4056,30 +4320,7 @@ namespace Data
                         traceComponent_->PartitionId, traceComponent_->TraceTag,
                         L"Finished trying to cancel sweep task");
 
-                    // Set isClosing flag to true before acquiring prime lock
-                    isClosing_ = true;
-
-                    KSharedPtr<StoreTransaction<TKey, TValue>> storeTransactionSPtr = nullptr;
-                    NTSTATUS status = StoreTransaction<TKey, TValue>::Create(CreateTransactionId(), storeId_, *keyComparerSPtr_, this->GetThisAllocator(), storeTransactionSPtr);
-                    Diagnostics::Validate(status);
-                    try
-                    {
-                        co_await storeTransactionSPtr->AcquirePrimeLockAsync(*lockManager_, LockMode::Exclusive, Common::TimeSpan::FromMilliseconds(10000), false);
-                    }
-                    catch (ktl::Exception const & e)
-                    {
-                        // If we fail to acquire the prime lock due to timeout, we still want to proceed with Close
-                        if (e.GetStatus() != SF_STATUS_TIMEOUT)
-                        {
-                            throw;
-                        }
-                        else
-                        {
-                            StoreEventSource::Events->StoreOnCleanupAsyncApiPrimeLockNotAcquired(traceComponent_->PartitionId, traceComponent_->TraceTag);
-                        }
-                    }
-
-                    KFinally([&] {storeTransactionSPtr->Unlock(); });
+                    perfCounters_ = nullptr;
 
                     // TODO: Remove this trace once #11183365 is resolved
                     StoreEventSource::Events->StoreOnCleanupAsyncApi(
@@ -4157,8 +4398,8 @@ namespace Data
                     mergeMetadataTableSPtr_.Put(nullptr);
 
                     consolidationManagerSPtr_ = nullptr;
+                    sweepManagerSPtr_ = nullptr;
 
-                    lockManager_->Close();
                     auto cachedDifferentialStoreComponentSPtr = differentialStoreComponentSPtr_.Get();
                     STORE_ASSERT(cachedDifferentialStoreComponentSPtr != nullptr, "cachedDifferentialStoreComponentSPtr != nullptr");
                     cachedDifferentialStoreComponentSPtr->Close();
@@ -4195,6 +4436,13 @@ namespace Data
                 TxnReplicator::Transaction::SPtr transactionSPtr(static_cast<TxnReplicator::Transaction*>(transactionBaseSPtr.RawPtr()));
                 OperationData::CSPtr metadataCSPtr(&metadata);
 
+                Common::TimeSpan replicationTimeout = timeout;
+
+                if (timeout < Common::TimeSpan::Zero)
+                {
+                    replicationTimeout = Common::TimeSpan::MaxValue;
+                }
+
                 ULONG32 exponentialBackoff = Constants::StartingBackOffInMs;
                 ULONG32 retryCount = 0;
 
@@ -4226,15 +4474,15 @@ namespace Data
                         }
                         else
                         {
-                            TraceException(L"ReplicateOperationAsync", exception);
+                            TraceException(L"ReplicateOperationAsync", exception, storeTransaction.Id);
                             throw;
                         }
                     }
 
-                  if (stopwatch.Elapsed > timeout)
-                  {
-                     throw ktl::Exception(SF_STATUS_TIMEOUT);
-                  }
+                    if (stopwatch.Elapsed > replicationTimeout)
+                    {
+                        throw ktl::Exception(SF_STATUS_TIMEOUT);
+                    }
 
                     retryCount++;
                     if (retryCount == Constants::MaxRetryCount)
@@ -4276,7 +4524,11 @@ namespace Data
                 Diagnostics::Validate(NT_SUCCESS(status));
 
                 STORE_ASSERT(isClosing_ == false, "Store should not be closing during recovery");
+
                 co_await recoveryComponentSPtr->RecoverAsync(cancellationToken);
+                auto cachedEstimator = keySizeEstimatorSPtr_.Get();
+                auto averageKeySize = recoveryComponentSPtr->TotalKeyCount > 0 ? recoveryComponentSPtr->TotalKeySize / recoveryComponentSPtr->TotalKeyCount : 0;
+                cachedEstimator->SetInitialEstimate(averageKeySize);
 
                 fileId_ = recoveryComponentSPtr->FileId;
 
@@ -4311,6 +4563,8 @@ namespace Data
                         continue;
                     }
 
+                    OnRecoverKeyCallback(row.Key, *row.Value);
+
                     consolidationManagerSPtr_->Add(row.Key, *row.Value);
 
                     if (shouldLoadValuesInRecovery_)
@@ -4318,6 +4572,7 @@ namespace Data
                         ktl::Awaitable<TValue> task = row.Value->GetValueAsync(
                             *cachedCurrentMetadataTableSPtr,
                             *valueConverterSPtr_,
+                            ReadMode::CacheResult,
                             *traceComponent_,
                             cancellationToken);
                         loadTasks->Append(Ktl::Move(task));
@@ -4379,12 +4634,31 @@ namespace Data
                 auto consolidatedCount = consolidationManagerSPtr_->Count();
                 auto currentCount = Count;
                 STORE_ASSERT(consolidatedCount == currentCount, "consolidatedComponent.Count {1} == this.Count {2}", consolidatedCount, currentCount);
+
+                ULONG64 diskSize = co_await GetDiskSizeAsync(currentMetadataTableSPtr_);
+                LONG64 memorySize = this->Size;
+
+                perfCounters_->ItemCount.Value = currentCount;
+                perfCounters_->DiskSize.Value = diskSize;
+                perfCounters_->MemorySize.Value = memorySize;
+
+                StoreEventSource::Events->StoreSize(
+                    traceComponent_->PartitionId, traceComponent_->TraceTag,
+                    currentCount,
+                    diskSize,
+                    memorySize);
+
                 co_return;
             }
 
             ktl::Awaitable<void> RecoverCopyStateAsync(__in ktl::CancellationToken const & cancellationToken)
             {
                 ApiEntry();
+
+                STORE_ASSERT(hasPersistedState_, "RecoverCopyState can only be called for persistent stores");
+
+                CopyManager::SPtr persistentCopyManager = dynamic_cast<CopyManager *>(copyManagerSPtr_.RawPtr());
+                STORE_ASSERT(persistentCopyManager != nullptr, "Unable to cast copy manager to persistent copy manager");
 
                 StoreEventSource::Events->StoreRecoverCopyStateAsyncApi(
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
@@ -4396,7 +4670,7 @@ namespace Data
 
                 // Copy Manager's metadat table can be null when set current state is not called. 
                 // To avoid dropping and creating the store, SM calls begin and end setting current state.
-                if (copyManagerSPtr_->MetadataTableSPtr == nullptr)
+                if (persistentCopyManager->MetadataTableSPtr == nullptr)
                 {
                     MetadataTable::SPtr metadataTable = nullptr;
                     NTSTATUS status = MetadataTable::Create(GetThisAllocator(), metadataTable);
@@ -4404,15 +4678,15 @@ namespace Data
 
                     currentMetadataTableSPtr_.Put(Ktl::Move(metadataTable));
                 }
-                else 
+                else
                 {
-                    auto copiedMetadataTableSPtr = copyManagerSPtr_->MetadataTableSPtr;
+                    auto copiedMetadataTableSPtr = persistentCopyManager->MetadataTableSPtr;
                     currentMetadataTableSPtr_.Put(Ktl::Move(copiedMetadataTableSPtr));
                 }
 
                 try
                 {
-                   co_await RecoverConsolidatedStateAsync(cancellationToken);
+                    co_await RecoverConsolidatedStateAsync(cancellationToken);
                 }
                 catch (ktl::Exception & e)
                 {
@@ -4559,7 +4833,8 @@ namespace Data
                 __in TKey & firstKey,
                 __in bool useFirstKey,
                 __in TKey & lastKey,
-                __in bool useLastKey)
+                __in bool useLastKey,
+                __in ReadMode readMode)
             {
                 KSharedPtr<IStoreTransaction<TKey, TValue>> storeTransactionSPtr = &storeTransaction;
                 TKey snapFirstKey = firstKey;
@@ -4574,10 +4849,30 @@ namespace Data
                     *keyComparerSPtr_,
                     *keyEnumerator,
                     *storeTransactionSPtr,
+                    readMode,
                     this->GetThisAllocator(),
                     enumeratorSPtr);
                 Diagnostics::Validate(status);
                 co_return enumeratorSPtr;
+            }
+
+            ktl::Awaitable<ULONG64> GetDiskSizeAsync(__in ThreadSafeSPtrCache<MetadataTable> const& metadataTableSPtr) const
+            {
+                ULONG64 result = 0;
+                auto cachedMetadataTableSPtr = metadataTableSPtr.Get();
+
+                if (cachedMetadataTableSPtr != nullptr)
+                {
+                    result += cachedMetadataTableSPtr->MetadataFileSize;
+                    auto tableEnumeratorSPtr = cachedMetadataTableSPtr->Table->GetEnumerator();
+                    while (tableEnumeratorSPtr->MoveNext())
+                    {
+                        auto fileMetadataSPtr = tableEnumeratorSPtr->Current().Value;
+                        result += co_await fileMetadataSPtr->GetFileSizeAsync();
+                    }
+                }
+
+                co_return result;
             }
 
 #pragma region Notifications
@@ -4599,7 +4894,7 @@ namespace Data
                     {
                         if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Remove)
                         {
-                            co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber);
+                            co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber, /* isPrimary = */ true);
                         }
 
                         co_return;
@@ -4615,20 +4910,20 @@ namespace Data
                     {
                         if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Add)
                         {
-                            co_await cachedEventHandler->OnAddedAsync(replicatorTransaction, key, cachedKeyValueMetadataOperationDataSPtr->Value, sequenceNumber);
+                            co_await cachedEventHandler->OnAddedAsync(replicatorTransaction, key, cachedKeyValueMetadataOperationDataSPtr->Value, sequenceNumber, /* isPrimary = */ true);
                         }
                     }
                     else if (metadataOperationDataSPtr->ModificationType == StoreModificationType::Update)
                     {
                         if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Update)
                         {
-                            co_await cachedEventHandler->OnUpdatedAsync(replicatorTransaction, key, cachedKeyValueMetadataOperationDataSPtr->Value, sequenceNumber);
+                            co_await cachedEventHandler->OnUpdatedAsync(replicatorTransaction, key, cachedKeyValueMetadataOperationDataSPtr->Value, sequenceNumber, /* isPrimary = */ true);
                         }
                     }
                 }
                 catch (const ktl::Exception & ex)
                 {
-                    TraceException(L"FireSingleItemNotificationOnPrimary", ex);
+                    TraceException(L"FireSingleItemNotificationOnPrimary", ex, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -4647,11 +4942,11 @@ namespace Data
 
                 try
                 {
-                    co_await cachedEventHandler->OnAddedAsync(replicatorTransaction, key, value, sequenceNumber);
+                    co_await cachedEventHandler->OnAddedAsync(replicatorTransaction, key, value, sequenceNumber, /* isPrimary = */ false);
                 }
                 catch (const ktl::Exception & ex)
                 {
-                    TraceException(L"FireItemAddedNotificationOnSecondary", ex);
+                    TraceException(L"FireItemAddedNotificationOnSecondary", ex, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -4670,11 +4965,11 @@ namespace Data
 
                 try
                 {
-                    co_await cachedEventHandler->OnUpdatedAsync(replicatorTransaction, key, value, sequenceNumber);
+                    co_await cachedEventHandler->OnUpdatedAsync(replicatorTransaction, key, value, sequenceNumber, /* isPrimary = */ false);
                 }
                 catch (const ktl::Exception & ex)
                 {
-                    TraceException(L"FireUpdatedNotificationOnSecondary", ex);
+                    TraceException(L"FireUpdatedNotificationOnSecondary", ex, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -4692,11 +4987,11 @@ namespace Data
 
                 try
                 {
-                    co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber);
+                    co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber, /* isPrimary = */ false);
                 }
                 catch (const ktl::Exception & ex)
                 {
-                    TraceException(L"FireRemovedNotificationOnSecondary", ex);
+                    TraceException(L"FireRemovedNotificationOnSecondary", ex, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -4749,14 +5044,14 @@ namespace Data
 
                 KSharedPtr<RebuiltStateAsyncEnumerator<TKey, TValue>> enumeratorSPtr = nullptr;
                 auto status = RebuiltStateAsyncEnumerator<TKey, TValue>::Create(
-                    false, 
-                    *consolidatedStateKeys, 
-                    *cachedDiffState, 
-                    *consolidationManagerSPtr_, 
-                    *cachedCurrentMetadataTable, 
-                    *valueConverterSPtr_, 
+                    false,
+                    *consolidatedStateKeys,
+                    *cachedDiffState,
+                    *consolidationManagerSPtr_,
+                    *cachedCurrentMetadataTable,
+                    *valueConverterSPtr_,
                     *traceComponent_,
-                    GetThisAllocator(), 
+                    GetThisAllocator(),
                     enumeratorSPtr);
                 Diagnostics::Validate(status);
 
@@ -4779,7 +5074,7 @@ namespace Data
                 __in TxnReplicator::TransactionBase& replicatorTransaction,
                 __in TKey key,
                 __in const MetadataOperationData & metadataOperationData,
-                __in KSharedPtr<VersionedItem<TValue>> & previousVersionedItem,
+                __in KSharedPtr<StoreComponentReadResult<TValue>> & readResult,
                 __in LONG64 sequenceNumber)
             {
 
@@ -4789,33 +5084,40 @@ namespace Data
                     co_return;
                 }
 
+                auto versionedItem = readResult->VersionedItem;
+
                 try
                 {
                     // Last operation on the key in txn is Add or Update
                     if (metadataOperationData.ModificationType == StoreModificationType::Add || metadataOperationData.ModificationType == StoreModificationType::Update)
                     {
-                        if (previousVersionedItem == nullptr || previousVersionedItem->GetRecordKind() == RecordKind::DeletedVersion)
+                        if (versionedItem == nullptr || versionedItem->GetRecordKind() == RecordKind::DeletedVersion)
                         {
                             if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Remove)
                             {
-                                co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber);
+                                co_await cachedEventHandler->OnRemovedAsync(replicatorTransaction, key, sequenceNumber, /* isPrimary = */ false);
                             }
-                            
+
                             co_return;
                         }
 
                         if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Update)
                         {
-                            co_await cachedEventHandler->OnUpdatedAsync(replicatorTransaction, key, previousVersionedItem->GetValue(), sequenceNumber);
+                            co_await cachedEventHandler->OnUpdatedAsync(
+                                replicatorTransaction,
+                                key,
+                                readResult->Value,
+                                sequenceNumber,
+                                /* isPrimary = */ false);
                         }
-                        
+
                         co_return;
                     }
 
                     // Last operation on the key in txn is Remove
                     if (metadataOperationData.ModificationType == StoreModificationType::Remove)
                     {
-                        if (previousVersionedItem == nullptr || previousVersionedItem->GetRecordKind() == RecordKind::DeletedVersion)
+                        if (versionedItem == nullptr || versionedItem->GetRecordKind() == RecordKind::DeletedVersion)
                         {
                             // If item previously did not exist, since the last notification for the given key is remove, this must be nooped
                             co_return;
@@ -4823,16 +5125,21 @@ namespace Data
 
                         if (dictionaryChangeHandlerMask_ & DictionaryChangeEventMask::Add)
                         {
-                            co_await cachedEventHandler->OnAddedAsync(replicatorTransaction, key, previousVersionedItem->GetValue(), sequenceNumber);
+                            co_await cachedEventHandler->OnAddedAsync(
+                                replicatorTransaction,
+                                key,
+                                readResult->Value,
+                                sequenceNumber,
+                                /* isPrimary = */ false);
                         }
-                        
+
                         co_return;
                     }
 
                 }
                 catch (const ktl::Exception & ex)
                 {
-                    TraceException(L"FireUndoNotification", ex);
+                    TraceException(L"FireUndoNotification", ex, replicatorTransaction.TransactionId);
                     throw;
                 }
             }
@@ -4856,15 +5163,21 @@ namespace Data
                 return filePath.RawPtr();
             }
 
-            void TraceException(__in KStringView const & methodName, __in ktl::Exception const & exception)
+            void TraceException(
+                __in KStringView const & methodName,
+                __in ktl::Exception const & exception,
+                __in LONG64 txnId=Constants::InvalidTxnId,
+                __in ULONG64 keyHash=Constants::InvalidKeyHash)
             {
                 KDynStringA stackString(this->GetThisAllocator());
                 Diagnostics::GetExceptionStackTrace(exception, stackString);
                 StoreEventSource::Events->StoreException(
                     traceComponent_->PartitionId, traceComponent_->TraceTag,
                     Data::Utilities::ToStringLiteral(methodName),
-                    Data::Utilities::ToStringLiteral(stackString),
-                    exception.GetStatus());
+                    txnId,
+                    keyHash,
+                    exception.GetStatus(),
+                    Data::Utilities::ToStringLiteral(stackString));
             }
 
             void AssertException(__in KStringView const & methodName, __in ktl::Exception const & exception)
@@ -4912,7 +5225,7 @@ namespace Data
             {
                 STORE_ASSERT(transactionalReplicatorSPtr_->IsAlive(), "transactional replicator has expired");
                 KSharedPtr<TxnReplicator::ITransactionalReplicator> replicatorSPtr = transactionalReplicatorSPtr_->TryGetTarget();
-                KWfStatefulServicePartition::SPtr partition = replicatorSPtr->StatefulPartition;
+                Data::Utilities::IStatefulPartition::SPtr partition = replicatorSPtr->StatefulPartition;
 
                 FABRIC_SERVICE_PARTITION_ACCESS_STATUS writeStatus;
                 auto status = partition->GetWriteStatus(&writeStatus);
@@ -4935,7 +5248,7 @@ namespace Data
             {
                 STORE_ASSERT(transactionalReplicatorSPtr_->IsAlive(), "transactional replicator has expired");
                 KSharedPtr<TxnReplicator::ITransactionalReplicator> replicatorSPtr = transactionalReplicatorSPtr_->TryGetTarget();
-                KWfStatefulServicePartition::SPtr partition = replicatorSPtr->StatefulPartition;
+                Data::Utilities::IStatefulPartition::SPtr partition = replicatorSPtr->StatefulPartition;
 
                 FABRIC_SERVICE_PARTITION_ACCESS_STATUS readStatus;
                 auto status = partition->GetReadStatus(&readStatus);
@@ -4958,6 +5271,11 @@ namespace Data
                 // Not doing so will cause the replica to be readable during dataloss
                 if (role == FABRIC_REPLICA_ROLE_PRIMARY)
                 {
+                    StoreEventSource::Events->StoreThrowIfNotReadable(
+                        traceComponent_->PartitionId, traceComponent_->TraceTag,
+                        rtx.Id,
+                        static_cast<ULONG32>(readStatus),
+                        static_cast<ULONG32>(role));
                     throw ktl::Exception(SF_STATUS_NOT_READABLE);
                 }
 
@@ -5008,6 +5326,18 @@ namespace Data
                 __in Data::StateManager::IStateSerializer<TKey>& keyStateSerializer,
                 __in Data::StateManager::IStateSerializer<TValue>& valueStateSerializer);
 
+            HashFunctionType GetFunc()
+            {
+                return func_;
+            }
+
+            virtual void OnRecoverKeyCallback(__in TKey key, __in VersionedItem<TValue> &value)
+            {
+                // Used by ReliableConcurrentQueue (derived class of Store)
+                UNREFERENCED_PARAMETER(key);
+                UNREFERENCED_PARAMETER(value);
+            }
+
         private:
             // Constants
             KStringView const CurrentDiskMetadataFileName = L"current_metadata.sfm";
@@ -5015,6 +5345,9 @@ namespace Data
             KStringView const BkpDiskMetadataFileName = L"backup_metadata.sfm";
 
             StoreTraceComponent::SPtr traceComponent_;
+            StorePerformanceCountersSPtr perfCounters_;
+
+            bool hasPersistedState_;
 
             FABRIC_STATE_PROVIDER_ID storeId_;
             LONG64 count_;
@@ -5025,13 +5358,15 @@ namespace Data
             ThreadSafeSPtrCache<DifferentialStoreComponent<TKey, TValue>> deltaDifferentialStoreComponentSPtr_;
             MergeHelper::SPtr mergeHelperSPtr_ = nullptr;
             KSharedPtr<ConsolidationManager<TKey, TValue>> consolidationManagerSPtr_ = nullptr;
+            KSharedPtr<SweepManager<TKey, TValue>> sweepManagerSPtr_ = nullptr;
+            ThreadSafeSPtrCache<KeySizeEstimator> keySizeEstimatorSPtr_ = { nullptr };
             ThreadSafeSPtrCache<ktl::AwaitableCompletionSource<PostMergeMetadataTableInformation::SPtr>> consolidationTcsSPtr_ = { nullptr };
             ktl::CancellationTokenSource::SPtr consolidationTaskCancellationSourceSPtr_ = nullptr;
             bool enableBackgroundConsolidation_;
             ktl::AwaitableCompletionSource<bool>::SPtr testDelayOnConsolidationSPtr_ = nullptr;
             KSharedPtr<SnapshotContainer<TKey, TValue>> snapshotContainerSPtr_ = nullptr;
-            CopyManager::SPtr copyManagerSPtr_;
-            KUriView name_;
+            ICopyManager::SPtr copyManagerSPtr_;
+            KUri::SPtr name_;
             KSharedPtr<Data::StateManager::IStateSerializer<TKey>> keyConverterSPtr_ = nullptr;
             KSharedPtr<Data::StateManager::IStateSerializer<TValue>> valueConverterSPtr_ = nullptr;
             KSharedPtr<ConcurrentDictionary2<LONG64, KSharedPtr<StoreTransaction<TKey, TValue>>>> inflightReadWriteStoreTransactionsSPtr_ = nullptr;
@@ -5065,41 +5400,44 @@ namespace Data
             bool wasCopyAborted_;
             KString::SPtr langTypeInfo_;
             KString::SPtr lang_;
+            LONG64 keySize_ = -1;
         };
 
         template <typename TKey, typename TValue>
         Store<TKey, TValue>::Store(
-           __in PartitionedReplicaId const & traceId,
-           __in IComparer<TKey>& keyComparer,
-           __in HashFunctionType func,
-           __in KUriView& name,
-           __in FABRIC_STATE_PROVIDER_ID stateProviderId,
-           __in Data::StateManager::IStateSerializer<TKey>& keyStateSerializer,
-           __in Data::StateManager::IStateSerializer<TValue>& valueStateSerializer)
-           :keyComparerSPtr_(&keyComparer),
-           func_(func),
-           name_(name),
-           storeId_(stateProviderId),
-           keyConverterSPtr_(&keyStateSerializer),
-           valueConverterSPtr_(&valueStateSerializer),
-           PartitionedReplicaTraceComponent(traceId),
-           deltaDifferentialStoreComponentSPtr_(nullptr),
-           differentialStoreComponentSPtr_(nullptr),
-           transactionalReplicatorSPtr_(nullptr),
-           lastPerformCheckpointLSN_(0),
-           isClosing_(false),
-           count_(0),
-           fileId_(0),
-           logicalTimeStamp_(0),
-           enableBackgroundConsolidation_(true),
-           isAlwaysReadable_(true), // TODO: should be configured on creation
-           enableSweep_(false), // Factory will enable sweep
-           sweepInProgress_(0),
-           enableEnumerationWithRepeatableRead_(false),
-           shouldLoadValuesInRecovery_(false),
-           numberOfInflightRecoveryTasks_(1),
-           wasCopyAborted_(false),
-           dictionaryChangeHandlerMask_(DictionaryChangeEventMask::Enum::All)
+            __in PartitionedReplicaId const & traceId,
+            __in IComparer<TKey>& keyComparer,
+            __in HashFunctionType func,
+            __in KUriView& name,
+            __in FABRIC_STATE_PROVIDER_ID stateProviderId,
+            __in Data::StateManager::IStateSerializer<TKey>& keyStateSerializer,
+            __in Data::StateManager::IStateSerializer<TValue>& valueStateSerializer)
+            :keyComparerSPtr_(&keyComparer),
+            func_(func),
+            name_(),
+            storeId_(stateProviderId),
+            keyConverterSPtr_(&keyStateSerializer),
+            valueConverterSPtr_(&valueStateSerializer),
+            PartitionedReplicaTraceComponent(traceId),
+            deltaDifferentialStoreComponentSPtr_(nullptr),
+            differentialStoreComponentSPtr_(nullptr),
+            transactionalReplicatorSPtr_(nullptr),
+            perfCounters_(nullptr),
+            lastPerformCheckpointLSN_(0),
+            isClosing_(false),
+            count_(0),
+            fileId_(0),
+            logicalTimeStamp_(0),
+            enableBackgroundConsolidation_(true),
+            isAlwaysReadable_(true), // TODO: should be configured on creation
+            enableSweep_(false), // Factory will enable sweep
+            sweepInProgress_(0),
+            enableEnumerationWithRepeatableRead_(false),
+            shouldLoadValuesInRecovery_(false),
+            numberOfInflightRecoveryTasks_(1),
+            wasCopyAborted_(false),
+            dictionaryChangeHandlerMask_(DictionaryChangeEventMask::Enum::All),
+            hasPersistedState_(true)
         {
             NTSTATUS status = StoreTraceComponent::Create(PartitionId, ReplicaId, storeId_, this->GetThisAllocator(), traceComponent_);
             Diagnostics::Validate(status);
@@ -5108,6 +5446,9 @@ namespace Data
                 traceComponent_->PartitionId,
                 traceComponent_->TraceTag,
                 ToStringLiteral(name.Get(KUriView::eRaw)));
+
+            status = KUri::Create(name, GetThisAllocator(), name_);
+            Diagnostics::Validate(status);
         }
 
         template <typename TKey, typename TValue>

@@ -139,7 +139,7 @@ namespace TxnReplicator
 
             OperationDataStream::SPtr GetCurrentState() override;
 
-            void BeginSettingCurrentState() override;
+            ktl::Awaitable<void> BeginSettingCurrentStateAsync() override;
 
             ktl::Awaitable<void> SetCurrentStateAsync(
                 __in LONG64 stateRecordNumber,
@@ -266,6 +266,8 @@ namespace TxnReplicator
             FABRIC_STATE_PROVIDER_ID stateProviderId_;
             KGuid partitionId_;
             FABRIC_REPLICA_ID replicaId_;
+
+            bool hasPersistedState_ = true;
 
             Data::Utilities::OperationData::CSPtr initializationParameters_;
             KWeakRef<ITransactionalReplicator>::SPtr replicatorWRef_;

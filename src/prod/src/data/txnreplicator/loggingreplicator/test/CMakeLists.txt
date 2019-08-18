@@ -10,6 +10,7 @@ add_definitions(-DNO_INLINE_EVENTDESCCREATE)
 add_executable(${exe_loggingreplicator_test}
   ${PROJECT_SOURCE_DIR}/test/BoostUnitTest/btest.cpp  
   ../ApiFaultUtility.cpp
+  ../BackupFolderInfo.Test.cpp
   ../BackupLogFile.Test.cpp
   ../BackupLogFileProperties.Test.cpp
   ../BackupManager.Test.cpp
@@ -25,7 +26,9 @@ add_executable(${exe_loggingreplicator_test}
   ../LogManager.Test.cpp
   ../LogRecordsDispatcher.Test.cpp
   ../LogTruncationManager.Test.cpp
+  ../MemoryLog.Test.cpp
   ../OperationProcessor.Test.cpp
+  ../PeriodicCheckpointTruncation.Test.cpp
   ../PhysicalLogRecord.Test.cpp
   ../PhysicalLogWriter.Test.cpp
   ../ProgressVector.Test.cpp
@@ -90,8 +93,6 @@ target_link_libraries(${exe_loggingreplicator_test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(

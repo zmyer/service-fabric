@@ -20,6 +20,7 @@ add_executable(${exe_ServiceModelTest}
     ../Serializer.Test.cpp
 	../KeyRange.Test.cpp
     ../QueryArgumentMap.Test.cpp
+    ../modelV2/modelV2.Test.cpp
 )
 
 
@@ -48,8 +49,6 @@ target_link_libraries(${exe_ServiceModelTest}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
   c
 )
 
@@ -97,5 +96,10 @@ install(
     FILES ./RunServiceModelTests.sh
     PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_READ GROUP_WRITE GROUP_EXECUTE WORLD_READ WORLD_WRITE WORLD_EXECUTE 
     DESTINATION ${TEST_OUTPUT_DIR}
+)
+
+install(
+    DIRECTORY ./../modelV2/modelV2TestFiles
+    DESTINATION ${TEST_OUTPUT_DIR}/
 )
 

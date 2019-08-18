@@ -43,14 +43,16 @@ target_link_libraries(
   ${lib_Testability}
   ${lib_FileStoreService}
   ${lib_Store}
+  ${lib_ReliableConcurrentQueue}
   ${lib_TestHooks}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_TStore}
   ${lib_StoreRepairPolicy}
   ${lib_Replication}
   ${lib_TransactionalReplicator}
   ${lib_ApiWrappers}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_LoadBalancing}
   ${lib_SystemServices}
   ${lib_ServiceGroup}

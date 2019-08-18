@@ -19,7 +19,7 @@ using namespace std;
 using namespace Common;
 using namespace Reliability::LoadBalancingComponent;
 
-ServiceDomain::ServiceDomain(DomainId && id, PlacementAndLoadBalancing const& plb)
+ServiceDomain::ServiceDomain(DomainId && id, PlacementAndLoadBalancing & plb)
     : domainId_(move(id)),
     plb_(plb),
     serviceTable_(),
@@ -51,12 +51,14 @@ ServiceDomain::ServiceDomain(DomainId && id, PlacementAndLoadBalancing const& pl
     constraintCheckClosure_(),
     fullConstraintCheck_(false),
     partitionsPerNode_(),
+    inBuildCountPerNode_(),
     childServices_(),
     applicationPartitions_(),
     applicationLoadTable_(),
     reservationLoadTable_(),
     servicePackageReplicaCountPerNode_(),
-    partitionsInAppUpgrade_(0)
+    partitionsInAppUpgrade_(0),
+    autoScaler_()
 {
     if (plb_.applicationTable_.size() > 0)
     {
@@ -89,13 +91,16 @@ ServiceDomain::ServiceDomain(ServiceDomain && other)
     constraintCheckClosure_(move(other.constraintCheckClosure_)),
     fullConstraintCheck_(other.fullConstraintCheck_),
     partitionsPerNode_(move(other.partitionsPerNode_)),
+    inBuildCountPerNode_(move(other.inBuildCountPerNode_)),
     childServices_(move(other.childServices_)),
     applicationPartitions_(move(other.applicationPartitions_)),
     reservationLoadTable_(move(other.reservationLoadTable_)),
     applicationLoadTable_(move(other.applicationLoadTable_)),
     servicePackageReplicaCountPerNode_(move(other.servicePackageReplicaCountPerNode_)),
-    partitionsInAppUpgrade_(other.partitionsInAppUpgrade_)
+    partitionsInAppUpgrade_(other.partitionsInAppUpgrade_),
+    autoScaler_(other.autoScaler_)
 {
+
 }
 /// <summary>
 /// Adds the metric to this ServiceDomain. Can also increment ApplicationCount for a metric.
@@ -194,6 +199,7 @@ void ServiceDomain::AddService(ServiceDescription && serviceDescription)
             it->second.IncreaseServiceCount(itMetric->Weight, affectsBalancing);
         }
     }
+
     //should we trace this during a domain split?...
     plb_.Trace.UpdateService(itInserted->second.ServiceDesc.Name, itInserted->second.ServiceDesc);
     scheduler_.OnServiceChanged(Stopwatch::Now());
@@ -387,6 +393,19 @@ void ServiceDomain::MergeDomain(ServiceDomain && other)
         }
     }
 
+    for (auto it = other.inBuildCountPerNode_.begin(); it != other.inBuildCountPerNode_.end(); ++it)
+    {
+        auto itNode = inBuildCountPerNode_.find(it->first);
+        if (itNode == inBuildCountPerNode_.end())
+        {
+            inBuildCountPerNode_.insert(make_pair(it->first, it->second));
+        }
+        else
+        {
+            itNode->second += it->second;
+        }
+    }
+
     for (auto it = other.childServices_.begin(); it != other.childServices_.end(); ++it)
     {
         auto itParent = childServices_.find(it->first);
@@ -471,6 +490,8 @@ void ServiceDomain::MergeDomain(ServiceDomain && other)
     }
 
     partitionsInAppUpgrade_ += other.partitionsInAppUpgrade_;
+
+    autoScaler_.MergeAutoScaler(move(other.autoScaler_));
 }
 
 void ServiceDomain::AddFailoverUnit(FailoverUnit && failoverUnitToAdd, StopwatchTime timeStamp)
@@ -497,7 +518,7 @@ void ServiceDomain::AddFailoverUnit(FailoverUnit && failoverUnitToAdd, Stopwatch
     AddNodeLoad(service, failoverUnit, failoverUnit.FuDescription.Replicas);
     UpdateApplicationNodeCounts(service.ServiceDesc.ApplicationId, failoverUnit.FuDescription.Replicas, true);
     UpdateServicePackagePlacement(service, failoverUnit.FuDescription.Replicas, true);
-    UpdateNodeToFailoverUnitMapping(failoverUnit, vector<ReplicaDescription>(), failoverUnit.FuDescription.Replicas);
+    UpdateNodeToFailoverUnitMapping(failoverUnit, vector<ReplicaDescription>(), failoverUnit.FuDescription.Replicas, service.ServiceDesc.IsStateful);
     AddToPartitionStatistics(failoverUnit);
     AddToReplicaDifferenceStatistics(fuId, failoverUnit.ActualReplicaDifference);
 
@@ -507,6 +528,14 @@ void ServiceDomain::AddFailoverUnit(FailoverUnit && failoverUnitToAdd, Stopwatch
     if (!fullConstraintCheck_)
     {
         constraintCheckClosure_.insert(fuId);
+    }
+
+    if (service.ServiceDesc.IsAutoScalingDefined)
+    {
+        if (service.ServiceDesc.AutoScalingPolicy.IsPartitionScaled())
+        {
+            autoScaler_.AddFailoverUnit(fuId, failoverUnit.NextScalingCheck);
+        }
     }
 }
 
@@ -523,6 +552,12 @@ bool ServiceDomain::UpdateFailoverUnit(FailoverUnitDescription && failoverUnitDe
         failoverUnitDescription.ReplicaDifference = INT_MAX;
     }
 
+    //if no scaling policy, or if scaling is not per partition, target is always equal to the one from service description
+    if (!service.ServiceDesc.IsAutoScalingDefined || !service.ServiceDesc.AutoScalingPolicy.IsPartitionScaled())
+    {
+        failoverUnitDescription.TargetReplicaSetSize = service.ServiceDesc.TargetReplicaSetSize;
+    }
+
     if (failoverUnitDescription.IsDeleted)
     {
         // delete existing failover unit
@@ -533,8 +568,9 @@ bool ServiceDomain::UpdateFailoverUnit(FailoverUnitDescription && failoverUnitDe
         DeleteNodeLoad(service, failoverUnit, failoverUnit.FuDescription.Replicas);
         UpdateApplicationNodeCounts(service.ServiceDesc.ApplicationId, failoverUnit.FuDescription.Replicas, false);
         UpdateServicePackagePlacement(service, failoverUnit.FuDescription.Replicas, false);
-        UpdateNodeToFailoverUnitMapping(failoverUnit, failoverUnit.FuDescription.Replicas, failoverUnitDescription.Replicas);
+        UpdateNodeToFailoverUnitMapping(failoverUnit, failoverUnit.FuDescription.Replicas, failoverUnitDescription.Replicas, service.ServiceDesc.IsStateful);
 
+        autoScaler_.RemoveFailoverUnit(fuId, failoverUnit.NextScalingCheck);
         service.OnFailoverUnitDeleted(failoverUnit, plb_.Settings);
         movePlan_.OnFailoverUnitDeleted(failoverUnit);
 
@@ -568,8 +604,18 @@ bool ServiceDomain::UpdateFailoverUnit(FailoverUnitDescription && failoverUnitDe
         vector<uint> secondaryLoads = service.GetDefaultLoads(ReplicaRole::Secondary);
         uint primaryDefaultMoveCost = service.GetDefaultMoveCost(ReplicaRole::Primary);
         uint secondaryDefaultMoveCost = service.GetDefaultMoveCost(ReplicaRole::Secondary);
+
+        StopwatchTime nextScalingTime = StopwatchTime::Zero;
+        if (service.ServiceDesc.IsAutoScalingDefined)
+        {
+            if (service.ServiceDesc.AutoScalingPolicy.IsPartitionScaled())
+            {
+                nextScalingTime = timeStamp + service.ServiceDesc.AutoScalingPolicy.GetScalingInterval();
+            }
+        }
+
         AddFailoverUnit(FailoverUnit(move(failoverUnitDescription), move(primaryLoads), move(secondaryLoads),
-            std::map<Federation::NodeId, std::vector<uint>>(), primaryDefaultMoveCost, secondaryDefaultMoveCost, isOnEveryNode), timeStamp);
+            std::map<Federation::NodeId, std::vector<uint>>(), primaryDefaultMoveCost, secondaryDefaultMoveCost, isOnEveryNode, std::map<Federation::NodeId, FailoverUnit::ResourceLoad>(), nextScalingTime), timeStamp);
         ret = true;
     }
     else
@@ -578,8 +624,13 @@ bool ServiceDomain::UpdateFailoverUnit(FailoverUnitDescription && failoverUnitDe
         FailoverUnit & currentFU = itFU->second;
         FailoverUnitDescription const& currentDescription = currentFU.FuDescription;
         int newReplicaDiff = failoverUnitDescription.ReplicaDifference;
-
         currentFU.IsServiceOnEveryNode = isOnEveryNode;
+
+        //notify the auto scaler that it can remove the pending entry as FM has acked the target change
+        if (currentDescription.TargetReplicaSetSize != failoverUnitDescription.TargetReplicaSetSize)
+        {
+            autoScaler_.ProcessFailoverUnitTargetUpdate(currentFU.FUId, failoverUnitDescription.TargetReplicaSetSize);
+        }
 
         ASSERT_IFNOT(currentDescription.FUId == failoverUnitDescription.FUId && currentDescription.ServiceName ==
             failoverUnitDescription.ServiceName, "Comparison between two different FailoverUnit");
@@ -616,7 +667,7 @@ bool ServiceDomain::UpdateFailoverUnit(FailoverUnitDescription && failoverUnitDe
             UpdateApplicationNodeCounts(service.ServiceDesc.ApplicationId, failoverUnitDescription.Replicas, true);
             UpdateServicePackagePlacement(service, failoverUnitDescription.Replicas, true);
 
-            UpdateNodeToFailoverUnitMapping(currentFU, currentDescription.Replicas, failoverUnitDescription.Replicas);
+            UpdateNodeToFailoverUnitMapping(currentFU, currentDescription.Replicas, failoverUnitDescription.Replicas, service.ServiceDesc.IsStateful);
 
             service.OnFailoverUnitChanged(currentFU, failoverUnitDescription);
             movePlan_.OnFailoverUnitChanged(currentFU, failoverUnitDescription);
@@ -665,6 +716,7 @@ void ServiceDomain::UpdateFailoverUnitWithMoves(FailoverUnitMovement const& move
         for (auto it = movement.Actions.begin(); it != movement.Actions.end(); ++it)
         {
             if ((it->Action == FailoverUnitMovementType::MoveSecondary ||
+                it->Action == FailoverUnitMovementType::MoveInstance ||
                 it->Action == FailoverUnitMovementType::SwapPrimarySecondary) &&
                 itFailoverUnit->second.HasSecondaryOnNode(it->SourceNode))
             {
@@ -699,7 +751,7 @@ void ServiceDomain::UpdateLoadOrMoveCost(LoadOrMoveCostDescription && loadOrMove
     FailoverUnit const& failoverUnit = itFailoverUnit->second;
 
     Service & service = GetService(failoverUnit.FuDescription.ServiceId);
-    bool isSingletonReplicaService = service.ServiceDesc.TargetReplicaSetSize == 1;
+    bool isSingletonReplicaService = failoverUnit.TargetReplicaSetSize == 1;
 
     // If service is singleton replica, align primary and secondary default loads
     // This is needed to avoid issues during singleton replica movement,
@@ -733,13 +785,22 @@ void ServiceDomain::UpdateLoadOrMoveCost(LoadOrMoveCostDescription && loadOrMove
                     plb_.Trace.IgnoreInvalidMoveCost(fuId, ReplicaRole::ToString(ReplicaRole::Primary), it->Value);
                 }
             }
-			else if (it->Name == *ServiceModel::Constants::SystemMetricNameCpuCores || it->Name == *ServiceModel::Constants::SystemMetricNameMemoryInMB)
-			{
-				if (itFailoverUnit->second.UpdateResourceLoad(it->Name, it->Value, (failoverUnit.FuDescription.PrimaryReplica)->NodeId))
-				{
-					plb_.Trace.UpdateLoadOnNode(fuId, ReplicaRole::ToString(ReplicaRole::Primary), it->Name, it->Value, (failoverUnit.FuDescription.PrimaryReplica)->NodeId);
-				}
-			}
+            else if (it->Name == *ServiceModel::Constants::SystemMetricNameCpuCores || it->Name == *ServiceModel::Constants::SystemMetricNameMemoryInMB)
+            {
+                // Primary replica might have crashed and doesn't exist
+                if (failoverUnit.FuDescription.PrimaryReplica)
+                {
+                    if (itFailoverUnit->second.UpdateResourceLoad(it->Name, it->Value, (failoverUnit.FuDescription.PrimaryReplica)->NodeId))
+                    {
+                        plb_.Trace.UpdateLoadOnNode(fuId, ReplicaRole::ToString(ReplicaRole::Primary), it->Name, it->Value, (failoverUnit.FuDescription.PrimaryReplica)->NodeId);
+                    }
+                }
+                else
+                {
+                    // Trace if primary is not found
+                    plb_.Trace.PrimaryNodeNotFound(fuId);
+                }
+            }
             else
             {
                 int index = service.GetCustomLoadIndex(it->Name);
@@ -834,13 +895,13 @@ void ServiceDomain::UpdateLoadOrMoveCost(LoadOrMoveCostDescription && loadOrMove
                         plb_.Trace.IgnoreInvalidMoveCost(fuId, ReplicaRole::ToString(ReplicaRole::Secondary), it->Value);
                     }
                 }
-				else if (it->Name == *ServiceModel::Constants::SystemMetricNameCpuCores || it->Name == *ServiceModel::Constants::SystemMetricNameMemoryInMB)
-				{
-					if (itFailoverUnit->second.UpdateResourceLoad(it->Name, it->Value, mapIt->first))
-					{
-						plb_.Trace.UpdateLoadOnNode(fuId, ReplicaRole::ToString(ReplicaRole::Secondary), it->Name, it->Value, mapIt->first);
-					}
-				}
+                else if (it->Name == *ServiceModel::Constants::SystemMetricNameCpuCores || it->Name == *ServiceModel::Constants::SystemMetricNameMemoryInMB)
+                {
+                    if (itFailoverUnit->second.UpdateResourceLoad(it->Name, it->Value, mapIt->first))
+                    {
+                        plb_.Trace.UpdateLoadOnNode(fuId, ReplicaRole::ToString(ReplicaRole::Secondary), it->Name, it->Value, mapIt->first);
+                    }
+                }
                 else
                 {
                     int index = service.GetCustomLoadIndex(it->Name);
@@ -1291,8 +1352,8 @@ void ServiceDomain::UpdateFailoverUnitWithCreationMoves(vector<Common::Guid> & p
 
 void ServiceDomain::OnMovementGenerated(StopwatchTime timeStamp, Common::Guid decisionGuid, double newAvgStdDev, FailoverUnitMovementTable && movementList)
 {
-    bool isCreation = (scheduler_.CurrentAction.Action == PLBSchedulerActionType::Creation ||
-        scheduler_.CurrentAction.Action == PLBSchedulerActionType::CreationWithMove);
+    bool isCreation = (scheduler_.CurrentAction.Action == PLBSchedulerActionType::NewReplicaPlacement ||
+        scheduler_.CurrentAction.Action == PLBSchedulerActionType::NewReplicaPlacementWithMove);
 
     for (auto it = movementList.begin(); it != movementList.end(); )
     {
@@ -1494,7 +1555,7 @@ ServiceDomain::DomainData ServiceDomain::RefreshStates(StopwatchTime now, PLBDia
     {
 
         scheduler_.RefreshAction(systemState, now, stageDiagnosticsSPtr);
-        systemState.CreatePlacementAndChecker(PartitionClosureType::FromPLBSchedulerAction(scheduler_.CurrentAction.Action));
+        systemState.CreatePlacementAndChecker(scheduler_.CurrentAction.Action);
     }
 
     //Diagnostics
@@ -1645,10 +1706,21 @@ inline void ServiceDomain::AddNodeLoad(Service const& service, FailoverUnit cons
                 replicaLoad = failoverUnit.GetSecondaryLoad(metricIndex, itReplica->NodeId, plb_.Settings);
             }
 
-            //if it is single host replica it will have load set already
-            // discard None and Dropped replicas as they do not contribute to the load
-            if (itReplica->HasLoad() &&
-                metric.IsRGMetric && 
+            // If config for accounting None replicas that have RG is on
+            // account the load only for exclusive hosts as SP is still on the node and LRM still sees that load
+            // NOTE: Application reservation for cpu/mem cannot be supported with the existing code.
+            // None replicas do not carry application reservation, but they carry load, so there can be load inconsistence.
+            if (PLBConfig::GetConfig().IncludeResourceGovernanceNoneReplicaLoad &&
+                itReplica->UseNoneLoad(metric.IsRGMetric) &&
+                service.ServiceDesc.ServicePackageActivationMode == ServiceModel::ServicePackageActivationMode::ExclusiveProcess)
+            {
+                // the load is the same for primary and secondary
+                replicaLoad = failoverUnit.PrimaryEntries[metricIndex];
+            }
+            // if it is single host replica it will have load set already
+            // discard None and Dropped replicas as they do not contribute to the RG load
+            else if (itReplica->HasLoad() &&
+                metric.IsRGMetric &&
                 service.ServiceDesc.ServicePackageActivationMode == ServiceModel::ServicePackageActivationMode::SharedProcess)
             {
                 auto servicePackageReplicaCnt = GetSharedServicePackageNodeCount(service.ServiceDesc.ServicePackageId, itReplica->NodeId);
@@ -1856,10 +1928,21 @@ inline void ServiceDomain::DeleteNodeLoad(Service const& service, FailoverUnit c
                 replicaLoad = failoverUnit.GetSecondaryLoad(metricIndex, itReplica->NodeId, plb_.Settings);
             }
 
-            //if it is single host replica it will have load set already
-            // discard None and Dropped replicas as they do not contribute to the load
-            if (itReplica->HasLoad() && 
-                metric.IsRGMetric && 
+            // If config for accounting None replicas that have RG is on
+            // account the load only for exclusive hosts as SP is still on the node and LRM still sees that load
+            // NOTE: Application reservation for cpu/mem cannot be supported with the existing code.
+            // None replicas do not carry application reservation, but they carry load, so there can be load inconsistence
+            if (PLBConfig::GetConfig().IncludeResourceGovernanceNoneReplicaLoad &&
+                itReplica->UseNoneLoad(metric.IsRGMetric) &&
+                service.ServiceDesc.ServicePackageActivationMode == ServiceModel::ServicePackageActivationMode::ExclusiveProcess)
+            {
+                // the load is the same for primary and secondary
+                replicaLoad = failoverUnit.PrimaryEntries[metricIndex];
+            }
+            // if it is single host replica it will have load set already
+            // discard None and Dropped replicas as they do not contribute to the RG load
+            else if (itReplica->HasLoad() &&
+                metric.IsRGMetric &&
                 service.ServiceDesc.ServicePackageActivationMode == ServiceModel::ServicePackageActivationMode::SharedProcess)
             {
                 auto servicePackageReplicaCnt = GetSharedServicePackageNodeCount(service.ServiceDesc.ServicePackageId, itReplica->NodeId);
@@ -2007,8 +2090,10 @@ inline void ServiceDomain::DeleteNodeLoad(Service const& service, FailoverUnit c
     }
 }
 
-void ServiceDomain::UpdateNodeToFailoverUnitMapping(FailoverUnit const& failoverUnit, std::vector<ReplicaDescription> const& oldReplicas,
-    std::vector<ReplicaDescription> const& newReplicas)
+void ServiceDomain::UpdateNodeToFailoverUnitMapping(FailoverUnit const& failoverUnit,
+    std::vector<ReplicaDescription> const& oldReplicas,
+    std::vector<ReplicaDescription> const& newReplicas,
+    bool isStateful)
 {
     Guid fuId = failoverUnit.FUId;
     for (auto itReplica = oldReplicas.begin(); itReplica != oldReplicas.end(); ++itReplica)
@@ -2024,6 +2109,20 @@ void ServiceDomain::UpdateNodeToFailoverUnitMapping(FailoverUnit const& failover
                 partitionsPerNode_.erase(itNode);
             }
         }
+        if (itReplica->IsInBuild && isStateful && itReplica->CurrentRole != ReplicaRole::Primary)
+        {
+            auto itNodeIndex = plb_.nodeToIndexMap_.find(itReplica->NodeId);
+            uint64 nodeIndex = itNodeIndex == plb_.nodeToIndexMap_.end() ? UINT64_MAX : itNodeIndex->second;
+            ASSERT_IF(nodeIndex == UINT64_MAX, "Replica is on unknown node!");
+            auto itNode = inBuildCountPerNode_.find(nodeIndex);
+            ASSERT_IF(itNode == inBuildCountPerNode_.end(), "Cannot find node {0} in inBuildCountPerNode_", itReplica->NodeId);
+            ASSERT_IF(itNode->second <= 0, "Cannot remove in build replica from node {0} in inBuildCountPerNode_", itReplica->NodeId);
+            itNode->second = itNode->second - 1;
+            if (itNode->second == 0)
+            {
+                inBuildCountPerNode_.erase(itNode);
+            }
+        }
     }
 
     for (auto itReplica = newReplicas.begin(); itReplica != newReplicas.end(); ++itReplica)
@@ -2037,6 +2136,32 @@ void ServiceDomain::UpdateNodeToFailoverUnitMapping(FailoverUnit const& failover
             }
 
             itNode->second.insert(make_pair(fuId, itReplica->UsePrimaryLoad()));
+        }
+        if (itReplica->IsInBuild && isStateful && itReplica->CurrentRole != ReplicaRole::Primary)
+        {
+            auto itNodeIndex = plb_.nodeToIndexMap_.find(itReplica->NodeId);
+            uint64 nodeIndex = itNodeIndex == plb_.nodeToIndexMap_.end() ? UINT64_MAX : itNodeIndex->second;
+            ASSERT_IF(nodeIndex == UINT64_MAX, "Replica is on unknown node!");
+
+            auto itNode = inBuildCountPerNode_.find(nodeIndex);
+            if (itNode == inBuildCountPerNode_.end())
+            {
+                itNode = inBuildCountPerNode_.insert(make_pair(nodeIndex, 1)).first;
+            }
+            else
+            {
+                itNode->second = itNode->second + 1;
+            }
+            if (PLBConfig::GetConfig().PerNodeThrottlingCheck > 0)
+            {
+                // Test code: check if number is over limit.
+                TESTASSERT_IF(
+                    itNode->second > PLBConfig::GetConfig().PerNodeThrottlingCheck,
+                    "Node {0} has {1} InBuildReplicas and limit is {2}.",
+                    itReplica->NodeId,
+                    itNode->second,
+                    PLBConfig::GetConfig().PerNodeThrottlingCheck);
+            }
         }
     }
 }
@@ -2181,14 +2306,14 @@ PartitionClosureUPtr ServiceDomain::GetPartitionClosure(PartitionClosureType::En
     vector<ServicePackage const*> servicePackages;
 
     set<uint64> relatedServices;
-    // used for CreationWithMove
+    // used for NewReplicaPlacementWithMove
     set<Common::Guid> partialClosureFailoverUnits;
     set<Guid> relatedPartitions;
     set<uint64> relatedApplications;
     set<uint64> relatedApplicationsInSingletonReplicaUpgrade;
     // If move existing replica config is true, we need to include all replica for placement
-    bool forCreation = (closureType == PartitionClosureType::Creation);
-    bool forCreationWithMove = (closureType == PartitionClosureType::CreationWithMove);
+    bool forCreation = (closureType == PartitionClosureType::NewReplicaPlacement);
+    bool forCreationWithMove = (closureType == PartitionClosureType::NewReplicaPlacementWithMove);
 
     if (forCreation || (closureType == PartitionClosureType::ConstraintCheck && !fullConstraintCheck_))
     {
@@ -2259,7 +2384,7 @@ PartitionClosureUPtr ServiceDomain::GetPartitionClosure(PartitionClosureType::En
     }
     else if (closureType != PartitionClosureType::None)
     {
-        // Creation with move will first try with partial closure, so we need to compute movable replicas
+        // NewReplicaPlacementWithMove will first try with partial closure, so we need to compute movable replicas
         // if that isn't successful, it will try with full closure
         if (forCreationWithMove)
         {
@@ -2314,7 +2439,8 @@ PartitionClosureUPtr ServiceDomain::GetPartitionClosure(PartitionClosureType::En
         if (service->ServiceDesc.ServicePackageId != 0)
         {
             auto servicePackageIt = plb_.servicePackageTable_.find(service->ServiceDesc.ServicePackageId);
-            if (servicePackageIt != plb_.servicePackageTable_.end() && servicePackageIt->second.HasRGMetrics)
+            if (servicePackageIt != plb_.servicePackageTable_.end() && 
+                (servicePackageIt->second.HasRGMetrics || servicePackageIt->second.HasContainerImages))
             {
                 addedSPs.insert(&(servicePackageIt->second));
             }
@@ -2350,7 +2476,7 @@ std::set<uint64> ServiceDomain::GetApplicationsInSingletonReplicaUpgrade(std::se
                 {
                     FailoverUnit const& partition = GetFailoverUnit(*itPartition);
                     if (partition.ActualReplicaDifference > 0 &&
-                        GetService(partition.FuDescription.ServiceId).ServiceDesc.TargetReplicaSetSize == 1)
+                        partition.TargetReplicaSetSize == 1)
                     {
                         applicationInSingletonReplicaUpgrade.insert(*itAppId);
                         break;
@@ -2571,8 +2697,8 @@ void ServiceDomain::ComputeApplicationClosure(
                     //if it was not present before this returns true
                     if (relatedPartitions.insert(*itPartition).second)
                     {
-                        auto & fu = GetFailoverUnit(*itPartition);
-                        relatedServices.insert(fu.FuDescription.ServiceId);
+                        auto & ft = GetFailoverUnit(*itPartition);
+                        relatedServices.insert(ft.FuDescription.ServiceId);
                     }
                 }
             }
@@ -2850,6 +2976,7 @@ void ServiceDomain::VerifyNodeLoads(bool includeDisappearingReplicas) const
                     if (itMetric->IsRGMetric)
                     {
                         rgMetrics.insert(itMetric->Name);
+                        ++metricIndex;
                         continue;
                     }
 

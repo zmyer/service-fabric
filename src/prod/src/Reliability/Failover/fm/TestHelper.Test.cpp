@@ -321,6 +321,10 @@ LoadBalancingComponent::FailoverUnitMovementType::Enum TestHelper::PlbMovementAc
     {
         return LoadBalancingComponent::FailoverUnitMovementType::MoveSecondary;
     }
+    else if (value == L"MoveInstance")
+    {
+        return LoadBalancingComponent::FailoverUnitMovementType::MoveInstance;
+    }
     else if (value == L"MovePrimary")
     {
         return LoadBalancingComponent::FailoverUnitMovementType::MovePrimary;
@@ -333,17 +337,29 @@ LoadBalancingComponent::FailoverUnitMovementType::Enum TestHelper::PlbMovementAc
     {
         return LoadBalancingComponent::FailoverUnitMovementType::AddSecondary;
     }
+    else if (value == L"AddInstance")
+    {
+        return LoadBalancingComponent::FailoverUnitMovementType::AddInstance;
+    }
     else if (value == L"PromoteSecondary")
     {
         return LoadBalancingComponent::FailoverUnitMovementType::PromoteSecondary;
     }
-    else if (value == L"Void")
+    else if (value == L"RequestedPlacementNotPossible")
     {
-        return LoadBalancingComponent::FailoverUnitMovementType::Void;
+        return LoadBalancingComponent::FailoverUnitMovementType::RequestedPlacementNotPossible;
     }
-    else if (value == L"Drop")
+    else if (value == L"DropPrimary")
     {
-        return LoadBalancingComponent::FailoverUnitMovementType::Drop;
+        return LoadBalancingComponent::FailoverUnitMovementType::DropPrimary;
+    }
+    else if (value == L"DropSecondary")
+    {
+        return LoadBalancingComponent::FailoverUnitMovementType::DropSecondary;
+    }
+    else if (value == L"DropInstance")
+    {
+        return LoadBalancingComponent::FailoverUnitMovementType::DropInstance;
     }
     else
     {
@@ -351,7 +367,7 @@ LoadBalancingComponent::FailoverUnitMovementType::Enum TestHelper::PlbMovementAc
     }
 }
 
-FailoverUnitUPtr TestHelper::FailoverUnitFromString(wstring const& failoverUnitStr)
+FailoverUnitUPtr TestHelper::FailoverUnitFromString(wstring const& failoverUnitStr, vector<Reliability::ServiceScalingPolicyDescription> scalingPolicies)
 {
     vector<wstring> tokens;
     StringUtility::Split<wstring>(failoverUnitStr, tokens, L" ");
@@ -377,10 +393,16 @@ FailoverUnitUPtr TestHelper::FailoverUnitFromString(wstring const& failoverUnitS
     int scaleoutCount = 0;
     auto serviceType = make_shared<ServiceType>(typeId, applicationEntry);
     auto serviceInfo = make_shared<ServiceInfo>(
-        ServiceDescription(serviceName, 0, 0, 1, targetReplicaSetSize, minReplicaSetSize, flags.IsStateful(), flags.HasPersistedState(), TimeSpan::FromSeconds(60.0), TimeSpan::MaxValue, TimeSpan::FromSeconds(300.0), typeId, vector<ServiceCorrelationDescription>(), placementConstraints, scaleoutCount, vector<ServiceLoadMetricDescription>(), 0, vector<byte>()),
+        ServiceDescription(serviceName, 0, 0, 1, targetReplicaSetSize, minReplicaSetSize, flags.IsStateful(), 
+            flags.HasPersistedState(), TimeSpan::FromSeconds(60.0), TimeSpan::MaxValue, TimeSpan::FromSeconds(300.0), typeId,
+            vector<ServiceCorrelationDescription>(), placementConstraints, scaleoutCount, vector<ServiceLoadMetricDescription>(), 
+            0, vector<byte>(), L"", std::vector<ServiceModel::ServicePlacementPolicyDescription>(), ServiceModel::ServicePackageActivationMode::SharedProcess,
+            L"", vector<Reliability::ServiceScalingPolicyDescription>(scalingPolicies)),
         serviceType,
         FABRIC_INVALID_SEQUENCE_NUMBER,
         false);
+
+    serviceInfo->AddFailoverUnitId(FailoverUnitId());
 
     FailoverUnitUPtr failoverUnit = FailoverUnitUPtr(new FailoverUnit(
         FailoverUnitId(),
@@ -657,10 +679,20 @@ FailoverManagerSPtr TestHelper::CreateFauxFM(ComponentRoot const& root, bool use
     auto fmStore = make_unique<FailoverManagerStore>(move(replicatedStore));
     ComPointer<IFabricStatefulServicePartition> servicePartition;
 
+    auto fabricNodeConfig = make_shared<FabricNodeConfig>();
+    Api::IClientFactoryPtr clientFactoryPtr;
+    auto error = ClientTest::TestClientFactory::CreateLocalClientFactory(fabricNodeConfig, clientFactoryPtr);
+    if (!error.IsSuccess())
+    {
+        Assert::CodingError("Failed to create local client factory: error={0}", error);
+    }
+
     fm = FailoverManager::CreateFM(
         fs->shared_from_this(),
         healthClient,
-        make_shared<FabricNodeConfig>(),
+        Api::IServiceManagementClientPtr(),
+        clientFactoryPtr,
+        fabricNodeConfig,
         move(fmStore),
         servicePartition,
         Guid(),

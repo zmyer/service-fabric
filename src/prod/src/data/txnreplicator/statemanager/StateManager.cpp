@@ -19,9 +19,10 @@ const KStringView StateManager::DeleteOperation = L"Delete";
 NTSTATUS StateManager::Create(
     __in PartitionedReplicaId const & traceId,
     __in IRuntimeFolders & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IStatefulPartition & partition,
     __in IStateProvider2Factory & stateProviderFactory,
     __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+    __in bool hasPersistedState,
     __in KAllocator& allocator,
     __out SPtr & result) noexcept
 {
@@ -30,7 +31,8 @@ NTSTATUS StateManager::Create(
         runtimeFolders, 
         partition, 
         stateProviderFactory,
-        transactionalReplicatorConfig);
+        transactionalReplicatorConfig,
+        hasPersistedState);
     if (result == nullptr)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -262,6 +264,10 @@ NTSTATUS StateManager::CreateEnumerator(
     // Return NTSTATUS error code SF_STATUS_OBJECT_CLOSED if closed. If not, does not allow the state manager to close before this function is completed.
     ApiEntryReturn();
 
+    // Check read status before return the enumerator, the function CheckIfReadable will trace if it fails.
+    NTSTATUS status = CheckIfReadable(StateManagerName);
+    RETURN_ON_FAILURE(status);
+
     return CreateInternalEnumerator(parentsOnly, outEnumerator);
 }
 
@@ -298,7 +304,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
     status = CheckIfWritable("GetOrAddAsync", transaction, stateProviderName);
     CO_RETURN_ON_FAILURE(status);
 
-    // In Managed serialization mode, the initializationParameters buffer count should only have 0 or 1 buffer and 0 indicats the byte array is empty.
+    // In Managed serialization mode, the initializationParameters buffer count should only have 0 or 1 buffer and 0 indicates the byte array is empty.
     if (serializationMode_ == SerializationMode::Managed && initializationParameters != nullptr && initializationParameters->BufferCount > 1)
     {
         StateManagerEventSource::Events->ISPM_ApiError(
@@ -364,7 +370,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
     }
 
     // If it exists, add the read lock context, stateProvider must be not null
-    // Todo: Preethas, use remove lock context instead of releasing the lock on catch as it is consistent with the rest of the code
+    // Note: Preethas, use remove lock context instead of releasing the lock on catch as it is consistent with the rest of the code
     // since remove lock context on LR's ILockcontext has never been used/tested, do it in the next release, this is the safer option for now.
     if (NT_SUCCESS(status))
     {
@@ -377,7 +383,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
         if (NT_SUCCESS(status) == false)
         {
             // If Create failed, release the read lock first then return NTSTATUS error code, otherwise lock leak
-            // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+            // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
             StateManagerEventSource::Events->ISPM_ApiError(
                 TracePartitionId,
                 ReplicaId,
@@ -427,7 +433,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
             TraceId);
 
         // If state provider exists, Get API will return STATUS_SUCCESS. GetOrAddAsync API should
-        // return STATUS_SUCCESS and set out param alreadyExist as true.
+        // return STATUS_SUCCESS and set out parameter alreadyExist as true.
         alreadyExist = true;
         co_return STATUS_SUCCESS;
     }
@@ -473,7 +479,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
     if (NT_SUCCESS(status) == false)
     {
         // If TransactionContext Create failed, release the write lock first then return NTSTATUS error code, otherwise lock leak
-        // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+        // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
         StateManagerEventSource::Events->ISPM_ApiError(
             TracePartitionId,
             ReplicaId,
@@ -531,8 +537,7 @@ Awaitable<NTSTATUS> StateManager::GetOrAddAsync(
 
     // Check if the stateProvider exists or not again, it might be added before getting the write lock
     // If state provider exists, Get API will return STATUS_SUCCESS. GetOrAddAsync API should
-    // return STATUS_SUCCESS and set out param alreadyExist as true.
-    // TODO: We should demote the write lock to read in future.
+    // return STATUS_SUCCESS and set out parameter alreadyExist as true.
     status = Get(*copyStateProviderName, stateProvider);
 
     // RDBug 10617854: Get might return SF_STATUS_NOT_READY when multiple GetOrAddAsync tasks run
@@ -674,7 +679,7 @@ Awaitable<NTSTATUS> StateManager::AddAsync(
     status = CheckIfWritable("AddAsync", transaction, stateProviderName);
     CO_RETURN_ON_FAILURE(status);
 
-    // In Managed serialization mode, the initializationParameters buffer count should only have 0 or 1 buffer and 0 indicats the byte array is empty.
+    // In Managed serialization mode, the initializationParameters buffer count should only have 0 or 1 buffer and 0 indicates the byte array is empty.
     if (serializationMode_ == SerializationMode::Managed && initializationParameters != nullptr && initializationParameters->BufferCount > 1)
     {
         StateManagerEventSource::Events->ISPM_ApiError(
@@ -764,7 +769,7 @@ Awaitable<NTSTATUS> StateManager::AddAsync(
             status);
 
         // If TransactionContext Create failed, release the write lock first then return NTSTATUS error code, otherwise lock leak
-        // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+        // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
         NTSTATUS releaseLockStatus = smLockContextSPtr->ReleaseLock(transaction.TransactionId);
         if (NT_SUCCESS(releaseLockStatus) == false)
         {
@@ -915,7 +920,7 @@ Awaitable<NTSTATUS> StateManager::RemoveAsync(
         co_return exception.GetStatus();
     }
 
-    // TODO: PreethaS: This is a workaround until state manager supports hierarchy. Once hierarchy is supported,
+    // Note: PreethaS: This is a workaround until state manager supports hierarchy. Once hierarchy is supported,
     // hierarchical information should be available in the state manager and should not be queried from the state provider.
     // Query for children
     KHashTable<KUri::CSPtr, StateProviderInfoInternal> children(
@@ -1405,7 +1410,7 @@ NTSTATUS StateManager::PrepareCheckpoint(
     }
     catch (Exception & e)
     {
-        TraceException(L"PerformCheckpointAsync: CheckpointManager::PrepareCheckpoint", e);
+        TraceException(L"PrepareCheckpoint: CheckpointManager::PrepareCheckpoint", e);
         return e.GetStatus();
     }
 
@@ -1445,7 +1450,7 @@ Awaitable<NTSTATUS> StateManager::PerformCheckpointAsync(
 
     try
     {
-        co_await checkpointManagerSPtr_->PerformCheckpointAsync(*metadataManagerSPtr_, cancellationToken);
+        co_await checkpointManagerSPtr_->PerformCheckpointAsync(*metadataManagerSPtr_, cancellationToken, hasPersistedState_);
     }
     catch (Exception & e)
     {
@@ -1688,7 +1693,6 @@ ktl::Awaitable<NTSTATUS> StateManager::RestoreStateProvidersAsync(
     status = co_await apiDispatcher_->RestoreCheckpointAsync(stateProviders, backupDirectoryArray, cancellationToken);
     CO_RETURN_ON_FAILURE(status);
 
-    // TODO: Add time and count traces.
     StateManagerEventSource::Events->RestoreStateProviderEnd(
         TracePartitionId,
         ReplicaId);
@@ -2095,7 +2099,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnSecondaryInsertAsync(
     NTSTATUS status = STATUS_UNSUCCESSFUL;
 
     // Poor man's idempotency check.
-    // TODO: Use prepareCheckpointLSN.
+    // #11632792: Use prepareCheckpointLSN.
     if (metadataManagerSPtr_->IsStateProviderDeletedOrStale(metadataOperationData.StateProviderId, MetadataMode::DelayDelete))
     {
         // RDBug 10631157: Add idempotent operation check
@@ -2168,7 +2172,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnSecondaryInsertAsync(
     status = StateManagerTransactionContext::Create(transactionBase.TransactionId, *lockContext, OperationType::Add, GetThisAllocator(), transactionContextSPtr);
 
     // If TransactionContext Create failed, release the write lock first then throw the exception, otherwise lock leak
-    // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+    // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
     ReleaseLockAndThrowIfOnFailure(transactionBase.TransactionId, *lockContext, status);
 
     // Resurrection optimization right after copy
@@ -2201,7 +2205,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnSecondaryInsertAsync(
 
         // As part of this optimization, we still need to tell the replica that its existing not checkpointed state needs to be discarded.
         // Note: We could pass a bool/enum to indicate that this is a resurrection.
-        status = apiDispatcher_->BeginSettingCurrentState(*metadata);
+        status = co_await apiDispatcher_->BeginSettingCurrentStateAsync(*metadata);
         THROW_ON_FAILURE(status);
 
         status = co_await apiDispatcher_->EndSettingCurrentStateAsync(*metadata, CancellationToken::None);
@@ -2386,7 +2390,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnSecondaryDeleteAsync(
         transactionContextSPtr);
 
     // If TransactionContext Create failed, release the write lock first then throw the exception, otherwise lock leak
-    // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+    // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
     ReleaseLockAndThrowIfOnFailure(transactionBase.TransactionId, *lockContext, status);
 
     metadataSPtr->DeleteLSN = applyLSN;
@@ -2556,7 +2560,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnRecoveryInsertAsync(
         transactionContext);
 
     // If TransactionContext Create failed, release the write lock first then throw the exception, otherwise lock leak
-    // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+    // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
     ReleaseLockAndThrowIfOnFailure(transactionBase.TransactionId, *lockContext, status);
 
     IStateProvider2::SPtr stateProvider = nullptr;
@@ -2727,7 +2731,7 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyOnRecoveryRemoveAsync(
     status = StateManagerTransactionContext::Create(transactionBase.TransactionId, *lockContext, OperationType::Remove, GetThisAllocator(), transactionContext);
 
     // If TransactionContext Create failed, release the write lock first then throw the exception, otherwise lock leak
-    // TODO: #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
+    // #9019333, Add tests for the case, TransactionContext Create failed after getting the read/write lock
     ReleaseLockAndThrowIfOnFailure(transactionBase.TransactionId, *lockContext, status);
 
     metadataSPtr->DeleteLSN = applyLSN;
@@ -2835,10 +2839,6 @@ Awaitable<OperationContext::CSPtr> StateManager::ApplyAsync(
                 stateProviderId);
 
             result = co_await metadataSPtr->StateProvider->ApplyAsync(applyLSN, transactionBase, applyContext, metadataPtr, dataPtr);
-
-            // TODO: PreethaS: set checkpoint flag to indicate that checkpoint needs to be called on the state provider.
-            // metadata.SetCheckpointFlag();
-            // FabricEvents.Events.OnApply(this.traceType, metadata.ToString(), transaction.Id);
         }
     }
 
@@ -2975,7 +2975,6 @@ KString::CSPtr StateManager::CreateReplicaFolderPath(
     boolStatus = folderName->Concat(replicaIdString);
     ASSERT_IFNOT(boolStatus == TRUE, "{0}:{1} CreateWorkDirectory concat failed.", Common::Guid(partitionId), replicaId);
 
-    // TODO: This could be inplace.
     KPath::CombineInPlace(*replicaFolderPath, *folderName);
     return replicaFolderPath.RawPtr();
 }
@@ -2991,6 +2990,14 @@ Task StateManager::OnServiceOpenAsync() noexcept
         openParametersSPtr_->CleanupRestore);
 
     SetDeferredCloseBehavior();
+    
+    if (hasPersistedState_ == false)
+    {
+        // Nothing to recover
+        openParametersSPtr_ = nullptr;
+        CompleteOpen(status);
+        co_return;
+    }
 
     // Recover State Manager Checkpoint.
     try
@@ -3524,7 +3531,7 @@ Awaitable<void> StateManager::RecoverStateManagerCheckpointAsync(__in Cancellati
         cancellationToken);
 
     stopwatch.Stop();
-    auto timer = stopwatch.ElapsedMilliseconds;
+    int64 timer = stopwatch.ElapsedMilliseconds;
 
     if (recoveredMetadataList == nullptr)
     {
@@ -3703,7 +3710,7 @@ Awaitable<void> StateManager::CopyToLocalStateAsync(
             metadata->MetadataMode = MetadataMode::Active;
 
             // Note: Because U->I is called before BeginSettingCurrentState, we can assert that it must be idle secondary.
-            status = apiDispatcher_->BeginSettingCurrentState(*metadata);
+            status = co_await apiDispatcher_->BeginSettingCurrentStateAsync(*metadata);
             Helper::ThrowIfNecessary(
                 status,
                 TracePartitionId,
@@ -3756,7 +3763,7 @@ Awaitable<void> StateManager::CopyToLocalStateAsync(
         for (Metadata::SPtr stateProviderMetadataSPtr : *stateproviderMetadataArray)
         {
             // This is where a given state provider tree (parent and all the children) get opened and prepared one at a time.
-            // TODO: We can make this parallel: This will only help state providers that are hierarchical. 
+            // 11908441: We can make this parallel: This will only help state providers that are hierarchical. 
             // MCoskun: order of the following operations is significant.
             // We need to Open the state provider before adding in to the metadata manager because, in case of a failure/fault
             // CloseAsync and Abort close all state providers in metadata manager (active, transient and deleted).
@@ -3808,7 +3815,7 @@ Awaitable<void> StateManager::CopyToLocalStateAsync(
                 cancellationToken);
             THROW_ON_FAILURE(status);
 
-            status = apiDispatcher_->BeginSettingCurrentState(*stateProviderMetadataSPtr);
+            status = co_await apiDispatcher_->BeginSettingCurrentStateAsync(*stateProviderMetadataSPtr);
             Helper::ThrowIfNecessary(
                 status,
                 TracePartitionId,
@@ -3943,7 +3950,7 @@ NTSTATUS StateManager::GetChildren(
             TraceId);
 
         // In the following try catch block, the only function that may throw exception is IStateProvider2::GetChildren
-        // TODO #10260729: Make a GetChildren function in ApiDispatcher. Make sure KArray is passed in and every GetChildren
+        // #10260729: Make a GetChildren function in ApiDispatcher. Make sure KArray is passed in and every GetChildren
         // interface implementation needs to make changes accordingly.
         try
         {
@@ -3997,7 +4004,7 @@ NTSTATUS StateManager::GetChildren(
 
                 StateProviderInfoInternal info(*childInfo.TypeName, *childInfo.Name, stateProviderId, *entry);
                 status = children.Put(childInfo.Name, info, FALSE);
-                if (NT_SUCCESS(status) == false && status != STATUS_OBJECT_NAME_EXISTS)
+                if (NT_SUCCESS(status) == false && status != STATUS_OBJECT_NAME_COLLISION)
                 {
                     StateManagerEventSource::Events->Error(
                         TracePartitionId,
@@ -4110,7 +4117,7 @@ __checkReturn Awaitable<NTSTATUS> StateManager::AddSingleAsync(
                 transaction.TransactionId,
                 status);
 
-            // TODO: #9019333, Add tests for the case, StateManagerTransactionContext Create failed after getting the read/write lock
+            // #9019333, Add tests for the case, StateManagerTransactionContext Create failed after getting the read/write lock
             NTSTATUS releaseLockStatus = lockContextSPtr->ReleaseLock(transaction.TransactionId);
             if (NT_SUCCESS(releaseLockStatus) == false)
             {
@@ -4321,7 +4328,7 @@ __checkReturn Awaitable<NTSTATUS> StateManager::RemoveSingleAsync(
             transaction.TransactionId,
             status);
 
-        // TODO: #9019333, Add tests for the case, StateManagerTransactionContext Create failed after getting the read/write lock
+        // #9019333, Add tests for the case, StateManagerTransactionContext Create failed after getting the read/write lock
         NTSTATUS releaseLockStatus = lockContextSPtr->ReleaseLock(transaction.TransactionId);
         if (NT_SUCCESS(releaseLockStatus) == false)
         {
@@ -4605,7 +4612,7 @@ NTSTATUS StateManager::IsRegistered(
             stateProviderId,
             SF_STATUS_OBJECT_CLOSED);
 
-        // TODO: In managed this is FabricObjectClosedException. But SM is not closing. We should differentiate.
+        // 11908539: In managed this is FabricObjectClosedException. But SM is not closing. We should differentiate.
         return SF_STATUS_OBJECT_CLOSED;
     }
 
@@ -4699,8 +4706,7 @@ __checkReturn NTSTATUS StateManager::CheckIfReadable(__in KUriView const & state
         isReadable,
         role);
 
-    // TODO: Returning not ready instead of not readable. If it gets a status of its own, we can use it here.
-    return SF_STATUS_NOT_READY;
+    return SF_STATUS_NOT_READABLE;
 }
 
 // Checks whether a work should start.
@@ -4795,95 +4801,123 @@ Awaitable<void> StateManager::InitializeStateProvidersAsync(
     ApiEntry();
 
     NTSTATUS status = STATUS_UNSUCCESSFUL;
+    KSharedArray<Metadata::SPtr>::SPtr stateProviderListSPtr = nullptr;
 
-    ASSERT_IFNOT(metadata.StateProvider != nullptr, "{0}: Null state provider during initialization. SPid: {1}", TraceId, metadata.StateProviderId);
+    ASSERT_IF(
+        metadata.StateProvider == nullptr, 
+        "{0}: Null state provider during initialization. SPid: {1} SecondaryInsertCase: {2}", 
+        TraceId, 
+        metadata.StateProviderId,
+        shouldMetadataBeAdded);
 
     try
     {
         // Empty array indicates that this is a child.
-        KSharedArray<Metadata::SPtr>::SPtr stateProviderListSPtr = InitializeStateProvidersInOrder(metadata);
+        stateProviderListSPtr = InitializeStateProvidersInOrder(metadata);
         if (stateProviderListSPtr == nullptr)
         {
             co_return;
-        }
-
-        for (Metadata::SPtr stateProviderMetadataSPtr : *stateProviderListSPtr)
-        {
-            IStateProvider2::SPtr stateProviderSPtr = stateProviderMetadataSPtr->StateProvider;
-            ASSERT_IFNOT(
-                stateProviderMetadataSPtr->StateProvider != nullptr, 
-                "{0}: Null state provider during initialization. SPId: {1}", 
-                TraceId, 
-                stateProviderMetadataSPtr->StateProviderId);
-
-            // MCoskun: Order of the following operations is significant to avoid leaks (Leaving state providers not closed).
-            // We must only add a state add to metadata manager once the state provider has been opened.
-            status = co_await apiDispatcher_->OpenAsync(*stateProviderMetadataSPtr, CancellationToken::None);
-            THROW_ON_FAILURE(status);
-
-            if (shouldMetadataBeAdded)
-            {
-                bool result = metadataManagerSPtr_->TryAdd(*stateProviderMetadataSPtr->Name, *stateProviderMetadataSPtr);
-                ASSERT_IFNOT(result, "{0}: Adding metadata for SPid {1} failed.", TraceId, stateProviderMetadataSPtr->StateProviderId);
-            }
-            else
-            {
-                metadataManagerSPtr_->ResetTransientState(*stateProviderMetadataSPtr->Name);
-            }
-
-            status = co_await apiDispatcher_->RecoverCheckpointAsync(*stateProviderMetadataSPtr, CancellationToken::None);
-            THROW_ON_FAILURE(status);
-
-            status = co_await this->AcquireChangeRoleLockAsync();
-            THROW_ON_FAILURE(status);
-
-            KFinally([&] {changeRoleLockSPtr_->ReleaseWriteLock(); });
-
-            FABRIC_REPLICA_ROLE role = GetCurrentRole();
-
-            switch(role)
-            {
-            case FABRIC_REPLICA_ROLE_PRIMARY:
-                status = co_await apiDispatcher_->ChangeRoleAsync(
-                    *stateProviderMetadataSPtr, 
-                    FABRIC_REPLICA_ROLE_PRIMARY, 
-                    CancellationToken::None);
-                THROW_ON_FAILURE(status);
-                break;
-            case FABRIC_REPLICA_ROLE_IDLE_SECONDARY:
-                status = co_await apiDispatcher_->ChangeRoleAsync(
-                    *stateProviderMetadataSPtr, 
-                    FABRIC_REPLICA_ROLE_IDLE_SECONDARY, 
-                    CancellationToken::None);
-                THROW_ON_FAILURE(status);
-                break;
-            case FABRIC_REPLICA_ROLE_ACTIVE_SECONDARY:
-                status = co_await apiDispatcher_->ChangeRoleAsync(
-                    *stateProviderMetadataSPtr, 
-                    FABRIC_REPLICA_ROLE_IDLE_SECONDARY, 
-                    CancellationToken::None);
-                THROW_ON_FAILURE(status);
-
-                status = co_await apiDispatcher_->ChangeRoleAsync(
-                    *stateProviderMetadataSPtr, 
-                    FABRIC_REPLICA_ROLE_ACTIVE_SECONDARY, 
-                    CancellationToken::None);
-                THROW_ON_FAILURE(status);
-                break;
-            default:
-                ASSERT_IFNOT(
-                    false,
-                    "{0}: Unexpected Role {1}",
-                    TraceId,
-                    role);
-                break;
-            }
         }
     }
     catch (Exception & exception)
     {
         TraceException(L"InitializeStateProvidersAsync", exception);
         throw;
+    }
+
+    for (Metadata::SPtr stateProviderMetadataSPtr : *stateProviderListSPtr)
+    {
+        IStateProvider2::SPtr stateProviderSPtr = stateProviderMetadataSPtr->StateProvider;
+        ASSERT_IFNOT(
+            stateProviderMetadataSPtr->StateProvider != nullptr, 
+            "{0}: Null state provider during initialization. SPId: {1}", 
+            TraceId, 
+            stateProviderMetadataSPtr->StateProviderId);
+
+        // MCoskun: Order of the following operations is significant to avoid leaks (Leaving state providers not closed).
+        // We must only add a state add to metadata manager once the state provider has been opened.
+        status = co_await apiDispatcher_->OpenAsync(*stateProviderMetadataSPtr, CancellationToken::None);
+        THROW_ON_FAILURE(status);
+
+        status = co_await apiDispatcher_->RecoverCheckpointAsync(*stateProviderMetadataSPtr, CancellationToken::None);
+        if (NT_SUCCESS(status) == false)
+        {
+            co_await this->CloseOpenedStateProviderOnFailureAsync(
+                *stateProviderMetadataSPtr);
+            THROW_ON_FAILURE(status);
+        }
+
+        status = co_await this->AcquireChangeRoleLockAsync();
+        if (NT_SUCCESS(status) == false)
+        {
+            co_await this->CloseOpenedStateProviderOnFailureAsync(
+                *stateProviderMetadataSPtr);
+            THROW_ON_FAILURE(status);
+        }
+        KFinally([&] {changeRoleLockSPtr_->ReleaseWriteLock(); });
+
+        FABRIC_REPLICA_ROLE role = GetCurrentRole();
+
+        switch(role)
+        {
+        case FABRIC_REPLICA_ROLE_PRIMARY:
+            status = co_await apiDispatcher_->ChangeRoleAsync(
+                *stateProviderMetadataSPtr, 
+                FABRIC_REPLICA_ROLE_PRIMARY, 
+                CancellationToken::None);
+            break;
+        case FABRIC_REPLICA_ROLE_IDLE_SECONDARY:
+            status = co_await apiDispatcher_->ChangeRoleAsync(
+                *stateProviderMetadataSPtr, 
+                FABRIC_REPLICA_ROLE_IDLE_SECONDARY, 
+                CancellationToken::None);
+            break;
+        case FABRIC_REPLICA_ROLE_ACTIVE_SECONDARY:
+            status = co_await apiDispatcher_->ChangeRoleAsync(
+                *stateProviderMetadataSPtr, 
+                FABRIC_REPLICA_ROLE_IDLE_SECONDARY, 
+                CancellationToken::None);
+            if (NT_SUCCESS(status) == false)
+            {
+                co_await this->CloseOpenedStateProviderOnFailureAsync(
+                    *stateProviderMetadataSPtr);
+                THROW_ON_FAILURE(status);
+            }
+
+            status = co_await apiDispatcher_->ChangeRoleAsync(
+                *stateProviderMetadataSPtr, 
+                FABRIC_REPLICA_ROLE_ACTIVE_SECONDARY, 
+                CancellationToken::None);
+            break;
+        default:
+            ASSERT_IFNOT(
+                false,
+                "{0}: Unexpected Role {1}",
+                TraceId,
+                role);
+            break;
+        }
+
+        // IF ChangeRoleAsync call on state provider failed, Close it if necessary and throw exception.
+        if (NT_SUCCESS(status) == false)
+        {
+            co_await this->CloseOpenedStateProviderOnFailureAsync(
+                *stateProviderMetadataSPtr);
+            THROW_ON_FAILURE(status);
+        }
+
+        // Note: Move this part here instead of after Openasync since there is a race between Get(when TransientCreate set to false)
+        // and state provider becomes available. Now it ensures the state provider is ready and then Get call can come in.
+        // Here the state provider changed to active.
+        if (shouldMetadataBeAdded)
+        {
+            bool result = metadataManagerSPtr_->TryAdd(*stateProviderMetadataSPtr->Name, *stateProviderMetadataSPtr);
+            ASSERT_IFNOT(result, "{0}: Adding metadata for SPid {1} failed.", TraceId, stateProviderMetadataSPtr->StateProviderId);
+        }
+        else
+        {
+            metadataManagerSPtr_->ResetTransientState(*stateProviderMetadataSPtr->Name);
+        }
     }
 
     co_return;
@@ -5003,10 +5037,15 @@ void StateManager::AddChildrenToList(
 KString::CSPtr StateManager::CreateStateProviderWorkDirectory(__in FABRIC_STATE_PROVIDER_ID stateProviderId)
 {
     NTSTATUS status = STATUS_UNSUCCESSFUL;
-
     KString::CSPtr stateProviderWorkDirectory = GetStateProviderWorkDirectory(stateProviderId);
 
-    // TODO: Once we have the serialization mode configuration plumbed through, we can check if SerailiationMode == Managed (v1).
+    if (hasPersistedState_ == false)
+    {
+        // Returning path in case volatile state provider really needs it
+        return stateProviderWorkDirectory;
+    }
+
+    // #11908559: Once we have the serialization mode configuration plumbed through, we can check if SerailiationMode == Managed (v1).
     // If so we do not need to check if we need to upgrade the folder structure.
     {
         bool isMoved;
@@ -5195,7 +5234,7 @@ KArray<KString::CSPtr> StateManager::GetDirectoriesInWorkDirectory()
         L"GetDirectoriesInWorkDirectory: Create workDirectoryArray.",
         Helper::StateManager);
 
-    // TODO: #8734667: Use KVolumeNamespace::QueryDirectories()
+    // #8734667: Use KVolumeNamespace::QueryDirectories()
     wstring smFolder(*workDirectoryPath_);
 
     vector<wstring> directoryVector = Common::Directory::GetSubDirectories(smFolder, L"*", true, true);
@@ -5535,11 +5574,26 @@ void StateManager::ReleaseChangeRoleLock() noexcept
     changeRoleLockSPtr_->ReleaseWriteLock();
 }
 
+ktl::Awaitable<void> StateManager::CloseOpenedStateProviderOnFailureAsync(
+    __in Metadata & metadata) noexcept
+{
+    NTSTATUS closeStatus = co_await apiDispatcher_->CloseAsync(
+        metadata,
+        ApiDispatcher::FailureAction::AbortStateProvider,
+        CancellationToken::None);
+    ASSERT_IFNOT(
+        NT_SUCCESS(closeStatus),
+        "{0}: ApiDispatcher::CloseAsync returned failed status even though FaultAction = AbortStateProvider: {1}, SPId: {2}",
+        TraceId,
+        closeStatus,
+        metadata.StateProviderId);
+}
+
  NTSTATUS StateManager::Copy(
      __in KUriView const & uriView,
      __out KUri::CSPtr & outStateProviderName) const noexcept
 {
-    // TODO: #9022212 KUri.Create to support const KUriView
+    // #9022212 KUri.Create to support const KUriView
     KUriView & tmpUriView = const_cast<KUriView &>(uriView);
     KUri::CSPtr copyStateProviderName;
     NTSTATUS status = KUri::Create(tmpUriView, GetThisAllocator(), (KUri::SPtr&)copyStateProviderName);
@@ -5600,9 +5654,9 @@ NTSTATUS StateManager::GetCurrentState(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS StateManager::BeginSettingCurrentState() noexcept
+ktl::Awaitable<NTSTATUS> StateManager::BeginSettingCurrentStateAsync() noexcept
 {
-    ApiEntryReturn();
+    ApiEntryAsync();
 
     try
     {
@@ -5610,10 +5664,10 @@ NTSTATUS StateManager::BeginSettingCurrentState() noexcept
     }
     catch (Exception & e)
     {
-        return e.GetStatus();
+        co_return e.GetStatus();
     }
 
-    return STATUS_SUCCESS;
+    co_return STATUS_SUCCESS;
 }
 
 Awaitable<NTSTATUS> StateManager::SetCurrentStateAsync(
@@ -5656,7 +5710,7 @@ Awaitable<NTSTATUS> StateManager::SetCurrentStateAsync(
             Metadata::SPtr metadata;
             bool isDeleted = metadataManagerSPtr_->TryGetDeletedMetadata(namedOperationData->StateProviderId, metadata);
             ASSERT_IFNOT(isDeleted, "{0}: State Provider {1} must be in the deleted list.", TraceId, namedOperationData->StateProviderId)
-            co_return SF_STATUS_OBJECT_CLOSED; // TODO: We might want to have a new one for this.
+            co_return SF_STATUS_OBJECT_CLOSED; 
         }
 
         // TryGetMetadata may throw exception. Catches it and returns NTSTATUS error code.
@@ -5744,7 +5798,7 @@ NTSTATUS StateManager::NotifyStateManagerStateChanged(
 
     try
     {
-        // TODO: We should add ApiMonitoring here.
+        // #11908602: We should add ApiMonitoring here.
         eventHandler->OnRebuilt(*txnReplicator, stateProviders);
     }
     catch (Exception & e)
@@ -5799,7 +5853,7 @@ NTSTATUS StateManager::NotifyStateManagerStateChanged(
 
     try
     {
-        // TODO: We should add ApiMonitoring here.
+        // #11908602: We should add ApiMonitoring here.
         if (action == NotifyStateManagerChangedAction::Add)
         {
             eventHandler->OnAdded(*txnReplicator, *txnPtr, name, stateProvider);
@@ -5821,9 +5875,10 @@ NTSTATUS StateManager::NotifyStateManagerStateChanged(
 FAILABLE StateManager::StateManager(
     __in PartitionedReplicaId const & traceId,
     __in IRuntimeFolders & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IStatefulPartition & partition,
     __in IStateProvider2Factory & stateProviderFactory,
-    __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig) noexcept
+    __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+    __in bool hasPersistedState) noexcept
     : KAsyncServiceBase()
     , KWeakRefType<StateManager>()
     , PartitionedReplicaTraceComponent(traceId)
@@ -5835,12 +5890,18 @@ FAILABLE StateManager::StateManager(
     , apiDispatcher_(ApiDispatcher::Create(traceId, stateProviderFactory, GetThisAllocator()))
     , transactionalReplicatorConfig_(transactionalReplicatorConfig)
     , serializationMode_(static_cast<SerializationMode::Enum>(transactionalReplicatorConfig->SerializationVersion))
+    , hasPersistedState_(hasPersistedState)
 {
-    NTSTATUS status = Helper::CreateFolder(*workDirectoryPath_);
-    if (NT_SUCCESS(status) == false)
+    NTSTATUS status = STATUS_SUCCESS;
+
+    if (hasPersistedState)
     {
-        SetConstructorStatus(status);
-        return;
+        status = Helper::CreateFolder(*workDirectoryPath_);
+        if (NT_SUCCESS(status) == false)
+        {
+            SetConstructorStatus(status);
+            return;
+        }
     }
 
     if (NT_SUCCESS(copyProgressArray_.Status()) == false)
@@ -5864,6 +5925,7 @@ FAILABLE StateManager::StateManager(
         serializationMode_,
         GetThisAllocator(),
         checkpointManagerSPtr_);
+
     if (NT_SUCCESS(status) == false)
     {
         SetConstructorStatus(status);

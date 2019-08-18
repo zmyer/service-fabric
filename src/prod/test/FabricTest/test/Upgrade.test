@@ -6,6 +6,9 @@ cleantest
 
 set UpgradeStatusPollInterval 5
 
+# Avoid automatic cleanup of unused application types
+!setcfg Management.CleanupUnusedApplicationTypes=false
+
 +10
 +20
 +30
@@ -263,6 +266,7 @@ unprovisionapp TestApp 1.1
 
 createapp fabric:/app3/upgrade.test TestApp 1.1 error=ApplicationTypeNotFound
 createapp fabric:/app3/upgrade.test TestApp 1.2
+verify
 
 deleteapp fabric:/app3/upgrade.test
 nameexists fabric:/app3 false
@@ -273,6 +277,7 @@ unprovisionapp TestApp 1.2
 createapp fabric:/app4/upgrade.test TestApp 1.2 error=ApplicationTypeNotFound
 
 nameexists fabric:/app4 false
+verify
 
 verifyimagestore
 

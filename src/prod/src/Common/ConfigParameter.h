@@ -16,8 +16,8 @@ namespace Common
         ConfigParameter(ConfigParameter const & other);
         ConfigParameter(ConfigParameter && other);
 
-        ConfigParameter const & operator = (ConfigParameter const & other);
-        ConfigParameter const & operator = (ConfigParameter && other);
+        ConfigParameter & operator = (ConfigParameter const & other) = default;
+        ConfigParameter & operator = (ConfigParameter && other) = default;
 
         bool operator == (ConfigParameter const & other) const;
         bool operator != (ConfigParameter const & other) const;
@@ -32,6 +32,7 @@ namespace Common
         std::wstring Value;
         bool MustOverride;
         bool IsEncrypted;
+        std::wstring Type;
 
     private:
         friend struct ConfigSection;

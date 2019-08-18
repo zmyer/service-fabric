@@ -1,6 +1,8 @@
 set( LINUX_SOURCES
   ../AccountHelper.cpp
   ../ActivityId.cpp
+  ../ActivityType.cpp
+  ../ActivityDescription.cpp
   ../ApiEventSource.cpp
   ../ApiMonitoring.ApiName.cpp
   ../ApiMonitoring.ApiNameDescription.cpp
@@ -52,6 +54,7 @@ set( LINUX_SOURCES
   ../ConfigSettingsOverride.cpp
   ../ConfigStore.cpp
   ../ContainerEnvironment.cpp
+  ../crc.cpp
   ../CryptoBitBlob.cpp
   ../CryptoUtility.cpp
   ../DateTime.cpp
@@ -65,6 +68,7 @@ set( LINUX_SOURCES
   ../ErrorCodeValue.cpp
   ../EventLoop.cpp
   ../Expression.cpp
+  ../ExtendedEventMetadata.cpp
   ../FabricCodeVersion.cpp
   ../FabricComponent.cpp
   ../FabricComponentState.cpp
@@ -164,6 +168,7 @@ set( LINUX_SOURCES
   ../TokenHandle.cpp
   ../Trace.cpp
   ../TraceChannelType.cpp
+  ../DiagnosticsConfig.cpp
   ../TraceConsoleSink.cpp
   ../TraceCorrelatedEvent.cpp
   ../TraceEvent.cpp
@@ -171,6 +176,7 @@ set( LINUX_SOURCES
   ../TraceFilterDescription.cpp
   ../TraceKeywords.cpp
   ../TraceManifestGenerator.cpp
+  ../TraceSession.cpp
   ../TraceSinkFilter.cpp
   ../TraceTextFileSink.cpp
   ../Types.cpp
@@ -237,6 +243,7 @@ add_precompiled_header(objects_Common ../stdafx.h)
 add_library(${lib_Common} STATIC $<TARGET_OBJECTS:objects_Common> $<TARGET_OBJECTS:objects_Common_Threadpool>)
 target_link_libraries(${lib_Common}
     ${Ktlfull}
+    ${lib_Pal}
     minizip
     z
 )

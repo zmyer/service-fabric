@@ -53,6 +53,9 @@ if (Header.Action == MessageType::Operation##Action)                            
 #define FS_ACCESS_CHECK( Operation ) ACCESS_CHECK( routingAgentHeader, FileStoreServiceTcpMessage, Operation )
 #define FAS_ACCESS_CHECK( Operation ) ACCESS_CHECK( routingAgentHeader, FaultAnalysisServiceTcpMessage, Operation )
 #define FUOS_ACCESS_CHECK( Operation ) ACCESS_CHECK( routingAgentHeader, UpgradeOrchestrationServiceTcpMessage, Operation )
+#define VOLUME_MANAGER_ACCESS_CHECK( Operation ) ACCESS_CHECK( forwardMessageHeader, VolumeOperationTcpMessage, Operation )
+#define FCSS_ACCESS_CHECK( Operation ) ACCESS_CHECK( routingAgentHeader, CentralSecretServiceMessage, Operation )
+#define GATEWAY_RESOURCE_MANAGER_ACCESS_CHECK( Operation ) ACCESS_CHECK( routingAgentHeader, GatewayResourceManagerTcpMessage, Operation )
 
 class EntreeServiceProxy::ClientRequestJobItem : public JobItem<EntreeServiceProxy>
 {
@@ -341,6 +344,8 @@ void EntreeServiceProxy::AddRoleBasedAccessControlHandlers()
     NS_ACCESS_CHECK( ResetPartitionLoad )
     NS_ACCESS_CHECK( ToggleVerboseServicePlacementHealthReporting )
     NS_ACCESS_CHECK( ReportFault )
+    NS_ACCESS_CHECK( CreateNetwork)
+    NS_ACCESS_CHECK( DeleteNetwork)
 
     //
     // Role names do not match action names
@@ -476,7 +481,7 @@ void EntreeServiceProxy::OnProcessClientMessageComplete(
 
     if (error.IsSuccess())
     {
-        if (reply)
+        if (reply.get() != nullptr)
         {
             WriteNoise(
                 RequestProcessingTraceComponent,
@@ -880,6 +885,9 @@ bool EntreeServiceProxy::ForwardToServiceAccessCheck(MessageUPtr &receivedMessag
     DOCKER_COMPOSE_ACCESS_CHECK(DeleteComposeDeployment)
     DOCKER_COMPOSE_ACCESS_CHECK(UpgradeComposeDeployment)
 
+    VOLUME_MANAGER_ACCESS_CHECK(CreateVolume)
+    VOLUME_MANAGER_ACCESS_CHECK(DeleteVolume)
+
     HM_ACCESS_CHECK(ReportHealth)
 
     WriteInfo(
@@ -932,6 +940,10 @@ bool EntreeServiceProxy::RoutingAgentAccessCheck(MessageUPtr &receivedMessage, S
             FAS_ACCESS_CHECK(StartNodeTransition)
             FAS_ACCESS_CHECK(GetNodeTransitionProgress)
         }
+        case Actor::CSS:
+        {
+            FCSS_ACCESS_CHECK(GetSecrets)
+        }
         case Actor::UOS:
         {
             FUOS_ACCESS_CHECK(StartClusterConfigurationUpgrade)
@@ -940,7 +952,12 @@ bool EntreeServiceProxy::RoutingAgentAccessCheck(MessageUPtr &receivedMessage, S
             FUOS_ACCESS_CHECK(GetUpgradesPendingApproval)
             FUOS_ACCESS_CHECK(StartApprovedUpgrades)
             FUOS_ACCESS_CHECK(GetUpgradeOrchestrationServiceState)
-			FUOS_ACCESS_CHECK(SetUpgradeOrchestrationServiceState)
+            FUOS_ACCESS_CHECK(SetUpgradeOrchestrationServiceState)
+        }
+        case Actor::GatewayResourceManager:
+        {
+            GATEWAY_RESOURCE_MANAGER_ACCESS_CHECK(CreateGatewayResource)
+            GATEWAY_RESOURCE_MANAGER_ACCESS_CHECK(DeleteGatewayResource)
         }
 
         break;
@@ -1046,7 +1063,7 @@ ErrorCode EntreeServiceProxy::InitializeExternalChannel()
         false,
         0,
         nullptr,
-        FabricGateway::FabricGatewayConfig::GetConfig().RequestQueueSize);
+        ServiceModelConfig::GetConfig().RequestQueueSize);
 
     auto selfRoot = this->Root.CreateComponentRoot();
     this->demuxer_->RegisterMessageHandler(

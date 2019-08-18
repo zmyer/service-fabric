@@ -18,7 +18,7 @@ add_precompiled_header(${exe_FabricTypeHost} ../stdafx.h)
 
 set_target_properties(${exe_FabricTypeHost} PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}) 
-
+    
 target_link_libraries(${exe_FabricTypeHost}
   ${lib_FabricNode}
   ${lib_Communication}
@@ -39,12 +39,13 @@ target_link_libraries(${exe_FabricTypeHost}
   ${lib_Testability}
   ${lib_FileStoreService}
   ${lib_Store}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_TStore}
   ${lib_TransactionalReplicator}
   ${lib_StoreRepairPolicy}
   ${lib_Replication}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_LoadBalancing}
   ${lib_SystemServices}
   ${lib_ServiceGroup}
@@ -78,6 +79,4 @@ target_link_libraries(${exe_FabricTypeHost}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )

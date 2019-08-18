@@ -276,7 +276,22 @@ namespace Common
             decryptedResult2.InitializationAddress());
         
         VERIFY_ARE_EQUAL2(hr, 0);
-        VERIFY_ARE_EQUAL2(decryptedResult2->get_String(), text);         
+        VERIFY_ARE_EQUAL2(decryptedResult2->get_String(), text);     
+
+        ComPointer<IFabricStringResult> encryptedResult3;
+        
+        // The max length is specified by MaxLongStringSize (1024) in Common.Test.exe.cfg.
+        // The value of MaxLongStringSize controls TRY_COM_PARSE_PUBLIC_LONG_STRING marco.
+        text = wstring(2048, 't');
+        hr = ::FabricEncryptText(
+            text.c_str(),
+            testCert.Thumbprint()->ToStrings().first.c_str(),
+            X509Default::StoreName().c_str(),
+            X509Default::StoreLocation_Public(),
+            nullptr,
+            encryptedResult3.InitializationAddress());
+
+        VERIFY_ARE_EQUAL2(hr, STRSAFE_E_INVALID_PARAMETER);
     }
 
     BOOST_AUTO_TEST_CASE(LoadCertificateByAltSubjectName)
@@ -371,12 +386,12 @@ namespace Common
         wstring bins;
         if (!Environment::GetEnvironmentVariableW(L"_NTTREE", bins, Common::NOTHROW()))
         {
-	        bins = Directory::GetCurrentDirectoryW();
+            bins = Directory::GetCurrentDirectoryW();
         }
-		
+        
         if (!File::Exists(certFileName))
         {
-			wstring certFileInBins = Path::Combine(bins, L"FabricUnitTests\\" + certFileName);
+            wstring certFileInBins = Path::Combine(bins, L"FabricUnitTests\\" + certFileName);
             // copy the binplaced certificate file
             VERIFY_IS_TRUE(File::Copy(certFileInBins, certFileName).IsSuccess());
         }
@@ -399,6 +414,70 @@ namespace Common
 
         VERIFY_ARE_EQUAL2(hr, 0);
         VERIFY_ARE_EQUAL2(decryptedResult->get_String(), text);
+    }
+
+    static PCRYPT_KEY_PROV_INFO GetKeyProvInfo(PCCERT_CONTEXT pCertContext)
+    {
+        DWORD dwPropId = CERT_KEY_PROV_INFO_PROP_ID;
+        DWORD cbData = 0;
+        void* pvData = nullptr;
+
+        bool result = CertGetCertificateContextProperty(
+          pCertContext,
+          dwPropId,
+          NULL,
+          &cbData);
+        VERIFY_IS_TRUE(result == true);
+
+        pvData = (void*)malloc(cbData);
+        VERIFY_IS_TRUE(pvData != nullptr);
+
+        result = CertGetCertificateContextProperty(
+            pCertContext,
+            dwPropId,
+            pvData,
+            &cbData);
+        VERIFY_IS_TRUE(result == true);
+
+        return (PCRYPT_KEY_PROV_INFO)pvData;
+    }
+
+    static void CreateSelfSignedCertificate_Keyset_Impl(wstring commonName, bool fMachineKeyset)
+    {
+        CertContextUPtr cert = nullptr;
+        ErrorCode error = CryptoUtility::CreateSelfSignedCertificate(
+            L"CN=" + commonName,
+            L"CN=" + commonName,
+            fMachineKeyset,
+            cert);
+        VERIFY_IS_TRUE(error.IsSuccess());
+        PCRYPT_KEY_PROV_INFO pKeyProvInfo = GetKeyProvInfo(cert.get());
+        VERIFY_IS_TRUE(pKeyProvInfo != nullptr);
+        bool isMachineKeyset = pKeyProvInfo->dwFlags & CRYPT_MACHINE_KEYSET;
+        VERIFY_IS_TRUE(isMachineKeyset == fMachineKeyset);
+
+        // Cleanup.
+        // Destroy the key container and keys.
+        HCRYPTPROV hCryptProv = 0;
+        bool result = CryptAcquireContext(
+            &hCryptProv,
+            pKeyProvInfo->pwszContainerName,
+            pKeyProvInfo->pwszProvName,
+            pKeyProvInfo->dwProvType,
+            pKeyProvInfo->dwFlags | CRYPT_DELETEKEYSET);
+        VERIFY_IS_TRUE(result == true);
+
+        // Free pKeyProvInfo (allocated by GetKeyProvInfo).
+        free(pKeyProvInfo);
+
+        // Free the certificate context.
+        CertFreeCertificateContext(cert.get());
+    }
+
+    BOOST_AUTO_TEST_CASE(CreateSelfSignedCertificate_Keyset)
+    {
+        CreateSelfSignedCertificate_Keyset_Impl(GetNewCommonName(), true);
+        CreateSelfSignedCertificate_Keyset_Impl(GetNewCommonName(), false);
     }
 
 #endif
@@ -1109,16 +1188,17 @@ namespace Common
         LinuxCryptUtil cryptoUtil;
         auto corePfxPath = thumbprintStr;
         StringUtility::ToUpper(corePfxPath);
-        auto username = getenv("USERNAME");
-        long buflen = 16384; 
+        long buflen = 16384;
+
+        auto uid = geteuid();
         unique_ptr<char[]> buf(new char[buflen]);
         struct passwd pwbuf, *pwbufp;
-        auto errorCode = getpwnam_r(username, &pwbuf, buf.get(), buflen, &pwbufp);		
+        auto errorCode = getpwuid_r(uid, &pwbuf, buf.get(), buflen, &pwbufp);
         VERIFY_IS_TRUE(errorCode == 0);
         auto homeDirectory = StringUtility::Utf8ToUtf16(pwbufp->pw_dir);
         auto corePfxPathw = StringUtility::Utf16ToUtf8(Path::Combine(homeDirectory + L"/.dotnet/corefx/cryptography/x509stores/my", corePfxPath + L".pfx"));
         KFinally ([&corePfxPathw] { std::remove(corePfxPathw.c_str()); });
-        error = cryptoUtil.InstallCoreFxCertificate(username, testCert.X509ContextRef());
+        error = cryptoUtil.InstallCoreFxCertificate(pwbufp->pw_name, testCert.X509ContextRef());
         VERIFY_IS_TRUE(error.IsSuccess());
         error = cryptoUtil.ReadPrivateKey(corePfxPathw, privKey);
         VERIFY_IS_TRUE(error.IsSuccess());

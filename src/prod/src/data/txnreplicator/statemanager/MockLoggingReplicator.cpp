@@ -11,9 +11,10 @@ using namespace TxnReplicator;
 using namespace Data::Utilities;
 
 MockLoggingReplicator::SPtr MockLoggingReplicator::Create(
+    __in bool hasPersistedState,
     __in KAllocator& allocator)
 {
-    SPtr result = _new(TEST_TAG, allocator) MockLoggingReplicator();
+    SPtr result = _new(TEST_TAG, allocator) MockLoggingReplicator(hasPersistedState);
     THROW_ON_ALLOCATION_FAILURE(result);
     THROW_ON_FAILURE(result->Status());
 
@@ -50,11 +51,6 @@ NTSTATUS MockLoggingReplicator::GetCurrentEpoch(
     FABRIC_EPOCH snap = { 0, 0 };
     result = snap;
     return STATUS_SUCCESS;
-}
-
-NTSTATUS MockLoggingReplicator::RequestCheckpointAfterNextTransaction() noexcept
-{
-    CODING_ASSERT("NOT IMPLEMENTED");
 }
 
 ktl::Awaitable<NTSTATUS> MockLoggingReplicator::BackupAsync(
@@ -94,7 +90,8 @@ ktl::Awaitable<NTSTATUS> MockLoggingReplicator::BackupAsync(
 
     Common::Guid backupId = Common::Guid::NewGuid();
 
-    result = BackupInfo(backupId, *backupFolderPath_, backupOption, version, GetThisAllocator());
+    // Note: Mock LR pass in fake parentBackId and startVersion. 
+    result = BackupInfo(*backupFolderPath_, backupOption, version, version, backupId, backupId, GetThisAllocator());
 
     co_return STATUS_SUCCESS;
 }
@@ -522,8 +519,8 @@ Awaitable<NTSTATUS> MockLoggingReplicator::AbortTransactionAsync(
 Awaitable<NTSTATUS> MockLoggingReplicator::RegisterAsync(
     __out FABRIC_SEQUENCE_NUMBER & visibilityLSN) noexcept
 {
+    UNREFERENCED_PARAMETER(visibilityLSN);
     CODING_ASSERT("NOT IMPLEMENTED");
-    co_return STATUS_NOT_IMPLEMENTED;
 }
 
 NTSTATUS MockLoggingReplicator::UnRegister(
@@ -622,20 +619,21 @@ NTSTATUS MockLoggingReplicator::InjectFaultIfNecessary() noexcept
 }
 
 NTSTATUS MockLoggingReplicator::RegisterTransactionChangeHandler(
-	__in ITransactionChangeHandler & transactionChangeHandler) noexcept
+    __in ITransactionChangeHandler & transactionChangeHandler) noexcept
 {
-	UNREFERENCED_PARAMETER(transactionChangeHandler);
-	CODING_ASSERT("NOT IMPLEMENTED");
+    UNREFERENCED_PARAMETER(transactionChangeHandler);
+    CODING_ASSERT("NOT IMPLEMENTED");
 }
 
 NTSTATUS MockLoggingReplicator::UnRegisterTransactionChangeHandler() noexcept
 {
-	CODING_ASSERT("NOT IMPLEMENTED");
+    CODING_ASSERT("NOT IMPLEMENTED");
 }
 
-MockLoggingReplicator::MockLoggingReplicator()
+MockLoggingReplicator::MockLoggingReplicator(__in bool hasPersistedState)
     : KAsyncServiceBase()
     , KWeakRefType<MockLoggingReplicator>()
+    , hasPersistedState_(hasPersistedState)
 {
     NTSTATUS status = Data::Utilities::ReaderWriterAsyncLock::Create(GetThisAllocator(), GetThisAllocationTag(), readerWriterLockSPtr_);
     CODING_ERROR_ASSERT(NT_SUCCESS(status));

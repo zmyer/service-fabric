@@ -35,6 +35,7 @@ namespace Hosting2
             Common::HandleUPtr && threadHandle,
             Common::WorkstationHandleUPtr && workstationHandle,
             Common::DesktopHandleUPtr && desktopHandle,
+            wstring const & containerId,
             DWORD processId,
             ProcessConsoleRedirectorSPtr processStdoutRedirector,
             ProcessConsoleRedirectorSPtr processStderrRedirector,
@@ -52,6 +53,7 @@ namespace Hosting2
             Common::HandleUPtr && threadHandle,
             Common::WorkstationHandleUPtr && workstationHandle,
             Common::DesktopHandleUPtr && desktopHandle,
+            wstring containerId,
             DWORD processId,
             ProcessConsoleRedirectorSPtr processStdoutRedirector,
             ProcessConsoleRedirectorSPtr processStderrRedirector,
@@ -89,6 +91,9 @@ namespace Hosting2
         __declspec(property(get=get_ProcessId)) DWORD ProcessId;
         inline DWORD get_ProcessId() const { return processId_; };
 
+        __declspec(property(get = get_ContainerId)) wstring ContainerId;
+        inline wstring get_ContainerId() const { return containerId_; };
+
         __declspec(property(get = get_DebuggerProcessId)) DWORD DebuggerProcessId;
         inline DWORD get_DebuggerProcessId() const { return debuggerProcId_; };
 
@@ -107,7 +112,6 @@ namespace Hosting2
         virtual Common::ErrorCode TerminateAndCleanup(bool processGracefulExited, UINT uExitCode);
         virtual Common::ErrorCode ResumeProcess();
       
-
     private:
         Common::ProcessWaitSPtr const processMonitor_;
         Common::ProcessWaitSPtr const debugprocessMonitor_;
@@ -116,6 +120,7 @@ namespace Hosting2
         Common::HandleUPtr const threadHandle_;        
         Common::WorkstationHandleUPtr const workstationHandle_;
         Common::DesktopHandleUPtr const desktopHandle_;
+        wstring containerId_;
         DWORD processId_;
         DWORD debuggerProcId_;
         Common::ProcessHandleUPtr const debuggerProcessHandle_;

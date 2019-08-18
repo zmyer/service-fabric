@@ -13,7 +13,8 @@ ConfigParameter::ConfigParameter()
     : Name(),
     Value(),
     MustOverride(false),
-    IsEncrypted(false)
+    IsEncrypted(false),
+    Type(L"")
 {
 }
 
@@ -21,7 +22,8 @@ ConfigParameter::ConfigParameter(ConfigParameter const & other)
     : Name(other.Name),
     Value(other.Value),
     MustOverride(other.MustOverride),
-    IsEncrypted(other.IsEncrypted)
+    IsEncrypted(other.IsEncrypted),
+    Type(other.Type)
 {
 }
 
@@ -29,34 +31,9 @@ ConfigParameter::ConfigParameter(ConfigParameter && other)
     : Name(move(other.Name)),
     Value(move(other.Value)),
     MustOverride(other.MustOverride),
-    IsEncrypted(other.IsEncrypted)
+    IsEncrypted(other.IsEncrypted),
+    Type(move(other.Type))
 {
-}
-
-ConfigParameter const & ConfigParameter::operator = (ConfigParameter const & other)
-{
-    if (this != &other)
-    {
-        this->Name = other.Name;
-        this->Value = other.Value;
-        this->MustOverride = other.MustOverride;
-        this->IsEncrypted = other.IsEncrypted;
-    }
-
-    return *this;
-}
-
-ConfigParameter const & ConfigParameter::operator = (ConfigParameter && other)
-{
-    if (this != &other)
-    {
-        this->Name = move(other.Name);
-        this->Value = move(other.Value);
-        this->MustOverride = other.MustOverride;
-        this->IsEncrypted = other.IsEncrypted;
-    }
-
-    return *this;
 }
 
 bool ConfigParameter::operator == (ConfigParameter const & other) const
@@ -70,10 +47,13 @@ bool ConfigParameter::operator == (ConfigParameter const & other) const
     if (!equals) { return equals; }
 
     equals = this->MustOverride == other.MustOverride;
-	if (!equals) { return equals; }
+    if (!equals) { return equals; }
 
     equals = this->IsEncrypted == other.IsEncrypted;
-	if (!equals) { return equals; }
+    if (!equals) { return equals; }
+
+    equals = StringUtility::AreEqualCaseInsensitive(this->Type, other.Type);
+    if (!equals) { return equals; }
 
     return equals;
 }
@@ -90,6 +70,7 @@ void ConfigParameter::WriteTo(TextWriter & w, FormatOptions const &) const
     w.Write("Value = {0},", this->Value);
     w.Write("MustOverride = {0}", this->MustOverride);
     w.Write("IsEncrypted = {0}", this->IsEncrypted);
+    w.Write("Type = {0}", this->Type);
     w.Write("}");
 }
 
@@ -115,6 +96,11 @@ void ConfigParameter::ReadFromXml(
         this->IsEncrypted = xmlReader->ReadAttributeValueAs<bool>(*SchemaNames::Attribute_IsEncrypted);
     }
 
+    if (xmlReader->HasAttribute(*SchemaNames::Attribute_Type))
+    {
+        this->Type = xmlReader->ReadAttributeValue(*SchemaNames::Attribute_Type);
+    }
+
     xmlReader->ReadElement();
 }
 
@@ -124,6 +110,11 @@ void ConfigParameter::ToPublicApi(__in ScopedHeap & heap, __out FABRIC_CONFIGURA
     publicParameter.Value = heap.AddString(this->Value);    
     publicParameter.MustOverride = this->MustOverride;
     publicParameter.IsEncrypted = this->IsEncrypted;
+
+    auto ex1 = heap.AddItem<FABRIC_CONFIGURATION_PARAMETER_EX1>();
+    ex1->Type = heap.AddString(this->Type);
+
+    publicParameter.Reserved = ex1.GetRawPointer();
 }
 
 void ConfigParameter::clear()
@@ -131,5 +122,6 @@ void ConfigParameter::clear()
     this->Name.clear();
     this->Value.clear();
     this->MustOverride = false;
-	this->IsEncrypted = false;
+    this->IsEncrypted = false;
+    this->Type.clear();
 }

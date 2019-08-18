@@ -48,7 +48,16 @@ bool GlobMatch(const char *str, const char *pat)
     if (!str || !pat) return false;
 
     if (*pat == 0) return (*str == 0);
-    if (*str == 0) return false;
+    if (*str == 0)
+    {
+        //If your pattern is *foo* and str is foo then this case will handle this.
+        while (*pat && *pat == '*')
+        {
+            pat++;
+        }
+
+        return (*pat == 0);
+    }
 
     switch (*pat)
     {
@@ -236,8 +245,7 @@ BOOL CopyFileW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, BOOL bFailIfEx
     string srcA = FileNormalizePath(lpExistingFileName);
     string destA = FileNormalizePath(lpNewFileName);
 
-    int oflags = bFailIfExists ? O_CREAT | O_WRONLY | O_EXCL : O_CREAT | O_WRONLY | O_TRUNC;
-    oflags = O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC;
+    int oflags = O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC;
     int srcfd = open(srcA.c_str(), O_RDONLY | O_CLOEXEC);
     if (srcfd == -1)
     {
@@ -727,7 +735,8 @@ namespace Common
         {
             if (handle_ == INVALID_HANDLE_VALUE)
             {
-                handle_ = ::FindFirstFile(Path::ConvertToNtPath(pattern_).c_str(), &data_);
+                auto ntPath = Path::ConvertToNtPath(pattern_);
+                handle_ = ::FindFirstFile(ntPath.c_str(), &data_);
                 if (handle_ != INVALID_HANDLE_VALUE)
                 {
                     return ErrorCodeValue::Success;
@@ -940,7 +949,8 @@ namespace Common
     {
         Close();
         fileName_ = fname;
-        handle_ = ::CreateFileW(Path::ConvertToNtPath(fname).c_str(), access, share, nullptr, mode, attributes, nullptr);
+        auto ntPath = Path::ConvertToNtPath(fname);
+        handle_ = ::CreateFileW(ntPath.c_str(), access, share, nullptr, mode, attributes, nullptr);
         isHandleOwned_ = true;
 
         DWORD win32Error = ERROR_SUCCESS;
@@ -997,7 +1007,8 @@ namespace Common
     ErrorCode File::GetLastWriteTime(std::wstring const & path, __out DateTime & lastWriteTime)
     {
         WIN32_FILE_ATTRIBUTE_DATA fileAttributes;
-        if (!::GetFileAttributesEx(Path::ConvertToNtPath(path).c_str(), GET_FILEEX_INFO_LEVELS::GetFileExInfoStandard, &fileAttributes))
+        auto ntPath = Path::ConvertToNtPath(path);
+        if (!::GetFileAttributesEx(ntPath.c_str(), GET_FILEEX_INFO_LEVELS::GetFileExInfoStandard, &fileAttributes))
         {
             Trace.WriteError(
                 TraceSource,
@@ -1067,26 +1078,76 @@ namespace Common
     ErrorCode File::GetAttributes(const std::wstring& path, FileAttributes::Enum & attribute)
     {
         ErrorCode error;
-        ::DWORD result = ::GetFileAttributesW(Path::ConvertToNtPath(path).c_str());
+        auto ntPath = Path::ConvertToNtPath(path);
+        ::DWORD result = ::GetFileAttributesW(ntPath.c_str());
         if (result == INVALID_FILE_ATTRIBUTES)
         {
             error = ErrorCode::FromWin32Error(::GetLastError());
+            Trace.WriteWarning(
+                TraceSource,
+                L"File.GetAttributes",
+                "GetAttributes failed with the following error {0} for the path:{1}",
+                error,
+                path);
         }
 
         attribute = FileAttributes::Enum(result);
         return error;
     }
 
+    /*
+     On Linux if you want to grant 777 permission to file/directory use method AllowAccessToAll.
+    */
     ErrorCode File::SetAttributes(const std::wstring& path, FileAttributes::Enum fileAttributes)
     {
         ErrorCode error;
-        if(!::SetFileAttributesW(Path::ConvertToNtPath(path).c_str(), fileAttributes))
+        auto ntPath = Path::ConvertToNtPath(path);
+        if(!::SetFileAttributesW(ntPath.c_str(), fileAttributes))
         {
             error = ErrorCode::FromWin32Error(::GetLastError());
         }
 
         return error;
     }
+
+#if defined(PLATFORM_UNIX)
+    /*
+     Grants 777 permission to a file/directory.
+    */
+    ErrorCode File::AllowAccessToAll(const std::wstring& path)
+    {
+        auto ntPath = Path::ConvertToNtPath(path);
+        LPCWSTR lpFileName = ntPath.c_str();
+        if (lpFileName == NULL)
+        {
+            Trace.WriteError(
+                TraceSource,
+                L"File.AllowAccessToAll",
+                "AllowAccessToAll Failed. Error:FileNotFound, path:{0}, ntPath:{1}",
+                path,
+                ntPath);
+            SetLastError(ERROR_PATH_NOT_FOUND);
+            return ErrorCode::FromWin32Error(::GetLastError());
+        }
+
+        string pathA = FileNormalizePath(lpFileName);
+        int result = chmod(pathA.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
+        if (result != 0)
+        {
+            Trace.WriteError(
+                TraceSource,
+                L"File.AllowAccessToAll",
+                "AllowAccessToAll Failed. Error:{0}, path:{1}, lpFileName:{2}",
+                result,
+                path,
+                lpFileName);
+            SetLastError(FileGetLastErrorFromErrno());
+            return ErrorCode::FromWin32Error(::GetLastError());
+        }
+
+        return ErrorCodeValue::Success;
+    }
+#endif
 
     ErrorCode File::RemoveReadOnlyAttribute(const std::wstring& path)
     {
@@ -1151,8 +1212,8 @@ namespace Common
                 }
             }
         }
-
-        return (::DeleteFileW(Path::ConvertToNtPath(path).c_str()) != 0);
+        auto ntPath = Path::ConvertToNtPath(path);
+        return (::DeleteFileW(ntPath.c_str()) != 0);
     }
 
     ErrorCode File::Delete2( std::wstring const & path, bool const deleteReadonly)
@@ -1214,10 +1275,18 @@ namespace Common
             }
         }
 #else
+        auto ntPathReplacedFileName = Path::ConvertToNtPath(replacedFileName);
+        auto ntPathReplacementFileName = Path::ConvertToNtPath(replacementFileName);
+        wstring ntPathBackupFileName;
+        if (backupFileName.length() != 0)
+        {
+            ntPathBackupFileName = Path::ConvertToNtPath(backupFileName);
+        }
+
         BOOL success = ::ReplaceFileW(
-            Path::ConvertToNtPath(replacedFileName).c_str(),
-            Path::ConvertToNtPath(replacementFileName).c_str(),
-            (backupFileName.length() == 0) ? NULL : Path::ConvertToNtPath(backupFileName).c_str(),
+            ntPathReplacedFileName.c_str(),
+            ntPathReplacementFileName.c_str(),
+            (backupFileName.length() == 0) ? NULL : ntPathBackupFileName.c_str(),
             ignoreMergeErrors ? REPLACEFILE_IGNORE_MERGE_ERRORS : 0,
             0,
             0);
@@ -1253,9 +1322,11 @@ namespace Common
 
         return retval == 0;
 #else
+        auto ntPathFileName = Path::ConvertToNtPath(fileName);
+        auto ntPathExistingFileName = Path::ConvertToNtPath(existingFileName);
         BOOL result = ::CreateHardLinkW(
-            Path::ConvertToNtPath(fileName).c_str(),
-            Path::ConvertToNtPath(existingFileName).c_str(),
+            ntPathFileName.c_str(),
+            ntPathExistingFileName.c_str(),
             0);
 
         return (result != 0);
@@ -1479,7 +1550,8 @@ namespace Common
 
     bool File::Exists(const std::wstring& path)
     {
-        ::DWORD result = ::GetFileAttributesW(Path::ConvertToNtPath(path).c_str());
+        auto ntPath = Path::ConvertToNtPath(path);
+        ::DWORD result = ::GetFileAttributesW(ntPath.c_str());
 
         if (result != INVALID_FILE_ATTRIBUTES) {
             return (result & FILE_ATTRIBUTE_DIRECTORY) == 0; // not a directory
@@ -1501,9 +1573,11 @@ namespace Common
 #else
         auto flag = MOVEFILE_WRITE_THROUGH;
 #endif
+        auto ntPathSourceFile = Path::ConvertToNtPath(SourceFile);
+        auto ntPathDestFile = Path::ConvertToNtPath(DestFile);
         auto retval =  ::MoveFileExW(
-            Path::ConvertToNtPath(SourceFile).c_str(),
-            Path::ConvertToNtPath(DestFile).c_str(),
+            ntPathSourceFile.c_str(),
+            ntPathDestFile.c_str(),
             MOVEFILE_REPLACE_EXISTING | flag);
 
         if (throwIfFail) CHK_WBOOL(retval);
@@ -1524,9 +1598,9 @@ namespace Common
         //
         // Open the file handle, marking the file to be deleted upon close.
         //
-
+        auto ntPath = Path::ConvertToNtPath(fileName);
         file_handle_
-            = CreateFile(Path::ConvertToNtPath(fileName).c_str(), GENERIC_ALL, Common::FileShare::ReadWriteDelete, NULL, Common::FileMode::OpenOrCreate, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+            = CreateFile(ntPath.c_str(), GENERIC_ALL, Common::FileShare::ReadWriteDelete, NULL, Common::FileMode::OpenOrCreate, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
         std::error_code err = microsoft::GetLastErrorCode();
         system_error_if(file_handle_ == INVALID_HANDLE_VALUE, err, "Cannot create temporary file at {0}", fileName);
     }
@@ -1747,6 +1821,7 @@ namespace Common
 
                 if (!connected)
                 {
+                    Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0}: connect failed with errno {1}.", worker->peerAddr_, errno);
                     freeaddrinfo(peer);
                     worker->errno_ = errno;
                     ScpWorkerThreadCleanup(worker, 0, 0);
@@ -1758,6 +1833,7 @@ namespace Common
 
                 if (!session)
                 {
+                    Trace.WriteInfo(TraceSource, L"SCPCopy", "ssh session initialization failed.");
                     worker->errno_ = ENOMEM;
                     ScpWorkerThreadCleanup(worker, 0, 0);
                     return 0;
@@ -1766,12 +1842,14 @@ namespace Common
                 int rc = libssh2_session_handshake(session, sock);
 
                 if (rc) {
+                    Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0}: ssh session handshake failed with {1}.", worker->peerAddr_, rc);
                     ScpWorkerThreadCleanup(worker, session, 0);
                     return 0;
                 }
 
                 if (libssh2_userauth_password(session, worker->account_.c_str(), worker->password_.c_str()))
                 {
+                    Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0}: ssh authentication failed.", worker->peerAddr_);
                     ScpWorkerThreadCleanup(worker, session, 0);
                     return 0;
                 }
@@ -1779,6 +1857,7 @@ namespace Common
                 LIBSSH2_SFTP *sftp_session = libssh2_sftp_init(session);
                 if (!sftp_session)
                 {
+                    Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0}: sftp session initialization failed.", worker->peerAddr_);
                     ScpWorkerThreadCleanup(worker, session, sftp_session);
                     return 0;
                 }
@@ -1819,14 +1898,15 @@ namespace Common
 
                     if (pRequest)
                     {
-                        Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0} is processing request: Src: {1}, Dest: {2}, Op: {3}, Thread: {4} ",
+                        Trace.WriteInfo(TraceSource, L"SCPCopy", "ScpCopy worker to {0} is processing request: Src: {1}, Dest: {2}, Op: {3}",
                                         pRequest->peer_, pRequest->src_, pRequest->dest_,
-                                        pRequest->write_ ? "Upload" : "Download", (int) syscall(__NR_gettid));
+                                        pRequest->write_ ? "Upload" : "Download");
                         if (pRequest->write_)
                         {
                             struct stat srcinfo;
                             if (stat(pRequest->src_.c_str(), &srcinfo) != 0)
                             {
+                                Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to stat source file {0}", pRequest->src_);
                                 pRequest->error_.Overwrite(ErrorCodeValue::FileNotFound);
                                 pRequest->SetCompleted();
                                 continue;
@@ -1834,8 +1914,9 @@ namespace Common
 
                             pRequest->szSrc_ = srcinfo.st_size;
 
-                            FILE *srcfile = fopen(pRequest->src_.c_str(), "rb");
-                            if (!srcfile) {
+                            int srcfile = open(pRequest->src_.c_str(), O_RDONLY | O_CLOEXEC);
+                            if (srcfile < 0) {
+                                Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to open source file {0}", pRequest->src_);
                                 pRequest->error_.Overwrite(ErrorCodeValue::FileNotFound);
                                 pRequest->SetCompleted();
                                 continue;
@@ -1845,6 +1926,8 @@ namespace Common
                             LIBSSH2_CHANNEL *channel = libssh2_scp_send(session, tmpdest.c_str(), srcinfo.st_mode & 0777, (unsigned long)srcinfo.st_size);
                             if (!channel)
                             {
+                                close(srcfile);
+                                Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to open scp channel for {0}. {1}", tmpdest, libssh2_session_last_errno(session));
                                 pRequest->error_.Overwrite(static_cast<ErrorCodeValue::Enum>(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)));
                                 pRequest->SetCompleted();
                                 continue;
@@ -1855,8 +1938,9 @@ namespace Common
                             size_t totalsize = 0;
                             do
                             {
-                                size_t nread = fread(buf, 1, sizeof(buf), srcfile);
+                                ssize_t nread = read(srcfile, buf, sizeof(buf));
                                 if (nread <= 0) {
+                                    if (nread < 0 && errno == EINTR) continue;
                                     break;
                                 }
                                 char* ptr = buf;
@@ -1865,6 +1949,7 @@ namespace Common
                                     rc = libssh2_channel_write(channel, ptr, nread);
                                     if (rc < 0)
                                     {
+                                        Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to write scp channel. {0}", libssh2_session_last_errno(session));
                                         pRequest->error_.Overwrite(ErrorCodeValue::SendFailed);
                                         internal_failure = true;
                                         break;
@@ -1879,9 +1964,9 @@ namespace Common
                                 } while (nread);
                             } while (!internal_failure);
 
-                            if (srcfile)
+                            if (srcfile >= 0)
                             {
-                                fclose(srcfile);
+                                close(srcfile);
                             }
 
                             libssh2_channel_send_eof(channel);
@@ -1897,12 +1982,14 @@ namespace Common
                             }
                             pRequest->SetCompleted();
                         }
+
                         else // if (pRequest->write_)
                         {
                             string tmpdest = pRequest->dest_ + ScpTmpFileSuffix;
-                            FILE *destfile = fopen(tmpdest.c_str(), "wb");
-                            if (!destfile) {
-                                pRequest->error_.Overwrite(ErrorCodeValue::AccessDenied);
+                            int destfile = open(tmpdest.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                            if (destfile < 0) {
+                                Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to create tmp target file {0}. {1}", tmpdest, errno);
+                                pRequest->error_.Overwrite(ErrorCode::FromErrno(errno));
                                 pRequest->SetCompleted();
                                 continue;
                             }
@@ -1912,6 +1999,8 @@ namespace Common
 
                             if (!channel)
                             {
+                                close(destfile);
+                                Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to open scp channel for {0}. {1}", pRequest->src_, libssh2_session_last_errno(session));
                                 pRequest->error_.Overwrite(static_cast<ErrorCodeValue::Enum>(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)));
                                 pRequest->SetCompleted();
                                 continue;
@@ -1937,9 +2026,11 @@ namespace Common
                                     char* ptr = buf;
                                     do
                                     {
-                                        size_t nwrite = fwrite(ptr, 1, remaining, destfile);
+                                        ssize_t nwrite = write(destfile, ptr, remaining);
                                         if (nwrite < 0)
                                         {
+                                            if (errno == EINTR) continue;
+                                            Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to write file content");
                                             pRequest->error_.Overwrite(ErrorCode::FromErrno(errno));
                                             break;
                                         }
@@ -1953,13 +2044,14 @@ namespace Common
                                 }
                                 else if(rc < 0)
                                 {
+                                    Trace.WriteInfo(TraceSource, L"SCPCopy", "Failed to read from scp channel {0}", libssh2_session_last_errno(session));
                                     pRequest->error_.Overwrite(ErrorCode::FromErrno(errno));
                                     break;
                                 }
                                 got += rc;
                             }
 
-                            fclose(destfile);
+                            close(destfile);
                             if (rename(tmpdest.c_str(), pRequest->dest_.c_str()) != 0)
                             {
                                 pRequest->error_.Overwrite(ErrorCode::FromErrno(errno));
@@ -2241,9 +2333,37 @@ namespace Common
         }
 
         ErrorCode error = File::Copy(src, tempFilePath, overwrite);
-        if (error.IsSuccess())
+        if (!error.IsSuccess())
         {
-            error = File::MoveTransacted(tempFilePath, dest, overwrite);
+            auto err = File::Delete2(tempFilePath);
+            if (!err.IsSuccess())
+            {
+                Trace.WriteInfo(
+                    TraceSource,
+                    L"SafeCopy",
+                    "SafeCopy failed to clean up '{0}' after copy from '{1}' failed. Error: {2}",
+                    tempFilePath,
+                    src,
+                    err);
+            }
+
+            return error;
+        }
+
+        error = File::MoveTransacted(tempFilePath, dest, overwrite);
+        if (!error.IsSuccess())
+        {
+            auto err = File::Delete2(tempFilePath);
+            if (!err.IsSuccess())
+            {
+                Trace.WriteInfo(
+                    TraceSource,
+                    L"SafeCopy",
+                    "SafeCopy failed to clean up '{0}' after move to '{1}' failed. Error: {2}",
+                    tempFilePath,
+                    dest,
+                    err);
+            }
         }
 
         return error;

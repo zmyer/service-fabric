@@ -32,8 +32,8 @@
 #include "Management/TokenValidationService/TokenValidationService.h"
 #include "Management/ImageStore/ImageStore.h"
 #include "Management/FileStoreService/IFileStoreClient.h"
+#include "Management/NetworkInventoryManager/common/NetworkInventoryManagerConfig.h"
 
-#include "Communication/NamespaceManager/NamespaceManagerMessage.h"
 #include "Store/Store.Internal.h"
 #include "api/definitions/ApiDefinitions.h"
 #include "client/HealthReportingTransport.h"
@@ -138,6 +138,8 @@
 #include "Naming/EntreeService.ProcessQueryAsyncOperation.h"
 #include "Naming/EntreeService.ForwardToTokenValidationServiceAsyncOperation.h"
 #include "Naming/EntreeService.StartNodeAsyncOperation.h"
+#include "Naming/EntreeService.CreateNetworkAsyncOperation.h"
+#include "Naming/EntreeService.DeleteNetworkAsyncOperation.h"
 #include "Naming/EntreeService.Test_TestNamespaceManagerAsyncOperation.h"
 #include "Naming/ILocalStore.h"
 #include "Naming/INamingStoreServiceRouter.h"

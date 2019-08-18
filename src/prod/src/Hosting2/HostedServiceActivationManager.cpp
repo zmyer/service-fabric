@@ -109,14 +109,13 @@ private:
             return;
         }
 
-#if !defined(PLATFORM_UNIX)
-        if (HostingConfig::GetConfig().DisableContainerServiceStartOnContainerActivatorOpen)
+        if (HostingConfig::GetConfig().DisableContainers)
         {
             Trace.WriteInfo(
                 TraceType_ActivationManager,
                 owner_.Root.TraceId,
-                "Ignoring FabricCAS.exe activation since DisableContainerServiceStartOnContainerActivatorOpen is set to {0}",
-                HostingConfig::GetConfig().DisableContainerServiceStartOnContainerActivatorOpen);
+                "Ignoring FabricCAS.exe activation since DisableContainers is set to {0}",
+                HostingConfig::GetConfig().DisableContainers);
 
             StartHostedServices(thisSPtr);
         }
@@ -124,9 +123,6 @@ private:
         {
             StartContainerActivatorService(thisSPtr);
         }
-#else
-        StartHostedServices(thisSPtr);
-#endif
     }
 
     void StartContainerActivatorService(AsyncOperationSPtr const & thisSPtr)
@@ -261,11 +257,7 @@ private:
     {
         if (pendingOperationCount == 0)
         {
-            auto lastError = ErrorCode(ErrorCodeValue::Success);
-            {
-                lastError = lastError_;
-                lastError_.ReadValue();
-            }
+            lastError_.ReadValue();
             TryComplete(thisSPtr, lastError_);
         }
     }
@@ -425,14 +417,15 @@ private:
         auto error = containerActivatorService_->EndDeactivate(operation);
         if (!error.IsSuccess())
         {
+            Trace.WriteError(
+                TraceType_ActivationManager,
+                owner_.Root.TraceId,
+                "ContainerActivator Service close failed with error:{0}.",
+                error);
             lastError_.Overwrite(error);
         }
 
-        auto lastError = ErrorCode(ErrorCodeValue::Success);
-        {
-            lastError = lastError_;
-            lastError_.ReadValue();
-        }
+        lastError_.ReadValue();
         TryComplete(operation->Parent, lastError_);
     }
 
@@ -827,6 +820,9 @@ void HostedServiceActivationManager::OnAbort()
 
 ErrorCode HostedServiceActivationManager::ValidateRunasParams(wstring AccountName, SecurityPrincipalAccountType::Enum AccountType, wstring Password)
 {
+    // Validate AccountType.
+    SecurityPrincipalAccountType::Validate(AccountType);
+
     if(! AccountName.empty())
     {
         if(AccountType == SecurityPrincipalAccountType::DomainUser)
@@ -864,22 +860,33 @@ void HostedServiceActivationManager::SendReply(
     context->Reply(move(reply));
 }
 
-ErrorCode HostedServiceActivationManager::CreateSecurityUser(HostedServiceParameters const & params, __out SecurityUserSPtr & secUser)
+ErrorCode HostedServiceActivationManager::CreateSecurityUser(
+    wstring const & applicationId,
+    wstring const & serviceNodeName,
+    bool runasSpecified,
+    SecurityPrincipalAccountType::Enum runasAccountType,
+    wstring const & runasAccountName,
+    wstring const & runasPassword,
+    bool runasPasswordEncrypted,
+    __out SecurityUserSPtr & secUser)
 {
     secUser = nullptr;
-    SecurityPrincipalAccountType::Enum runasAccountType = params.RunasSpecified ? params.RunasAccountType : SecurityPrincipalAccountType::NetworkService;
+    if (!runasSpecified)
+    {
+        runasAccountType = SecurityPrincipalAccountType::NetworkService;
+    }
 
-    if (params.RunasSpecified || this->isSystem_)
+    if (runasSpecified || this->isSystem_)
     {
         ErrorCode error;
 
-        error = ValidateRunasParams(params.RunasAccountName, runasAccountType, params.RunasPassword);
+        error = ValidateRunasParams(runasAccountName, runasAccountType, runasPassword);
         if (! error.IsSuccess())
         {
             return error;
         }
 
-        //If runas account type is LocalSystem, we need FabricHost to run as system as well
+        // If runas account type is LocalSystem, we need FabricHost to run as system as well.
         if(runasAccountType == SecurityPrincipalAccountType::Enum::LocalSystem)
         {
             if(!this->isSystem_)
@@ -896,17 +903,25 @@ ErrorCode HostedServiceActivationManager::CreateSecurityUser(HostedServiceParame
             }
         }
 
+        // HostedService like Fabric.exe needs to be added to FabricAdmins group.
         vector<wstring> runasGroupMembership;
-        //HostedService like Fabric.exe need to be added to FabricAdmins group
         runasGroupMembership.push_back(FabricConstants::WindowsFabricAdministratorsGroupName);
 
+
+        // Fabric.exe invokes Crypto APIs (e.g. CertCreateSelfSignCertificate).
+        // For these Crypto APIs to work correctly, profile of the user Fabric.exe is
+        // impersonating should be loaded. For example, when using user key containers,
+        // CertCreateSelfSignCertificate will fail with 0x80070002 if the impersonated
+        // user's profile is not loaded.
+        bool loadProfile = IsFabricService(applicationId, serviceNodeName);
+
         secUser = SecurityUser::CreateSecurityUser(
-            params.ServiceName, 
-            params.RunasAccountName,
-            params.RunasAccountName,
-            params.RunasPassword,
-            params.RunasPasswordEncrypted,
-            false,
+            applicationId,
+            runasAccountName,
+            runasAccountName,
+            runasPassword,
+            runasPasswordEncrypted,
+            loadProfile,
             false,
             NTLMAuthenticationPolicyDescription(),
             runasAccountType,
@@ -916,87 +931,72 @@ ErrorCode HostedServiceActivationManager::CreateSecurityUser(HostedServiceParame
     return ErrorCode(ErrorCodeValue::Success);
 }
 
+ErrorCode HostedServiceActivationManager::CreateSecurityUser(HostedServiceParameters const & params, __out SecurityUserSPtr & secUser)
+{
+    return CreateSecurityUser(
+        params.ServiceName,
+        params.ServiceNodeName,
+        params.RunasSpecified,
+        params.RunasAccountType,
+        params.RunasAccountName,
+        params.RunasPassword,
+        params.RunasPasswordEncrypted,
+        secUser);
+}
 
 ErrorCode HostedServiceActivationManager::CreateSecurityUser(wstring const & section, StringMap const & entries, __out SecurityUserSPtr & secUser)
 {
-    ErrorCode error;
-    wstring runasAccount;
+    wstring runasAccountName;
     SecurityPrincipalAccountType::Enum runasAccountType = SecurityPrincipalAccountType::NetworkService;
     wstring runasPassword;
-    bool isPasswordEncrypted = false;
-
+    bool runasPasswordEncrypted = false;
     bool runasSpecified = false;
-    vector<wstring> runasGroupMembership;
-    //HostedService like Fabric.exe need to be added to FabricAdmins group
-    runasGroupMembership.push_back(FabricConstants::WindowsFabricAdministratorsGroupName);
-    auto iter  = entries.find(Constants::RunasAccountName);
-    if(iter != entries.end())
+
+    auto nameIter  = entries.find(Constants::RunasAccountName);
+    if(nameIter != entries.end())
     {
         runasSpecified = true;
+        runasAccountName = nameIter->second;
 
-        runasAccount = iter->second;
-
-        auto it = entries.find(Constants::RunasPassword);
-        if(it != entries.end())
+        auto passIter = entries.find(Constants::RunasPassword);
+        if(passIter != entries.end())
         {
-            runasPassword = it->second;
-            isPasswordEncrypted =  FabricHostConfig::GetConfig().IsConfigSettingEncrypted(section, it->first);
+            runasPassword = passIter->second;
+            runasPasswordEncrypted =  FabricHostConfig::GetConfig().IsConfigSettingEncrypted(section, passIter->first);
         }
     }
 
-    auto it = entries.find(Constants::RunasAccountType);
-
-    if(it != entries.end())
+    auto typeIter = entries.find(Constants::RunasAccountType);
+    if(typeIter != entries.end())
     {
         runasSpecified = true;
-        error = SecurityPrincipalAccountType::FromString(it->second, runasAccountType);
+        ErrorCode error = SecurityPrincipalAccountType::FromString(typeIter->second, runasAccountType);
         if(!error.IsSuccess())
         {
             Trace.WriteWarning(TraceType_ActivationManager,
                 Root.TraceId,
                 "Invalid Runas AccountType {0} specified",
-                it->second);
+                typeIter->second);
             return ErrorCode(ErrorCodeValue::InvalidCredentials);
         }
     }
 
-    error = ValidateRunasParams(runasAccount, runasAccountType, runasPassword);
-    if (! error.IsSuccess())
+    wstring serviceNodeName;
+    auto nodeIter = entries.find(Constants::HostedServiceParamServiceNodeName);
+    if(nodeIter != entries.end())
     {
-        return error;
+        serviceNodeName = nodeIter->second;
     }
 
-    if(runasSpecified || this->isSystem_)
-    {
-        //If runas account type is LocalSystem, we need FabricHost to run as system as well
-        if(runasAccountType == SecurityPrincipalAccountType::Enum::LocalSystem)
-        {
-            if(!this->isSystem_)
-            {
-                Trace.WriteWarning(TraceType_ActivationManager,
-                    Root.TraceId,
-                    "HostedServices cannot be started as {0} since current process is not System",
-                    runasAccountType);
-                return ErrorCode(ErrorCodeValue::InvalidCredentialType);
-            }
-            else
-            {
-                return ErrorCode(ErrorCodeValue::Success);
-            }
-        }
-        secUser = SecurityUser::CreateSecurityUser(
-            section, 
-            runasAccount,
-            runasAccount,
-            runasPassword,
-            isPasswordEncrypted,
-            false,
-            false,
-            NTLMAuthenticationPolicyDescription(),
-            runasAccountType,
-            runasGroupMembership);
-    }
-    return ErrorCode(ErrorCodeValue::Success);
+    return CreateSecurityUser(
+        section,
+        serviceNodeName,
+        runasSpecified,
+        runasAccountType,
+        runasAccountName,
+        runasPassword,
+        runasPasswordEncrypted,
+        secUser);
 }
 
 void HostedServiceActivationManager::GetHostedServiceCertificateThumbprint(StringMap const & entries, __out wstring & thumbprint)
@@ -1056,6 +1056,7 @@ ErrorCode HostedServiceActivationManager::CreateContainerActivatorService(
         L"",
         L"",
         X509FindType::FindByThumbprint,
+        ServiceModel::ResourceGovernancePolicyDescription(),
         containerActivatorSerivce);
 
     return ErrorCode::Success();
@@ -1075,6 +1076,7 @@ HostedServiceSPtr HostedServiceActivationManager::CreateHostedService(wstring co
     wstring sslCertStoreLocation;
     wstring serviceNodeName;
     X509FindType::Enum sslCertFindType = X509FindType::FindByThumbprint;
+    ServiceModel::ResourceGovernancePolicyDescription rgPolicyDescription = ServiceModel::ResourceGovernancePolicyDescription();
 
     bool disabled = false;
     bool ctrlCSpecified = false;
@@ -1124,6 +1126,46 @@ HostedServiceSPtr HostedServiceActivationManager::CreateHostedService(wstring co
                     section);
                 disabled = true;
             }
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(it->first, Constants::HostedServiceCpusetCpus))
+        {
+            rgPolicyDescription.CpusetCpus = it->second;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(it->first, Constants::HostedServiceCpuShares))
+        {
+            if (!Config::TryParse<UINT>(rgPolicyDescription.CpuShares, it->second))
+            {
+                Trace.WriteWarning(TraceType_ActivationManager,
+                    Root.TraceId,
+                    "Failed to parse process CpuShares limit, marking service {1} as disabled",
+                    it->second,
+                    section);
+                disabled = true;
+            };
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(it->first, Constants::HostedServiceMemoryInMB))
+        {
+            if (!Config::TryParse<UINT>(rgPolicyDescription.MemoryInMB, it->second))
+            {
+                Trace.WriteWarning(TraceType_ActivationManager,
+                    Root.TraceId,
+                    "Failed to parse process MemoryInMB limit, marking service {1} as disabled",
+                    it->second,
+                    section);
+                disabled = true;
+            };
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(it->first, Constants::HostedServiceMemorySwapInMB))
+        {
+            if (!Config::TryParse<UINT>(rgPolicyDescription.MemorySwapInMB, it->second))
+            {
+                Trace.WriteWarning(TraceType_ActivationManager,
+                    Root.TraceId,
+                    "Failed to parse process MemorySwapInMB limit, marking service {1} as disabled",
+                    it->second,
+                    section);
+                disabled = true;
+            };
         }
         else if(StringUtility::AreEqualCaseInsensitive(it->first, Constants::HostedServiceSSLCertStoreName))
         {
@@ -1185,6 +1227,7 @@ HostedServiceSPtr HostedServiceActivationManager::CreateHostedService(wstring co
                 sslCertFindValue,
                 sslCertStoreLocation,
                 sslCertFindType,
+                rgPolicyDescription,
                 hostedService);  
         }
     }
@@ -1219,6 +1262,13 @@ HostedServiceSPtr HostedServiceActivationManager::CreateHostedService(HostedServ
 
         if (error.IsSuccess())
         {
+            // Create resource governance policy
+            ServiceModel::ResourceGovernancePolicyDescription rgPolicyDescription = ServiceModel::ResourceGovernancePolicyDescription();
+            rgPolicyDescription.CpusetCpus = params.CpusetCpus;
+            rgPolicyDescription.CpuShares = params.CpuShares;
+            rgPolicyDescription.MemoryInMB = params.MemoryInMB;
+            rgPolicyDescription.MemorySwapInMB = params.MemorySwapInMB;
+
             HostedService::Create(
                 HostedServiceActivationManagerHolder(*this, this->Root.CreateComponentRoot()),
                 params.ServiceName,
@@ -1234,6 +1284,7 @@ HostedServiceSPtr HostedServiceActivationManager::CreateHostedService(HostedServ
                 params.SslCertificateFindValue,
                 params.SslCertificateStoreLocation,
                 params.SslCertificateFindType,
+                rgPolicyDescription,
                 hostedService
                 );
         }
@@ -1260,8 +1311,6 @@ void HostedServiceActivationManager::EnableChangeMonitoring()
 
 void HostedServiceActivationManager::OnConfigChange(wstring const & section, wstring const & key)
 {
-    UNREFERENCED_PARAMETER(key);
-
     Trace.WriteNoise(
         TraceType_ActivationManager,
         Root.TraceId,
@@ -1413,7 +1462,7 @@ void HostedServiceActivationManager::OnConfigChange(wstring const & section, wst
                 }
             }
 
-            shouldUpdate = hostedService->IsUpdateNeeded(secUser, thumbprint, arguments);
+            shouldUpdate = hostedService->IsUpdateNeeded(secUser, thumbprint, arguments) || hostedService->IsRGPolicyUpdateNeeded(entries);
         }
     }
 
@@ -1471,6 +1520,8 @@ void HostedServiceActivationManager::OnHostedServiceTerminated(
 
     if (error.IsSuccess())
     {
+        this->NotifyHostedServiceTermination(serviceName);
+
         vector<wstring> childServiceNames;
         hostedService->ClearChildServices(childServiceNames);
         if (! childServiceNames.empty())
@@ -1581,6 +1632,16 @@ void HostedServiceActivationManager::OnHostedServiceTerminated(
     {
         hostingTrace.HostedServiceActivationLimitExceeded(exeName, serviceName);
         ExitProcess(0);
+    }
+}
+
+void HostedServiceActivationManager::NotifyHostedServiceTermination(wstring const & hostedServiceName)
+{
+    if (StringUtility::AreEqualCaseInsensitive(
+        hostedServiceName, 
+        Constants::FabricContainerActivatorServiceName))
+    {
+        fabricHost_.ProcessActivationManagerObj->OnContainerActivatorServiceTerminated();
     }
 }
 
@@ -1759,7 +1820,7 @@ void HostedServiceActivationManager::ProcessActivateHostedServiceRequest(
                 return;
             }
 
-            shouldUpdate = hostedService->IsUpdateNeeded(secUser, params.SslCertificateFindValue, params.Arguments);
+            shouldUpdate = hostedService->IsUpdateNeeded(secUser, params.SslCertificateFindValue, params.Arguments) || hostedService->IsRGPolicyUpdateNeeded(params);
         }
     }
     
@@ -1967,4 +2028,10 @@ void HostedServiceActivationManager::FinishStopHostedService(AsyncOperationSPtr 
         "End(StopHostedService): ErrorCode={0}",
         error
         );
+}
+
+bool HostedServiceActivationManager::IsFabricService(const std::wstring & hostedServiceName, const std::wstring & serviceNodeName)
+{
+    const std::wstring hostedFabricServiceName = Constants::HostedServiceSectionName + serviceNodeName + L"_" + Constants::FabricServiceName;
+    return StringUtility::AreEqualCaseInsensitive(hostedServiceName, hostedFabricServiceName);
 }

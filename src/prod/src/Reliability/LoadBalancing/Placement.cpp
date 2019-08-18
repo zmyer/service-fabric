@@ -12,6 +12,7 @@
 #include "Service.h"
 #include "BalanceChecker.h"
 #include "PLBSchedulerAction.h"
+#include "ThrottlingConstraint.h"
 
 using namespace std;
 using namespace Common;
@@ -26,6 +27,7 @@ Placement::Placement(
     vector<std::unique_ptr<PlacementReplica>> && allReplicas,
     vector<std::unique_ptr<PlacementReplica>> && standByReplicas,
     ApplicationReservedLoad && applicationReservedLoads,
+    InBuildCountPerNode && ibCountsPerNode,
     size_t partitionsInUpgradeCount,
     bool isSingletonReplicaMoveAllowedDuringUpgrade,
     int randomSeed,
@@ -34,7 +36,8 @@ Placement::Placement(
     set<Common::Guid> const& partialClosureFTs,
     ServicePackagePlacement && servicePackagePlacement,
     size_t quorumBasedServicesCount,
-    size_t quorumBasedPartitionsCount)
+    size_t quorumBasedPartitionsCount,
+    std::set<uint64> && quorumBasedServicesTempCache)
     : balanceChecker_(move(balanceChecker)),
     services_(move(services)),
     partitions_(move(partitions)),
@@ -72,8 +75,11 @@ Placement::Placement(
     settings_(balanceChecker_->Settings),
     partitionClosureType_(partitionClosureType),
     servicePackagePlacements_(move(servicePackagePlacement)),
+    inBuildCountPerNode_(move(ibCountsPerNode)),
     quorumBasedServicesCount_(quorumBasedServicesCount),
-    quorumBasedPartitionsCount_(quorumBasedPartitionsCount)
+    quorumBasedPartitionsCount_(quorumBasedPartitionsCount),
+    quorumBasedServicesTempCache_(move(quorumBasedServicesTempCache)),
+    throttlingConstraintPriority_(-1)
 {
     // Remove down and deactivated nodes from eligible nodes!
     eligibleNodes_.DeleteNodeVecWithIndex(BalanceCheckerObj->DownNodes);
@@ -82,13 +88,15 @@ Placement::Placement(
     PreparePartitions();
     PrepareReplicas(partialClosureFTs);
     ComputeBeneficialTargetNodesPerMetric();
-    if (schedulerAction.Action == PLBSchedulerActionType::Creation ||
-        schedulerAction.Action == PLBSchedulerActionType::CreationWithMove)
+    if (schedulerAction.Action == PLBSchedulerActionType::NewReplicaPlacement ||
+        schedulerAction.Action == PLBSchedulerActionType::NewReplicaPlacementWithMove)
     {
         ComputeBeneficialTargetNodesForPlacementPerMetric();
     }
     CreateReplicaPlacement();
+    CreateNodePlacement();
     PrepareApplications();
+    UpdateAction(schedulerAction.Action, true);
 }
 
 void Placement::WriteTo(TextWriter& writer, FormatOptions const&) const
@@ -257,26 +265,121 @@ PlacementReplica const* Placement::SelectRandomPrimary(Common::Random & random, 
     }
 }
 
+size_t Placement::GetThrottledMoveCount() const
+{
+    size_t availableSlots = 0;
+    for (auto const& node : balanceChecker_->Nodes)
+    {
+        if (node.IsValid)
+        {
+            if (!node.IsThrottled)
+            {
+                // One non-throttled node is enough to have max slots.
+                return SIZE_MAX;
+            }
+            else
+            {
+                availableSlots += node.MaxConcurrentBuilds;
+            }
+        }
+    }
+    return availableSlots;
+}
+
+// Sometimes placement can be created without an action, so we need to update it when it is known.
+// Per-node throttling limits depend on the action type.
+void Placement::UpdateAction(PLBSchedulerActionType::Enum action, bool constructor)
+{
+    bool throttlingNeeded = false;
+    // Node placements are created only if node has capacity or throttling defined.
+    // Since we may change throttling limit in this function (0 -> >0) then we may need to recalculate.
+    bool recreateNodePlacements = false;
+    // If called from constructor, always update the action and set up throttling limits.
+    if (!constructor && action == action_)
+    {
+        return;
+    }
+    action_ = action;
+    if (   action_ != PLBSchedulerActionType::NoActionNeeded
+        && action_ != PLBSchedulerActionType::None)
+    {
+        for (auto const& node : balanceChecker_->Nodes)
+        {
+            int maxConcurrentBuilds = 0;
+            int globalConcurrentBuilds = INT_MAX;
+            int phaseConcurrentBuilds = INT_MAX;
+
+            auto const & throttlingLimitIt = settings_.MaximumInBuildReplicasPerNode.find(node.NodeTypeName);
+            if (throttlingLimitIt != settings_.MaximumInBuildReplicasPerNode.end())
+            {
+                globalConcurrentBuilds = throttlingLimitIt->second;
+            }
+
+            switch (action_)
+            {
+            case PLBSchedulerActionType::NewReplicaPlacement:
+            case PLBSchedulerActionType::NewReplicaPlacementWithMove:
+                {
+                    auto const & throttlingLimitPlacement = settings_.MaximumInBuildReplicasPerNodePlacementThrottle.find(node.NodeTypeName);
+                    if (throttlingLimitPlacement != settings_.MaximumInBuildReplicasPerNodePlacementThrottle.end())
+                    {
+                        phaseConcurrentBuilds = throttlingLimitPlacement->second;
+                    }
+                }
+                break;
+            case PLBSchedulerActionType::LoadBalancing:
+            case PLBSchedulerActionType::QuickLoadBalancing:
+                {
+                    auto const & throttlingLimitBalancing = settings_.MaximumInBuildReplicasPerNodeBalancingThrottle.find(node.NodeTypeName);
+                    if (throttlingLimitBalancing != settings_.MaximumInBuildReplicasPerNodeBalancingThrottle.end())
+                    {
+                        phaseConcurrentBuilds = throttlingLimitBalancing->second;
+                    }
+                }
+                break;
+            case PLBSchedulerActionType::ConstraintCheck:
+                {
+                    auto const & throttlingLimitConstraintCheck = settings_.MaximumInBuildReplicasPerNodeConstraintCheckThrottle.find(node.NodeTypeName);
+                    if (throttlingLimitConstraintCheck != settings_.MaximumInBuildReplicasPerNodeConstraintCheckThrottle.end())
+                    {
+                        phaseConcurrentBuilds = throttlingLimitConstraintCheck->second;
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+
+            maxConcurrentBuilds = min(globalConcurrentBuilds, phaseConcurrentBuilds);
+            if (maxConcurrentBuilds != INT_MAX)
+            {
+                // If this node already had throttling or node capacity, node placements were created.
+                if (!node.HasCapacity && node.MaxConcurrentBuilds == 0)
+                {
+                    recreateNodePlacements = true;
+                }
+                balanceChecker_->UpdateNodeThrottlingLimit(node.NodeIndex, maxConcurrentBuilds);
+                throttlingNeeded = true;
+            }
+        }
+    }
+    if (throttlingNeeded)
+    {
+        throttlingConstraintPriority_ = ThrottlingConstraint::GetPriority(action_);
+    }
+    if (recreateNodePlacements)
+    {
+        // We need to recreate node placements since throttling limits have changed.
+        nodePlacements_.Clear();
+        CreateNodePlacement();
+    }
+}
+
 void Placement::PrepareServices()
 {
     for (auto itService = services_.begin(); itService != services_.end(); ++itService)
     {
         itService->RefreshIsBalanced();
-
-        // Increase placement movement slots during singleton replica upgrades,
-        // as for some partitions (e.g. which do not have new replicas),
-        // movement will be generated instead of creation
-        if (settings_.CheckAffinityForUpgradePlacement &&
-            itService->HasAffinityAssociatedSingletonReplicaInUpgrade &&
-            itService->DependentServices.size() > 0)
-        {
-            for (auto itChildService = (itService->DependentServices).begin();
-                itChildService != (itService->DependentServices).end(); ++itChildService)
-            {
-                const_cast<ServiceEntry*>(*itChildService)->HasAffinityAssociatedSingletonReplicaInUpgrade = true;
-                partitionsInUpgradePlacementCount_ += (*itChildService)->Partitions.size();
-            }
-        }
     }
 }
 
@@ -314,13 +417,27 @@ void Placement::PreparePartitions()
 
         serviceEntry.AddPartition(&partition);
 
+        // Increase placement movement slots during singleton replica upgrades,
+        // for partitions which do not have new replicas, but are in affinity correlation,
+        // with partitions in single replica upgrade
+        if (settings_.CheckAffinityForUpgradePlacement &&
+            partition.IsTargetOne &&                                                             // It is single replica service
+            !partition.IsInSingleReplicaUpgrade &&                                               // Partition is not in upgrade
+            ((serviceEntry.DependedService != nullptr &&                                         // Service has a parent service
+                serviceEntry.DependedService->HasAffinityAssociatedSingletonReplicaInUpgrade) || //    which has correlation with singleton upgrade
+            (serviceEntry.DependentServices.size() > 0 &&                                        // Service is parent service
+                serviceEntry.HasAffinityAssociatedSingletonReplicaInUpgrade)))                   //    which is in singleton upgrade correlation
+        {
+            serviceEntry.HasAffinityAssociatedSingletonReplicaInUpgrade = true;
+            partitionsInUpgradePlacementCount_++;
+        }
 
         // If partition belongs to the application which has singleton replicas in upgrade,
         // but it hasn't received request for additional replica yet (or it is stateless),
         // and relaxed scaleout during upgrade should be performed,
         // increase the required movement count for placement
         if (settings_.RelaxScaleoutConstraintDuringUpgrade &&
-            partition.Service->IsTargetOne &&                                           // It is single replica service
+            partition.IsTargetOne &&                                                    // It is single replica service
             partition.Service->Application != nullptr &&                                // Partition has application
             partition.Service->Application->HasPartitionsInSingletonReplicaUpgrade &&   // Application has at least one partition in upgrade
             !partition.IsInSingleReplicaUpgrade)                                        // Partition is not in upgrade
@@ -347,7 +464,7 @@ void Placement::PreparePartitions()
 
         if (!serviceEntry.DependentServices.empty())
         {
-            ASSERT_IFNOT(partition.Order == 0, "Parent partition should have order 0");
+            ASSERT_IFNOT(partition.Order < 2, "Parent partition should have order 0 or 1.");
             parentPartitions_.push_back(&partition);
         }
 
@@ -492,7 +609,7 @@ void Placement::PrepareReplicas(set<Common::Guid>const& partialClosureFTs)
         {
             if (metric->IsDefrag && metric->DefragmentationScopedAlgorithmEnabled)
             {
-                dynamicNodeLoads.PrepareBeneficialNodes(totalMetricIndex, metric->DefragNodeCount, metric->DefragDistribution, metric->DefragEmptyNodeLoadThreshold);
+                dynamicNodeLoads.PrepareBeneficialNodes(totalMetricIndex, metric->DefragNodeCount, metric->DefragDistribution, metric->ReservationLoad);
                 
                 if (metric->DefragDistribution == Metric::DefragDistributionType::SpreadAcrossFDs_UDs)
                 {
@@ -588,17 +705,33 @@ void Placement::ComputeBeneficialTargetNodesPerMetric()
                     auto & node = balanceChecker_->Nodes[i];
                     auto & loadStat = lbDomain.GetLoadStat(metricIndex);
 
-                    double average = loadStat.Average;
-                    if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+                    double loadDiff;
+                    if (metric.BalancingByPercentage)
                     {
-                        // Since we want to empty out a certain number of nodes,
-                        // the amount of load we want to have on all nodes changes
-                        // (we try to distribute the load on all nodes, except on the empty nodes).
-                        // Here we calculate the total load from the average and use it to calculate the desired load (new average)
-                        average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
-                    }
+                        double average = loadStat.AbsoluteSum / loadStat.CapacitySum;
+                        if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+                        {
+                            average = loadStat.AbsoluteSum / (loadStat.CapacitySum - metric.DefragNodeCount * metric.ReservationLoad);
+                        }
 
-                    double loadDiff = node.GetLoadLevel(globalIndex) - average;
+                        auto nodeCapacity = node.GetNodeCapacity(metric.IndexInGlobalDomain);
+                        auto nodeLoad = node.GetLoadLevel(globalIndex);
+
+                        loadDiff = nodeLoad - nodeCapacity * average;
+                    }
+                    else
+                    {
+                        double average = loadStat.Average;
+                        if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+                        {
+                            // Since we want to empty out a certain number of nodes,
+                            // the amount of load we want to have on all nodes changes
+                            // (we try to distribute the load on all nodes, except on the empty nodes).
+                            // Here we calculate the total load from the average and use it to calculate the desired load (new average)
+                            average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
+                        }
+                        loadDiff = node.GetLoadLevel(globalIndex) - average;
+                    }
 
                     if (!node.IsDeactivated && node.IsUp && metric.IsValidNode(node.NodeIndex))
                     {
@@ -688,7 +821,7 @@ void Placement::ComputeBeneficialTargetNodesForPlacementPerMetric()
                     dynamicNodeLoads.PrepareBeneficialNodes(totalIndex,
                         metric.DefragNodeCount,
                         metric.DefragDistribution,
-                        metric.DefragEmptyNodeLoadThreshold);
+                        metric.ReservationLoad);
                 }
 
                 vector<NodeEntry const*> sortedNodes;
@@ -925,9 +1058,24 @@ bool Placement::IsSwapBeneficial(PlacementReplica const* replica)
             if (lbDomain != nullptr)
             {
                 size_t totalMetricIndex = lbDomain->MetricStartIndex + metricIndex;
-                int64 defragCoefficient = lbDomain->Metrics[metricIndex].IsDefrag ? -1 : 1;
+                auto metric = lbDomain->Metrics[metricIndex];
+                auto loadStat = lbDomain->GetLoadStat(metricIndex);
+                int64 defragCoefficient = metric.IsDefrag ? -1 : 1;
                 int64 tempCoefficient = coefficient * defragCoefficient;
-                double loadDiff = replica->Node->GetLoadLevel(totalMetricIndex) - lbDomain->GetLoadStat(metricIndex).Average;
+                double loadDiff;
+                if (metric.BalancingByPercentage)
+                {
+                    double average = loadStat.AbsoluteSum / loadStat.CapacitySum;
+                    auto nodeCapacity = replica->Node->GetNodeCapacity(metric.IndexInGlobalDomain);
+                    auto nodeLoad = replica->Node->GetLoadLevel(totalMetricIndex);
+
+                    loadDiff = nodeLoad - nodeCapacity * average;
+                }
+                else
+                {
+                    loadDiff = replica->Node->GetLoadLevel(totalMetricIndex) -
+                        loadStat.Average;
+                }
 
                 if (!lbDomain->Metrics[metricIndex].IsBalanced && loadDiff * tempCoefficient > defragCoefficient * 1e-9)
                 {
@@ -939,10 +1087,24 @@ bool Placement::IsSwapBeneficial(PlacementReplica const* replica)
             size_t totalMetricIndexInGlobalDomain = partition->Service->GlobalMetricIndices[metricIndex];
             LoadBalancingDomainEntry const* globalDomain = partition->Service->GlobalLBDomain;
             size_t metricIndexInGlobalDomain = totalMetricIndexInGlobalDomain - globalDomain->MetricStartIndex;
-            int64 defragCoefficient = globalDomain->Metrics[metricIndexInGlobalDomain].IsDefrag ? -1 : 1;
+            auto metric = globalDomain->Metrics[metricIndexInGlobalDomain];
+            auto loadStat = globalDomain->GetLoadStat(metricIndexInGlobalDomain);
+            int64 defragCoefficient = metric.IsDefrag ? -1 : 1;
             int64 tempCoefficient = coefficient * defragCoefficient;
-            double loadDiff = replica->Node->GetLoadLevel(totalMetricIndexInGlobalDomain) -
-                globalDomain->GetLoadStat(metricIndexInGlobalDomain).Average;
+
+            double loadDiff;
+            if (metric.BalancingByPercentage)
+            {
+                double average = loadStat.AbsoluteSum / loadStat.CapacitySum;
+                auto nodeCapacity = replica->Node->GetNodeCapacity(metric.IndexInGlobalDomain);
+                auto nodeLoad = replica->Node->GetLoadLevel(totalMetricIndexInGlobalDomain);
+
+                loadDiff = nodeLoad - nodeCapacity * average;
+            }
+            else
+            {
+                loadDiff = replica->Node->GetLoadLevel(totalMetricIndexInGlobalDomain) - loadStat.Average;
+            }
 
             if (!globalDomain->Metrics[metricIndexInGlobalDomain].IsBalanced && loadDiff * tempCoefficient > defragCoefficient * 1e-9)
             {
@@ -966,10 +1128,6 @@ void Placement::CreateReplicaPlacement()
         }
 
         NodeEntry const* n = r->Node;
-        if (n->HasCapacity)
-        {
-            nodePlacements_[n].Add(r);
-        }
 
         partitionPlacements_[r->Partition].Add(n, r);
 
@@ -994,11 +1152,6 @@ void Placement::CreateReplicaPlacement()
         auto r = it->get();
         NodeEntry const* n = r->Node;
 
-        if (n->HasCapacity)
-        {
-            nodePlacements_[n].Add(r);
-        }
-
         ApplicationEntry const* app = r->Partition->Service->Application;
         if (app && app->HasScaleoutOrCapacity)
         {
@@ -1012,6 +1165,35 @@ void Placement::CreateReplicaPlacement()
         if (nullptr != servicePackage)
         {
             servicePackagePlacements_.AddReplicaToNode(servicePackage, r->Node, r);
+        }
+    }
+}
+
+void Placement::CreateNodePlacement()
+{
+    for (auto it = allReplicas_.begin(); it != allReplicas_.end(); ++it)
+    {
+        auto r = it->get();
+        if (r->IsNew)
+        {
+            continue;
+        }
+
+        NodeEntry const* n = r->Node;
+        if (n->HasCapacity || n->IsThrottled)
+        {
+            nodePlacements_[n].Add(r);
+        }
+    }
+
+    for (auto it = standByReplicas_.begin(); it != standByReplicas_.end(); ++it)
+    {
+        auto r = it->get();
+        NodeEntry const* n = r->Node;
+
+        if (n->HasCapacity || n->IsThrottled)
+        {
+            nodePlacements_[n].Add(r);
         }
     }
 }

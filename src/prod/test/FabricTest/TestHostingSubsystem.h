@@ -122,6 +122,10 @@ namespace FabricTest
         Hosting2::ApplicationHostClosedEventHHandler RegisterApplicationHostClosedEventHandler(Hosting2::ApplicationHostClosedEventHandler const & handler);
         bool UnregisterApplicationHostClosedEventHandler(Hosting2::ApplicationHostClosedEventHHandler const & hHandler);
 
+        Hosting2::AvailableContainerImagesEventHHandler RegisterSendAvailableContainerImagesEventHandler(
+            Hosting2::AvailableContainerImagesEventHandler const & handler);
+        bool UnregisterSendAvailableContainerImagesEventHandler(Hosting2::AvailableContainerImagesEventHHandler const & hHandler);
+
         Common::AsyncOperationSPtr OnBeginOpen(
             Common::TimeSpan,
             Common::AsyncCallback const &,
@@ -166,6 +170,11 @@ namespace FabricTest
         static Hosting2::IHostingSubsystemSPtr Create(Hosting2::HostingSubsystemConstructorParameters & parameters);
 
         uint64 GetResourceNodeCapacity(std::wstring const& resourceName) const;
+
+        __declspec(property(get = get_NetworkInventoryAgent, put = set_NetworkInventoryAgent)) Hosting2::NetworkInventoryAgentSPtr NetworkInventoryAgent;
+        Hosting2::NetworkInventoryAgentSPtr const get_NetworkInventoryAgent() const { return networkInventoryAgent_; }
+        void set_NetworkInventoryAgent(Hosting2::NetworkInventoryAgentSPtr value) { networkInventoryAgent_ = value; }
+                
     private:
         TestHostingSubsystem(Hosting2::HostingSubsystemConstructorParameters & parameters);
 
@@ -187,5 +196,6 @@ namespace FabricTest
 
         Federation::NodeId const nodeId_;
         Hosting2::IHostingSubsystemSPtr hosting_;
+        Hosting2::NetworkInventoryAgentSPtr networkInventoryAgent_;
     };
 }

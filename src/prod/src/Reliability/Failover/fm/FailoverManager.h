@@ -26,6 +26,8 @@ namespace Reliability
             static FailoverManagerSPtr CreateFM(
                 Federation::FederationSubsystemSPtr && federation,
                 Client::HealthReportingComponentSPtr const & healthClient,
+                Api::IServiceManagementClientPtr serviceManagementClient,
+                Api::IClientFactoryPtr const & clientFactory,
                 Common::FabricNodeConfigSPtr const& nodeConfig,
                 FailoverManagerStoreUPtr && fmStore,
                 ComPointer<IFabricStatefulServicePartition> const& servicePartition,
@@ -35,6 +37,7 @@ namespace Reliability
             FailoverManager(
                 Federation::FederationSubsystemSPtr && federation,
                 Client::HealthReportingComponentSPtr const & healthClient,
+                Api::IServiceManagementClientPtr serviceManagementClient,
                 Common::FabricNodeConfigSPtr const& nodeConfig,
                 bool isMaster,
                 FailoverManagerStoreUPtr && fmStore,
@@ -146,9 +149,15 @@ namespace Reliability
             __declspec (property(get=get_HealthClient)) Client::HealthReportingComponentSPtr const & HealthClient;
             Client::HealthReportingComponentSPtr const & get_HealthClient() const { return healthClient_; }
 
+            __declspec (property(get=get_ClientFactory, put=set_ClientFactory)) Api::IClientFactoryPtr const & ClientFactory;
+            Api::IClientFactoryPtr const & get_ClientFactory() const { return clientFactory_; }
+            void set_ClientFactory(Api::IClientFactoryPtr const & clientFactory) { clientFactory_ = clientFactory; }
+
             __declspec (property(get = get_QueueFullThrottle)) FailoverThrottle & QueueFullThrottle;
             FailoverThrottle& get_QueueFullThrottle() { return queueFullThrottle_; }
-            
+
+            __declspec (property(get=get_NetworkInventoryService)) Management::NetworkInventoryManager::NetworkInventoryService & NIS;
+            Management::NetworkInventoryManager::NetworkInventoryService & get_NetworkInventoryService() const { return *networkInventoryServiceUPtr_; }
 
             static Common::Global<FailoverManagerComponent::EventSource> FMEventSource;
             static Common::Global<FailoverManagerComponent::MessageEventSource> FMMessageEventSource;
@@ -198,6 +207,8 @@ namespace Reliability
 
             void OnPLBSafetyCheckProcessingDone(Common::AsyncOperationSPtr const& operation, ServiceModel::ApplicationIdentifier const& appId);
 
+            void UpdateFailoverUnitTargetReplicaCount(Common::Guid const &, int targetCount);
+
             void OnNodeSequenceNumberUpdated(
                 ServiceTypeUpdateKind::Enum serviceTypeUpdateEvent,
                 std::vector<ServiceModel::ServiceTypeIdentifier> && serviceTypes,
@@ -240,6 +251,7 @@ namespace Reliability
 
             void StartLoading(bool isRetry);
             void Load();
+            Common::ErrorCode InitializeNetworkInventoryService();
 
             static void AdjustTimestamps(std::vector<LoadInfoSPtr> & loadInfos);
 
@@ -269,6 +281,7 @@ namespace Reliability
             void NodeUpdateServiceReplyHandler(Transport::Message & request, Federation::NodeInstance const& from);
             void NodeDeactivateReplyAsyncMessageHandler(Transport::Message & request, Federation::NodeInstance const& from);
             void NodeActivateReplyAsyncMessageHandler(Transport::Message & request, Federation::NodeInstance const& from);
+            void AvailableContainerImagesMessageHandler(Transport::Message & request);
 
             Transport::MessageUPtr NodeUpMessageHandler(Transport::Message & request, Federation::NodeInstance const & from); 
             Transport::MessageUPtr ChangeNotificationMessageHandler(Transport::Message & request, Federation::NodeInstance const & from);
@@ -318,13 +331,6 @@ namespace Reliability
                 Transport::MessageId const& messageId,
                 std::vector<ServiceTypeInfo> && processedInfos,
                 Federation::NodeInstance const& from);
-
-            void PartitionNotificationAsyncMessageHandler(Transport::Message & request, Federation::NodeInstance const& from);
-            void FailoverManager::OnPartitionNotificationCompleted(
-                Transport::MessageId const& messageId,
-                uint64 sequenceNum,
-                Federation::NodeInstance const& from,
-                Common::ErrorCode error);
 
             void UpdateServiceAsyncMessageHandler(Transport::Message & request, TimedRequestReceiverContextUPtr && context);
             void UpdateSystemServiceAsyncMessageHandler(Transport::Message & request, TimedRequestReceiverContextUPtr && context);
@@ -382,12 +388,17 @@ namespace Reliability
                 std::wstring const & upgradeDomain,
                 std::vector<UpgradeDescription> & upgrades);
 
-            Common::ErrorCode NodeUp(Federation::NodeInstance const & from, NodeUpMessageBody const & body, std::vector<UpgradeDescription> & upgrades);
+            Common::ErrorCode NodeUp(
+                Federation::NodeInstance const& from,
+                NodeUpMessageBody const& body,
+                _Out_ Common::FabricVersionInstance & targetVersionInstance,
+                _Out_ std::vector<UpgradeDescription> & upgrades);
             bool NodeDown(Federation::NodeInstance const & nodeInstance);
 
             void RegisterEvents(Common::EventHandler const & readyEvent, Common::EventHandler const & failureEvent);
             Federation::FederationSubsystemSPtr federation_;
             Client::HealthReportingComponentSPtr healthClient_;
+            Api::IClientFactoryPtr clientFactory_;
 
             Common::FabricNodeConfigSPtr nodeConfig_;
 
@@ -447,6 +458,10 @@ namespace Reliability
 
             FailoverUnitCountersSPtr failoverUnitCountersSPtr_;
             FailoverThrottle queueFullThrottle_;
+            
+            Api::IServiceManagementClientPtr serviceManagementClient_;
+
+            Management::NetworkInventoryManager::NetworkInventoryServiceUPtr networkInventoryServiceUPtr_;
         };
     }
 }

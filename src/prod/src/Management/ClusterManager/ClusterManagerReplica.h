@@ -16,8 +16,36 @@ namespace Management
         using CloseReplicaCallback = std::function<void(SystemServices::SystemServiceLocation const &)>;
 
         using NamingJobCallback = std::function<void(Common::AsyncOperationSPtr const &)>;
+        typedef std::function<void()> ProcessingCallback;
 
-        class ClusterManagerReplica : 
+        template <class R>
+        class AppTypeCleanupJobQueue : public Common::DefaultJobQueue<R>
+        {
+            DENY_COPY(AppTypeCleanupJobQueue)
+        public:
+            AppTypeCleanupJobQueue(std::wstring const & name, R & root, bool forceEnqueue, int maxThreads = 0, uint64 queueSize = UINT64_MAX)
+                : Common::DefaultJobQueue<R>(
+                    name,
+                    root,
+                    forceEnqueue,
+                    maxThreads,
+                    nullptr,
+                    queueSize),
+                onFinishEvent_()
+            {
+            }
+
+            __declspec(property(get = get_OperationsFinishedEvent)) Common::ManualResetEvent & OperationsFinishedAsyncEvent;
+            Common::ManualResetEvent & get_OperationsFinishedEvent() { return onFinishEvent_; }
+
+        protected:
+            void OnFinishItems() override { onFinishEvent_.Set(); }
+
+        private:
+            Common::ManualResetEvent onFinishEvent_;
+        };
+
+        class ClusterManagerReplica :
             public Store::KeyValueStoreReplica,
             protected Common::TextTraceComponent<Common::TraceTaskCodes::ClusterManager>,
             private Common::RootedObject
@@ -33,7 +61,7 @@ namespace Management
             ClusterManagerReplica(
                 Common::Guid const &,
                 FABRIC_REPLICA_ID,
-                __in Reliability::FederationWrapper &, 
+                __in Reliability::FederationWrapper &,
                 __in Reliability::ServiceResolver &,
                 __in IImageBuilder &,
                 Api::IClientFactoryPtr const &,
@@ -70,6 +98,9 @@ namespace Management
             __declspec(property(get=get_ContextProcessingDelay)) Common::TimeSpan const & ContextProcessingDelay;
             Common::TimeSpan const & get_ContextProcessingDelay() const { return contextProcessingDelay_; }
 
+            __declspec(property(get=get_VolumeManager)) std::unique_ptr<VolumeManager> & VolMgr;
+            std::unique_ptr<VolumeManager> & get_VolumeManager() { return volumeManagerUPtr_; }
+
             OpenReplicaCallback OnOpenReplicaCallback;
             ChangeRoleCallback OnChangeRoleCallback;
             CloseReplicaCallback OnCloseReplicaCallback;
@@ -83,6 +114,25 @@ namespace Management
             bool TryAcceptRequestByString(std::wstring const &, __in ClientRequestSPtr &);
             bool TryAcceptRequestByName(Common::NamingUri const &, __in ClientRequestSPtr &);
             bool TryAcceptClusterOperationRequest(__in ClientRequestSPtr &);
+
+            Common::ErrorCode CheckAndDeleteUnusedApplicationTypes();
+            Common::ErrorCode CheckAndDeleteUnusedApplicationTypes(std::wstring const &, Common::ActivityId const &);
+            void MarkUsedAppTypeVersions(
+                std::vector<ApplicationTypeContext> const &,
+                std::wstring const &,
+                __out std::vector<bool> &);
+
+            Common::ErrorCode FindUsedAppTypeVersionVersion(
+                std::vector<ApplicationTypeContext> const &,
+                std::vector<ApplicationContext> const &,
+                std::wstring const &,
+                __out std::vector<bool> &);
+
+            void OnUnprovisionAcceptComplete(
+                std::shared_ptr<UnprovisionApplicationTypeDescription> const &,
+                Common::ActivityId const &,
+                Common::AsyncOperationSPtr const&,
+                bool);
 
             Common::AsyncOperationSPtr BeginAcceptProvisionApplicationType(
                 ProvisionApplicationTypeDescription const & body,
@@ -118,6 +168,14 @@ namespace Management
                 Common::AsyncOperationSPtr const & root);
             Common::ErrorCode EndAcceptCreateComposeDeployment(Common::AsyncOperationSPtr const & operation) { return EndAcceptRequest(operation); }
 
+            Common::AsyncOperationSPtr BeginAcceptCreateSingleInstanceApplication(
+                ServiceModel::ModelV2::ApplicationDescription &&,
+                ClientRequestSPtr && clientRequest,
+                Common::TimeSpan const timeout,
+                Common::AsyncCallback const & callback,
+                Common::AsyncOperationSPtr const & root);
+            Common::ErrorCode EndAcceptCreateSingleInstanceApplication(Common::AsyncOperationSPtr const & operation) { return EndAcceptRequest(operation); }
+
             Common::AsyncOperationSPtr BeginAcceptDeleteComposeDeployment(
                 std::wstring const &,
                 Common::NamingUri const &,
@@ -126,6 +184,14 @@ namespace Management
                 Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
             Common::ErrorCode EndAcceptDeleteComposeDeployment(Common::AsyncOperationSPtr const & operation) { return EndAcceptRequest(operation); }
+
+            Common::AsyncOperationSPtr BeginAcceptDeleteSingleInstanceDeployment(
+                ServiceModel::DeleteSingleInstanceDeploymentDescription const &,
+                ClientRequestSPtr &&,
+                Common::TimeSpan const,
+                Common::AsyncCallback const &,
+                Common::AsyncOperationSPtr const &);
+            Common::ErrorCode EndAcceptDeleteSingleInstanceDeployment(Common::AsyncOperationSPtr const & operation) { return EndAcceptRequest(operation); }
 
             Common::AsyncOperationSPtr BeginAcceptUpdateApplication(
                 ServiceModel::ApplicationUpdateDescriptionWrapper const & updateDescription,
@@ -146,7 +212,7 @@ namespace Management
             Common::AsyncOperationSPtr BeginAcceptCreateServiceFromTemplate(
                 Common::NamingUri const & applicationName,
                 Common::NamingUri const & absoluteServiceName,
-				std::wstring const & serviceDnsName,
+                std::wstring const & serviceDnsName,
                 ServiceModelTypeName const &,
                 ServiceModel::ServicePackageActivationMode::Enum servicePackageActivationMode,
                 std::vector<byte> &&,
@@ -165,7 +231,7 @@ namespace Management
             Common::ErrorCode EndAcceptUnprovisionApplicationType(Common::AsyncOperationSPtr const & op) { return EndAcceptRequest(op); }
 
             Common::AsyncOperationSPtr BeginAcceptDeleteApplication(
-                DeleteApplicationMessageBody const & appName,
+                DeleteApplicationMessageBody const & body,
                 ClientRequestSPtr &&,
                 Common::TimeSpan const,
                 Common::AsyncCallback const &,
@@ -189,6 +255,14 @@ namespace Management
                 Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
             Common::ErrorCode EndAcceptUpgradeComposeDeployment(Common::AsyncOperationSPtr const & op) { return EndAcceptRequest(op); }
+
+            Common::AsyncOperationSPtr BeginAcceptRollbackComposeDeployment(
+                std::wstring const &,
+                ClientRequestSPtr &&,
+                Common::TimeSpan const,
+                Common::AsyncCallback const &,
+                Common::AsyncOperationSPtr const &);
+            Common::ErrorCode EndAcceptRollbackComposeDeployment(Common::AsyncOperationSPtr const & op) { return EndAcceptRequest(op); }
 
             Common::AsyncOperationSPtr BeginAcceptUpgradeApplication(
                 ApplicationUpgradeDescription const &,
@@ -317,7 +391,7 @@ namespace Management
 
             Common::AsyncOperationSPtr RejectInvalidMessage(
                 ClientRequestSPtr &&,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
 
             // *****************
@@ -341,21 +415,34 @@ namespace Management
                 __in std::wstring const &,
                 bool excludeManifest,
                 __out std::vector<std::pair<ApplicationTypeContext, std::shared_ptr<StoreDataApplicationManifest>>> &) const;
-            
+
+            Common::ErrorCode GetApplicationResourceQueryResult(
+                Store::StoreTransaction const &,
+                SingleInstanceDeploymentContext const &,
+                Store::ReplicaActivityId const &,
+                __out ServiceModel::ModelV2::ApplicationDescriptionQueryResult &);
+
             static Common::TimeSpan GetRandomizedOperationRetryDelay(Common::ErrorCode const &);
             Common::ErrorCode GetCompletedApplicationContext(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 __out ApplicationContext &) const;
             Common::ErrorCode GetCompletedOrUpgradingApplicationContext(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 __inout ApplicationContext &) const;
             Common::ErrorCode GetValidApplicationContext(
                 Store::StoreTransaction const &,
                 __inout ApplicationContext &) const;
             Common::ErrorCode GetApplicationContextForServiceProcessing(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 __out ApplicationContext &) const;
             Common::ErrorCode ValidateServiceTypeDuringUpgrade(Store::StoreTransaction const &, ApplicationContext const &, ServiceModelTypeName const &) const;
+
+            Common::ErrorCode GetStoreData(
+                Store::StoreTransaction const &,
+                DeploymentType::Enum deploymentType,
+                std::wstring const & deploymentName,
+                ServiceModelVersion const & version,
+                std::shared_ptr<Store::StoreData> & storeData) const;
 
             template <class TStoreData>
             Common::ErrorCode ClearVerifiedUpgradeDomains(
@@ -365,13 +452,13 @@ namespace Management
             Common::TimeSpan GetRollbackReplicaSetCheckTimeout(Common::TimeSpan const) const;
 
             Common::ErrorCode TraceAndGetErrorDetails(
-                Common::ErrorCodeValue::Enum, 
+                Common::ErrorCodeValue::Enum,
                 std::wstring && msg,
                 std::wstring const & level = L"Warning") const;
 
             Common::ErrorCode TraceAndGetErrorDetails(
                 Common::StringLiteral const & traceComponent,
-                Common::ErrorCodeValue::Enum, 
+                Common::ErrorCodeValue::Enum,
                 std::wstring && msg,
                 std::wstring const & level = L"Warning") const;
 
@@ -400,13 +487,18 @@ namespace Management
             Common::ErrorCode ReportApplicationsType(
                 Common::StringLiteral const & traceComponent,
                 Common::ActivityId const & activityId,
-                Common::AsyncOperationSPtr const &, 
+                Common::AsyncOperationSPtr const &,
                 std::vector<std::wstring> const &,
                 Common::TimeSpan const timeout) const;
 
             static bool IsDnsServiceEnabled();
+            static bool IsPartitionedDnsQueryFeatureEnabled();
             static Common::ErrorCode ValidateServiceDnsName(std::wstring const &);
-            static std::wstring GetComposeDeploymentNameFromAppName(std::wstring const &);
+            static Common::ErrorCode ValidateServiceDnsNameForPartitionedQueryCompliance(std::wstring const &);
+            static std::wstring GetDeploymentNameFromAppName(std::wstring const &);
+
+            bool QueueAutomaticCleanupApplicationType(std::wstring const &, Common::ActivityId const & activityId) const;
+            Common::ErrorCode CloseAutomaticCleanupApplicationType();
 
             // ************
             // Test Helpers
@@ -425,7 +517,7 @@ namespace Management
             HealthManager::HealthManagerReplicaSPtr Test_GetHealthManagerReplica() const;
 
             virtual Common::ErrorCode ProcessQuery(
-                Query::QueryNames::Enum queryName, 
+                Query::QueryNames::Enum queryName,
                 ServiceModel::QueryArgumentMap const & queryArgs,
                 Common::ActivityId const & activityId,
                 Common::TimeSpan const timeout,
@@ -452,28 +544,46 @@ namespace Management
         protected:
 
             virtual Common::AsyncOperationSPtr BeginProcessQuery(
-                Query::QueryNames::Enum queryName, 
-                ServiceModel::QueryArgumentMap const & queryArgs, 
+                Query::QueryNames::Enum queryName,
+                ServiceModel::QueryArgumentMap const & queryArgs,
                 Common::ActivityId const & activityId,
                 Common::TimeSpan timeout,
-                Common::AsyncCallback const & callback, 
+                Common::AsyncCallback const & callback,
                 Common::AsyncOperationSPtr const & parent);
             virtual Common::ErrorCode EndProcessQuery(
-                Common::AsyncOperationSPtr const & operation, 
+                Common::AsyncOperationSPtr const & operation,
                 _Out_ Transport::MessageUPtr & reply);
 
             virtual Common::AsyncOperationSPtr BeginForwardMessage(
-                std::wstring const & childAddressSegment, 
-                std::wstring const & childAddressSegmentMetadata, 
+                std::wstring const & childAddressSegment,
+                std::wstring const & childAddressSegmentMetadata,
                 Transport::MessageUPtr & message,
                 Common::TimeSpan timeout,
                 Common::AsyncCallback const & callback,
                 Common::AsyncOperationSPtr const & parent);
             virtual Common::ErrorCode EndForwardMessage(
-                Common::AsyncOperationSPtr const & asyncOperation, 
+                Common::AsyncOperationSPtr const & asyncOperation,
                 __out Transport::MessageUPtr & reply);
 
         private:
+            Common::AsyncOperationSPtr BeginProcessUpgradeSingleInstanceApplication(
+                std::shared_ptr<SingleInstanceDeploymentContext> &&,
+                ServiceModel::SingleInstanceApplicationUpgradeDescription const & upgradeDescription,
+                Store::StoreTransaction &&,
+                ClientRequestSPtr && clientRequest,
+                Common::TimeSpan const timeout,
+                Common::AsyncCallback const & callback,
+                Common::AsyncOperationSPtr const & root);
+
+            Common::AsyncOperationSPtr BeginReplaceSingleInstanceApplication(
+                std::shared_ptr<SingleInstanceDeploymentContext> &&,
+                ServiceModel::ModelV2::ApplicationDescription const &,
+                Store::StoreTransaction &&,
+                ClientRequestSPtr && clientRequest,
+                Common::TimeSpan const timeout,
+                Common::AsyncCallback const & callback,
+                Common::AsyncOperationSPtr const & root);
+
             class FinishAcceptRequestAsyncOperation;
 
             Common::ErrorCode OpenHealthManagerReplica();
@@ -489,6 +599,9 @@ namespace Management
 
             template <class T>
             Common::ErrorCode ReadPrefix(std::wstring const & storeType, std::wstring const & keyPrefix, __out std::vector<T> & contexts) const;
+
+            template <class T>
+            Common::ErrorCode ReadExact(__inout T & context) const;
 
             void CheckAddUniquePackages(
                 std::wstring const & serviceManifestName,
@@ -511,36 +624,36 @@ namespace Management
             Common::AsyncOperationSPtr FinishAcceptDeleteContext(
                 Store::StoreTransaction &&,
                 ClientRequestSPtr &&,
-                std::shared_ptr<RolloutContext> &&, 
+                std::shared_ptr<RolloutContext> &&,
                 Common::TimeSpan const,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
 
             Common::AsyncOperationSPtr FinishAcceptRequest(
                 Store::StoreTransaction &&,
                 std::shared_ptr<RolloutContext> &&,
-                Common::ErrorCode &&, 
+                Common::ErrorCode &&,
                 bool shouldUpdateContext,
                 Common::TimeSpan const,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
 
             Common::AsyncOperationSPtr FinishAcceptRequest(
                 Store::StoreTransaction &&,
                 std::shared_ptr<RolloutContext> &&,
-                Common::ErrorCode &&, 
+                Common::ErrorCode &&,
                 bool shouldUpdateContext,
                 bool shouldCompleteClient,
                 Common::TimeSpan const,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
 
             bool ShouldEnqueue(Common::ErrorCode const &);
 
             Common::AsyncOperationSPtr RejectRequest(
                 ClientRequestSPtr &&,
-                Common::ErrorCode &&, 
-                Common::AsyncCallback const &, 
+                Common::ErrorCode &&,
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
 
             Common::ErrorCode RejectRequest(
@@ -570,7 +683,7 @@ namespace Management
             void InitializeRequestHandlers();
             void AddHandler(
                 std::map<std::wstring, ProcessRequestHandler> & temp,
-                std::wstring const &, 
+                std::wstring const &,
                 ProcessRequestHandler const &);
 
             template <class TAsyncOperation>
@@ -592,14 +705,14 @@ namespace Management
                 Transport::MessageUPtr &&,
                 Federation::RequestReceiverContextUPtr &&,
                 Common::TimeSpan const,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
             Common::AsyncOperationSPtr BeginProcessRequest(
                 Transport::MessageUPtr &&,
                 Federation::RequestReceiverContextUPtr &&,
                 Common::ActivityId const &,
                 Common::TimeSpan const,
-                Common::AsyncCallback const &, 
+                Common::AsyncCallback const &,
                 Common::AsyncOperationSPtr const &);
             Common::ErrorCode EndProcessRequest(
                 Common::AsyncOperationSPtr const &,
@@ -626,7 +739,7 @@ namespace Management
             Common::ErrorCode CheckApplicationContextForServiceProcessing(ApplicationContext const &) const;
 
             Common::ErrorCode GetDeletableApplicationContext(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 __out ApplicationContext &) const;
 
             Common::ErrorCode GetCompletedOrUpgradingComposeDeploymentContext(
@@ -641,9 +754,17 @@ namespace Management
                 Store::StoreTransaction const &,
                 __inout ComposeDeploymentContext &) const;
 
+            Common::ErrorCode GetDeletableSingleInstanceDeploymentContext(
+                Store::StoreTransaction const &,
+                __inout SingleInstanceDeploymentContext &) const;
+
             Common::ErrorCode GetCompletedApplicationTypeContext(Store::StoreTransaction const &, __inout ApplicationTypeContext &);
 
         public:
+            Common::ErrorCode GetSingleInstanceDeploymentContext(
+                Store::StoreTransaction const &,
+                __inout SingleInstanceDeploymentContext &) const;
+
             Common::ErrorCode GetComposeDeploymentContext(
                 Store::StoreTransaction const &,
                 __inout ComposeDeploymentContext &) const;
@@ -653,7 +774,7 @@ namespace Management
                 __out ApplicationContext &) const;
 
             Common::ErrorCode GetApplicationTypeContext(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 __inout ApplicationTypeContext &) const;
 
             Common::ErrorCode GetFabricVersionInfo(
@@ -663,7 +784,7 @@ namespace Management
                 __out Common::FabricVersion &) const;
 
             Common::ErrorCode GetProvisionedFabricContext(
-                Store::StoreTransaction const &, 
+                Store::StoreTransaction const &,
                 Common::FabricVersion const &,
                 __inout FabricProvisionContext &,
                 __out bool & containsVersion) const;
@@ -671,8 +792,8 @@ namespace Management
         private:
 
             Common::ErrorCode GetApplicationContextForQuery(
-                std::wstring const & applicationName, 
-                Store::ReplicaActivityId const & replicaActivityId, 
+                std::wstring const & applicationName,
+                Store::ReplicaActivityId const & replicaActivityId,
                 __out std::unique_ptr<ApplicationContext> & applicationContext);
 
             Common::ErrorCode GetComposeDeploymentContextForQuery(
@@ -682,8 +803,8 @@ namespace Management
 
             Common::ErrorCode GetServiceTypesFromStore(
                 std::wstring applicationTypeName,
-                std::wstring applicationTypeVersion, 
-                Store::ReplicaActivityId const & replicaActivityId,     
+                std::wstring applicationTypeVersion,
+                Store::ReplicaActivityId const & replicaActivityId,
                 __out std::vector<ServiceModelServiceManifestDescription> & serviceManifests);
             ServiceModel::QueryResult GetApplications(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetApplicationTypes(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
@@ -696,12 +817,16 @@ namespace Management
             ServiceModel::QueryResult GetApplicationManifest(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetNodes(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetClusterManifest(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId, Common::TimeSpan const timeout);
+            ServiceModel::QueryResult GetClusterVersion();
             ServiceModel::QueryResult GetServiceManifest(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetInfrastructureTask(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetProvisionedFabricCodeVersions(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetProvisionedFabricConfigVersions(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
             ServiceModel::QueryResult GetDeletedApplicationsList(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & ReplicaId);
             ServiceModel::QueryResult GetProvisionedApplicationTypePackages(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & ReplicaId);
+            ServiceModel::QueryResult GetApplicationResources(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
+            ServiceModel::QueryResult GetServiceResources(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
+            ServiceModel::QueryResult GetVolumeResources(ServiceModel::QueryArgumentMap const & queryArgs, Store::ReplicaActivityId const & replicaActivityId);
 
             void InitializeCachedFilePtrs();
 
@@ -719,7 +844,7 @@ namespace Management
 
             std::wstring nodeName_;
             std::unique_ptr<RolloutManager> rolloutManagerUPtr_;
-            
+
             std::map<std::wstring, ProcessRequestHandler> requestHandlers_;
 
             Naming::StringRequestInstanceTrackerUPtr stringRequestTrackerUPtr_;
@@ -729,12 +854,12 @@ namespace Management
 
             Common::atomic_bool isGettingApplicationTypeInfo_;
             mutable Common::atomic_bool isFabricImageBuilderOperationActive_;
-            
+
             // This replica is kept alive by the runtime through a ComPointer, which
             // the runtime may release at any time. Therefore, this replica must
             // keep the FabricNode alive since references to its FederationSubsystem
             // and ReliabilitySubsystem are needed for resolution+routing.
-            // Furthermore, this replica must be a ComponentRoot and keep itself alive 
+            // Furthermore, this replica must be a ComponentRoot and keep itself alive
             // as needed.
             //
             Common::ComponentRootSPtr fabricRoot_;
@@ -753,15 +878,26 @@ namespace Management
 
             // Create/Delete service requests will not perform any updates to the application context
             // in order to improve performance by avoiding write conflicts at the database record level.
-            // This means that the processing of Create/Delete service requests can race with a 
+            // This means that the processing of Create/Delete service requests can race with a
             // Delete application request. For example, a Delete application request must check the
             // state of all services within the application after committing the pending delete state.
             // Furthermore, the Create/Delete service requests must check the persisted state of the application
             // again after committing their own respective states.
             //
             Common::CachedFileSPtr currentClusterManifest_;
-            
-            std::shared_ptr<IDockerComposeAppTypeNameVersionGenerator> dockerComposeAppTypeVersionGenerator_;
+
+            std::shared_ptr<IApplicationDeploymentTypeNameVersionGenerator> dockerComposeAppTypeVersionGenerator_;
+            std::shared_ptr<IApplicationDeploymentTypeNameVersionGenerator> containerGroupAppTypeVersionGenerator_;
+
+            std::unique_ptr<VolumeManager> volumeManagerUPtr_;
+
+            // For automatic removal of unused application types
+            Common::ExclusiveLock cleanupApplicationTypeTimerLock_;
+            Common::TimerSPtr cleanupApplicationTypeTimer_;
+            Common::ExclusiveLock callbackLock_;
+
+            class CleanupAppTypeJobItem;
+            std::unique_ptr<AppTypeCleanupJobQueue<ClusterManagerReplica>> cleanupAppTypejobQueue_;
         };
     }
 }

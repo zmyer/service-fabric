@@ -173,7 +173,7 @@ namespace Data
             return count + consolidatedStoreComponentSPtr_->Count();
          }
 
-         LONG64 GetMemorySize() const
+         LONG64 GetMemorySize(__in LONG64 estimatedKeySize) const
          {
             LONG64 size = 0;
             auto deltaDifferentialStateListEnumerator = deltaDifferentialStateListSPtr_->GetEnumerator();
@@ -183,9 +183,10 @@ namespace Data
                 auto currentItem = deltaDifferentialStateListEnumerator->Current();
                 auto componentSPtr = currentItem.Value;
                 size += componentSPtr->Size;
+                size += (estimatedKeySize + Constants::ValueMetadataSizeBytes) * componentSPtr->Count();
             }
 
-            return size + consolidatedStoreComponentSPtr_->Size;
+            return size + consolidatedStoreComponentSPtr_->Size + (estimatedKeySize + Constants::ValueMetadataSizeBytes) * consolidatedStoreComponentSPtr_->Count();
          }
 
          void AddToMemorySize(__in LONG64 size)
@@ -238,6 +239,47 @@ namespace Data
 
              KSharedPtr<IEnumerator<TKey>> resultSPtr;
              NTSTATUS status = SortedSequenceMergeEnumerator<TKey>::Create(*enumeratorsSPtr, *keyComparerSPtr_, useFirstKey, firstKey, useLastKey, lastKey, this->GetThisAllocator(), resultSPtr);
+             Diagnostics::Validate(status);
+             ASSERT_IFNOT(resultSPtr != nullptr, "result enumerator should not be null");
+             return resultSPtr;
+         }
+
+         KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> GetKeysAndValuesEnumerator()
+         {
+             KSharedPtr<KSharedArray<KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>>>> enumeratorsSPtr = 
+                 _new(AGGREGATEDSTATE_TAG, this->GetThisAllocator()) KSharedArray<KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>>>();
+
+             auto deltaDifferentialStateListEnumerator = deltaDifferentialStateListSPtr_->GetEnumerator();
+
+             while (deltaDifferentialStateListEnumerator->MoveNext())
+             {
+                 auto currentItem = deltaDifferentialStateListEnumerator->Current();
+                 auto componentSPtr = currentItem.Value;
+
+                 auto differentialEnumerator = componentSPtr->GetKeyAndValues();
+
+                 KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> enumerator = static_cast<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>> *>(differentialEnumerator.RawPtr());
+                 enumeratorsSPtr->Append(enumerator);
+             }
+
+             auto consolidatedStateEnumerator = consolidatedStoreComponentSPtr_->EnumerateEntries();
+             KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> enumerator = static_cast<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>> *>(consolidatedStateEnumerator.RawPtr());
+             enumeratorsSPtr->Append(enumerator);
+
+             KSharedPtr<KeyVersionedItemComparer<TKey, TValue>> comparerSPtr;
+             KeyVersionedItemComparer<TKey, TValue>::Create(*keyComparerSPtr_, this->GetThisAllocator(), comparerSPtr);
+
+             KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>> defaultKV;
+             KSharedPtr<IEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>> resultSPtr;
+             NTSTATUS status = SortedSequenceMergeEnumerator<KeyValuePair<TKey, KSharedPtr<VersionedItem<TValue>>>>::Create(
+                 *enumeratorsSPtr, 
+                 *comparerSPtr, 
+                 false, 
+                 defaultKV, 
+                 false, 
+                 defaultKV, 
+                 this->GetThisAllocator(), 
+                 resultSPtr);
              Diagnostics::Validate(status);
              ASSERT_IFNOT(resultSPtr != nullptr, "result enumerator should not be null");
              return resultSPtr;

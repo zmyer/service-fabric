@@ -25,21 +25,28 @@ namespace StateManagerTests
 
     public:
         StateManagerTestBase();
-        StateManagerTestBase(__in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig);
+        StateManagerTestBase(__in bool hasPersistedState);
+        StateManagerTestBase(__in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig, __in bool hasPersistedState);
 
         virtual ~StateManagerTestBase();
 
     protected:
         TestTransactionManager::SPtr CreateReplica(
             __in Data::Utilities::PartitionedReplicaId const & traceId,
-            __in TxnReplicator::IRuntimeFolders & runtimeFolders, 
-            __in KWfStatefulServicePartition & partition);
+            __in TxnReplicator::IRuntimeFolders & runtimeFolders,
+            __in Data::Utilities::IStatefulPartition & partition);
+
+        TestTransactionManager::SPtr CreateVolatileReplica(
+            __in Data::Utilities::PartitionedReplicaId const & traceId,
+            __in TxnReplicator::IRuntimeFolders & runtimeFolders,
+            __in Data::Utilities::IStatefulPartition & partition);
 
         TestTransactionManager::SPtr CreateReplica(
             __in Data::Utilities::PartitionedReplicaId const & traceId,
             __in TxnReplicator::IRuntimeFolders & runtimeFolders,
-            __in KWfStatefulServicePartition & partition,
-            __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig);
+            __in Data::Utilities::IStatefulPartition & partition,
+            __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+            __in bool hasPersistedState);
 
         KUri::CSPtr GetStateProviderName(
             __in NameType nameType, 
@@ -130,9 +137,10 @@ namespace StateManagerTests
     private:
         Data::StateManager::StateManager::SPtr CreateStateManager(
             __in Data::Utilities::PartitionedReplicaId const & traceId,
-            __in TxnReplicator::IRuntimeFolders & runtimeFolders, 
-            __in KWfStatefulServicePartition & partition,
-            __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig);
+            __in TxnReplicator::IRuntimeFolders & runtimeFolders,
+            __in Data::Utilities::IStatefulPartition & partition,
+            __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+            __in bool hasPersistedState);
 
     protected:
         KtlSystem* underlyingSystem_ = nullptr;
@@ -144,6 +152,6 @@ namespace StateManagerTests
 
         Data::Utilities::PartitionedReplicaId::SPtr partitionedReplicaIdCSPtr_;
         TxnReplicator::IRuntimeFolders::SPtr runtimeFolders_;
-        KWfStatefulServicePartition::SPtr partitionSPtr_;
+        Data::Utilities::IStatefulPartition::SPtr partitionSPtr_;
     };
 }

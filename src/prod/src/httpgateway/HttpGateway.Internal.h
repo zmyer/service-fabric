@@ -3,7 +3,7 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
-#pragma once 
+#pragma once
 
 //
 // External headers required by HttpGateway.
@@ -45,9 +45,14 @@
 #include "httpgateway/ApplicationUpgradeProgress.h"
 #include "httpgateway/ApplicationsHandler.h"
 #include "httpgateway/ApplicationTypesHandler.h"
+#include "httpgateway/SecretsResourceHandler.h"
 #include "httpgateway/ComposeDeploymentsHandler.h"
+#include "httpgateway/VolumesHandler.h"
 #include "httpgateway/NodesHandler.h"
 #include "httpgateway/NamesHandler.h"
+#include "httpgateway/ApplicationsResourceHandler.h"
+#include "httpgateway/NetworksHandler.h"
+#include "httpgateway/GatewaysResourceHandler.h"
 #include "httpgateway/FabricUpgradeProgress.h"
 #include "httpgateway/FabricOrchestrationUpgradeProgress.h"
 #include "httpgateway/DeployedApplicationQueryResultWrapper.h"
@@ -70,6 +75,7 @@
 #include "httpgateway/getfilefromuploadasyncoperation.h"
 #include "httpgateway/HttpKerberosAuthHandler.h"
 #include "httpgateway/ServiceResolver.h"
+#include "httpgateway/EventsStoreHandler.h"
 #endif
 
 #include "httpgateway/HttpServer.AccessCheckAsyncOperation.h"

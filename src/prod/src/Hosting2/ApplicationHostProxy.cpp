@@ -94,9 +94,14 @@ private:
                 owner_.HostId,
                 error);
 
-            TryComplete(operation->Parent, error);
+            if (error.IsError(ErrorCodeValue::NotFound))
+            {
+                TryComplete(operation->Parent, ErrorCodeValue::UpdateContextFailed);
+                return;
+            }
 
-            // abort the application host proxy, we do not know the status of the proxy
+            TryComplete(operation->Parent, error);
+            //abort the application host proxy, we do not know the status of the proxy
             owner_.Abort();
             return;
         }
@@ -179,6 +184,39 @@ ErrorCode ApplicationHostProxy::EndUpdateCodePackageContext(
     return UpdateCodePackageContextAsyncOperation::End(operation);
 }
 
+AsyncOperationSPtr ApplicationHostProxy::BeginApplicationHostCodePackageOperation(
+    ApplicationHostCodePackageOperationRequest const & request,
+    AsyncCallback const & callback,
+    AsyncOperationSPtr const & parent)
+{
+    UNREFERENCED_PARAMETER(request);
+
+    //
+    // Supporting ApplicationHostProxy should override this method.
+    //
+
+    return AsyncOperation::CreateAndStart<CompletedAsyncOperation>(
+        ErrorCode(ErrorCodeValue::OperationNotSupported),
+        callback,
+        parent);
+}
+
+ErrorCode ApplicationHostProxy::EndApplicationHostCodePackageOperation(
+    AsyncOperationSPtr const & operation)
+{
+    return CompletedAsyncOperation::End(operation);
+}
+
+void ApplicationHostProxy::SendDependentCodePackageEvent(
+    CodePackageEventDescription const & eventDescription)
+{
+    UNREFERENCED_PARAMETER(eventDescription);
+
+    //
+    // Supporting ApplicationHostProxy should override this method.
+    //
+}
+
 ErrorCode ApplicationHostProxy::Create(
     HostingSubsystemHolder const & hostingHolder,
     ApplicationHostIsolationContext const & isolationContext,
@@ -231,7 +269,8 @@ ErrorCode ApplicationHostProxy::Create(
             hostId,
             isolationContext,
             codePackageInstance->RunAsId,
-            codePackageInstance->CodePackageInstanceId.ServicePackageInstanceId);
+            codePackageInstance->CodePackageInstanceId.ServicePackageInstanceId,
+            codePackageInstance->CodePackageObj.RemoveServiceFabricRuntimeAccess);
 
         WriteNoise(
             TraceType,
@@ -255,13 +294,20 @@ void ApplicationHostProxy::TerminateExternally()
     Hosting.ApplicationHostManagerObj->FabricActivator->AbortProcess(this->HostId);
 }
 
+bool ApplicationHostProxy::GetLinuxContainerIsolation()
+{
+    // return false for other host proxies except for the SingleCodeHostProxy
+    return false;
+}
+
 ApplicationHostProxy::ApplicationHostProxy(
     HostingSubsystemHolder const & hostingHolder,
     ApplicationHostContext const & context,
     ApplicationHostIsolationContext const & isolationContext,
     wstring const & runAsId,
     ServicePackageInstanceIdentifier const & servicePackageInstanceId,
-    EntryPointType::Enum entryPointType)
+    EntryPointType::Enum entryPointType,
+    bool removeServiceFabricRuntimeAccess)
     : ComponentRoot()
     , AsyncFabricComponent()
     , hostingHolder_(hostingHolder)
@@ -270,6 +316,8 @@ ApplicationHostProxy::ApplicationHostProxy(
     , runAsId_(runAsId)
     , servicePackageInstanceId_(servicePackageInstanceId)
     , entryPointType_(entryPointType)
+    , removeServiceFabricRuntimeAccess_(removeServiceFabricRuntimeAccess)
+    , isUpdateContextPending_(false)
 {
     this->SetTraceId(hostingHolder.Root->TraceId);
 }
@@ -287,9 +335,14 @@ ApplicationHostProxy::~ApplicationHostProxy()
 
 ErrorCode ApplicationHostProxy::AddHostContextAndRuntimeConnection(EnvironmentMap & envMap)
 {
+    if (removeServiceFabricRuntimeAccess_)
+    {
+        return ErrorCodeValue::Success;
+    }
+
     appHostContext_.ToEnvironmentMap(envMap);
-	
-	if (appHostContext_.IsContainerHost)
+
+    if (appHostContext_.IsContainerHost)
     {
         if (HostingConfig::GetConfig().FabricContainerAppsEnabled)
         {
@@ -311,7 +364,6 @@ ErrorCode ApplicationHostProxy::AddHostContextAndRuntimeConnection(EnvironmentMa
     // SQL Server: Defect 1461864: FabricTestHost should register IFabricCodePackageHost first to get NodeId
     envMap[Constants::EnvironmentVariable::NodeId] = Hosting.NodeId;
     envMap[Constants::EnvironmentVariable::NodeName] = Hosting.NodeName;
-
     ErrorCode error(ErrorCodeValue::Success);
     if (Hosting.IpcServerObj.IsTlsListenerEnabled())
     {
@@ -325,20 +377,43 @@ ErrorCode ApplicationHostProxy::AddTlsConnectionInformation(__inout EnvironmentM
 {
     envMap[Constants::EnvironmentVariable::RuntimeSslConnectionAddress] = Hosting.RuntimeServiceAddressForContainers;
 
-#ifndef PLATFORM_UNIX
     SecureString certKey;
     CertContextUPtr cert;
-    auto error = Hosting.IpcServerObj.SecuritySettingsTls.GenerateClientCert(certKey, cert);
-    if (!error.IsSuccess()) { return error; }
+    ErrorCode error = ErrorCode(ErrorCodeValue::Success);
 
+    {
+        AcquireWriteLock lock(lock_);
+        error = Hosting.IpcServerObj.SecuritySettingsTls.GenerateClientCert(certKey, cert);
+        if (!error.IsSuccess())
+        {
+            WriteNoise(
+                TraceType,
+                TraceId,
+                "ApplicationHostProxy::AddTlsConnectionInformation  Hosting.IpcServerObj.SecuritySettingsTls.GenerateClientCert() failed with error {0}",
+                error);
+            return error;
+        }
+    }
+
+#ifndef PLATFORM_UNIX
     envMap[Constants::EnvironmentVariable::RuntimeSslConnectionCertKey] = certKey.GetPlaintext();
     envMap[Constants::EnvironmentVariable::RuntimeSslConnectionCertEncodedBytes] =  CryptoUtility::CertToBase64String(cert);
-
-    wstring serverThumbprint;
-    error = Hosting.IpcServerObj.SecuritySettingsTls.GetServerThumbprint(serverThumbprint);
-    if (!error.IsSuccess()) { return error; }
-    envMap[Constants::EnvironmentVariable::RuntimeSslConnectionCertThumbprint] = serverThumbprint;
+#else
+    LinuxCryptUtil cryptoUtil;
+    error = cryptoUtil.InstallCertificate(cert, L"");
+    if (!error.IsSuccess())
+    {
+        WriteNoise(
+            TraceType,
+            TraceId,
+            "ApplicationHostProxy::AddTlsConnectionInformation  cryptoUtil.InstallCertificate() failed with error {0}",
+            error);
+        return error;
+    }
+    wstring certFilePathStr(cert.FilePath().begin(), cert.FilePath().end());
+    envMap[Constants::EnvironmentVariable::RuntimeSslConnectionCertFilePath] =  certFilePathStr;
 #endif
+    envMap[Constants::EnvironmentVariable::RuntimeSslConnectionCertThumbprint] = Hosting.IpcServerObj.ServerCertThumbprintTls.PrimaryToString();
 
     return  ErrorCode(ErrorCodeValue::Success);
 }
@@ -348,6 +423,11 @@ ErrorCode ApplicationHostProxy::GetCurrentProcessEnvironmentVariables(
     wstring const & tempDirectory,
     wstring const & fabricBinFolder)
 {
+    if (removeServiceFabricRuntimeAccess_)
+    {
+        return ErrorCodeValue::Success;
+    }
+
     if (this->runAsId_.empty())
     {
         if (!Environment::GetEnvironmentMap(envMap))
@@ -361,11 +441,14 @@ ErrorCode ApplicationHostProxy::GetCurrentProcessEnvironmentVariables(
 
     // Ensure PATH to fabric binaries
     auto pathIter = envMap.find(L"Path");
-    wstring path = fabricBinFolder;
+    wstring path;
     if (pathIter != envMap.end())
     {
-        path.append(L";");
-        path.append(pathIter->second);
+        path = EnvironmentVariable::AppendDirectoryToPathEnvVarValue(fabricBinFolder, pathIter->second);
+    }
+    else
+    {
+        path = fabricBinFolder;
     }
     envMap[L"Path"] = path;
 
@@ -380,4 +463,84 @@ ErrorCode ApplicationHostProxy::GetCurrentProcessEnvironmentVariables(
     }
 
     return ErrorCode(ErrorCodeValue::Success);
+}
+
+void ApplicationHostProxy::AddSFRuntimeEnvironmentVariable(
+    EnvironmentMap & envMap,
+    wstring const &name,
+    wstring const &value)
+{
+    if (removeServiceFabricRuntimeAccess_)
+    {
+        return;
+    }
+
+    this->AddEnvironmentVariable(envMap, name, value);
+}
+
+void ApplicationHostProxy::AddEnvironmentVariable(
+    EnvironmentMap & envMap,
+    wstring const &name,
+    wstring const &value)
+{
+    if (StringUtility::StartsWith<wstring>(value, *Constants::WellKnownValueDelimiter) && 
+        StringUtility::EndsWith<wstring>(value, *Constants::WellKnownValueDelimiter))
+    {
+        envMap[name] = GetWellKnownValue(value);
+    }
+    else
+    {
+        envMap[name] = value;
+    }
+}
+
+wstring ApplicationHostProxy::GetWellKnownValue(wstring const &value)
+{
+    // @PartitionId@
+    if (StringUtility::AreEqualCaseInsensitive(value, *Constants::WellKnownPartitionIdFormat))
+    {
+        return ServicePackageInstanceId.ActivationContext.ActivationGuid.ToString();
+    }
+    else if (StringUtility::AreEqualCaseInsensitive(value, *Constants::WellKnownServiceNameFormat)) // @ServiceName@
+    {
+        wstring serviceName;
+        wstring applicationName;
+        if ((!Hosting.TryGetExclusiveServicePackageServiceName(
+                ServicePackageInstanceId.ServicePackageId,
+                ServicePackageInstanceId.ActivationContext,
+                serviceName)) ||
+            (!Hosting.TryGetServicePackagePublicApplicationName(
+                ServicePackageInstanceId.ServicePackageId,
+                ServicePackageInstanceId.ActivationContext,
+                applicationName)))
+        {
+            return value;
+        }
+
+        return serviceName.substr(serviceName.find(applicationName, 0), wstring::npos);
+    }
+    else if (StringUtility::AreEqualCaseInsensitive(value, *Constants::WellKnownApplicationNameFormat)) // @ApplicationName@
+    {
+        wstring applicationName;
+        if (!Hosting.TryGetServicePackagePublicApplicationName(
+                ServicePackageInstanceId.ServicePackageId,
+                ServicePackageInstanceId.ActivationContext,
+                applicationName))
+        {
+            return value;
+        }
+
+        ErrorCode error;
+        error = NamingUri::FabricNameToId(applicationName, applicationName);
+        if (!error.IsSuccess())
+        {
+            return value;
+        }
+
+        return applicationName;
+    }
+    else
+    {
+        return value;
+    }
 }

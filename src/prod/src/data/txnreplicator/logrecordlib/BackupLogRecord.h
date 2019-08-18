@@ -16,7 +16,7 @@ namespace Data
 
         public:
             
-            // Needed by begincheckpoint log record and is hence declared publically
+            // Needed by BeginCheckpoint log record and is hence declared publicly
             static const ULONG DiskSpaceUsed; 
 
             static BackupLogRecord::SPtr Create(
@@ -38,6 +38,8 @@ namespace Data
             static BackupLogRecord::SPtr BackupLogRecord::CreateZeroBackupLogRecord(
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in KAllocator & allocator);
+
+            virtual std::wstring ToString() const override;
 
             __declspec(property(get = get_BackupId)) KGuid & BackupId;
             KGuid const & get_BackupId() const
@@ -69,6 +71,8 @@ namespace Data
                 return backupLogSize_;
             }
 
+            bool IsZeroBackupLogRecord() const;
+
             bool Test_Equals(__in LogRecord const & other) const override;
 
         private:
@@ -94,7 +98,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
             //
             // Read LogRecord.h base member for more info

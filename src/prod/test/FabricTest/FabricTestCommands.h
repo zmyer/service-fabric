@@ -29,6 +29,8 @@ namespace FabricTest
         static std::wstring const RemoveInfrastructureServiceCommand;
         static std::wstring const DefineRepairManagerServiceCommand;
         static std::wstring const DefineDnsServiceCommand;
+        static std::wstring const DefineNIMServiceCommand;
+        static std::wstring const DefineEnableUnsupportedPreviewFeaturesCommand;
         static std::wstring const DefineMockImageBuilderCommand;
         static std::wstring const ListCommand;
         static std::wstring const FMCommand;
@@ -82,6 +84,7 @@ namespace FabricTest
 
         static std::wstring const CreateNameCommand;
         static std::wstring const DeleteNameCommand;
+        static std::wstring const DnsNameExistsCommand;
         static std::wstring const NameExistsCommand;
         static std::wstring const PutPropertyCommand;
         static std::wstring const PutCustomPropertyCommand;
@@ -128,6 +131,7 @@ namespace FabricTest
         static std::wstring const DeactivateNodesCommand;
         static std::wstring const RemoveNodeDeactivationCommand;
         static std::wstring const VerifyNodeDeactivationStatusCommand;
+        static std::wstring const UpdateNodeImagesCommand;
 
         static std::wstring const NodeStateRemovedCommand;
         static std::wstring const RecoverPartitionsCommand;
@@ -156,10 +160,18 @@ namespace FabricTest
         static std::wstring const VerifyImageStore;
         static std::wstring const VerifyNodeFiles;
         static std::wstring const DeployServicePackageCommand;
+        static std::wstring const VerifyDeployedCodePackageCountCommand;
 
         static std::wstring const CreateComposeCommand;
         static std::wstring const DeleteComposeCommand;
         static std::wstring const UpgradeComposeCommand;
+        static std::wstring const RollbackComposeCommand;
+
+        // For container network related tests
+        static std::wstring const CreateNetworkCommand;
+        static std::wstring const DeleteNetworkCommand;
+        static std::wstring const GetNetworkCommand;
+        static std::wstring const ShowNetworksCommand;
 
         static std::wstring const PrepareUpgradeFabricCommand;
         static std::wstring const ProvisionFabricCommand;
@@ -307,5 +319,10 @@ namespace FabricTest
         //
         static std::wstring const SetEseOnly;
         static std::wstring const ClearEseOnly;
+
+        // Verify configured checkpoint and truncation interval timestamps
+        // Intended for use with random tests only
+        // Valid for TXRServiceTypes exclusively
+        static std::wstring const EnableLogTruncationTimestampValidation;
     };
 };

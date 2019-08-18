@@ -12,46 +12,25 @@ using namespace ServiceModel;
 ConfigParameterOverride::ConfigParameterOverride()
     : Name(),
     Value(),
-    IsEncrypted(false)
+    IsEncrypted(false),
+    Type(L"")
 {
 }
 
 ConfigParameterOverride::ConfigParameterOverride(ConfigParameterOverride const & other)
     : Name(other.Name),
     Value(other.Value),
-    IsEncrypted(other.IsEncrypted)
+    IsEncrypted(other.IsEncrypted),
+    Type(other.Type)
 {
 }
 
 ConfigParameterOverride::ConfigParameterOverride(ConfigParameterOverride && other)
     : Name(move(other.Name)),
     Value(move(other.Value)),
-    IsEncrypted(other.IsEncrypted)
+    IsEncrypted(other.IsEncrypted),
+    Type(move(other.Type))
 {
-}
-
-ConfigParameterOverride const & ConfigParameterOverride::operator = (ConfigParameterOverride const & other)
-{
-    if (this != &other)
-    {
-        this->Name = other.Name;
-        this->Value = other.Value;
-        this->IsEncrypted = other.IsEncrypted;
-    }
-
-    return *this;
-}
-
-ConfigParameterOverride const & ConfigParameterOverride::operator = (ConfigParameterOverride && other)
-{
-    if (this != &other)
-    {
-        this->Name = move(other.Name);
-        this->Value = move(other.Value);
-        this->IsEncrypted = move(other.IsEncrypted);
-    }
-
-    return *this;
 }
 
 bool ConfigParameterOverride::operator == (ConfigParameterOverride const & other) const
@@ -62,10 +41,13 @@ bool ConfigParameterOverride::operator == (ConfigParameterOverride const & other
     if (!equals) { return equals; }
 
     equals = this->Value == other.Value;
-	if (!equals) { return equals; }
+    if (!equals) { return equals; }
 
     equals = this->IsEncrypted == other.IsEncrypted;
-	if (!equals) { return equals; }
+    if (!equals) { return equals; }
+
+    equals = StringUtility::AreEqualCaseInsensitive(this->Type, other.Type);
+    if (!equals) { return equals; }
 
     return equals;
 }
@@ -79,8 +61,9 @@ void ConfigParameterOverride::WriteTo(TextWriter & w, FormatOptions const &) con
 {
     w.Write("ConfigParameterOverride {");
     w.Write("Name = {0},", this->Name);
-    w.Write("Value = {0}", this->Value);
-    w.Write("IsEncrypted = {0}", this->IsEncrypted);
+    w.Write("Value = {0},", this->Value);
+    w.Write("IsEncrypted = {0},", this->IsEncrypted);
+    w.Write("IsType = {0}", this->Type);
     w.Write("}");
 }
 
@@ -100,33 +83,43 @@ void ConfigParameterOverride::ReadFromXml(
         this->IsEncrypted = xmlReader->ReadAttributeValueAs<bool>(*SchemaNames::Attribute_IsEncrypted);
     }
 
+    if (xmlReader->HasAttribute(*SchemaNames::Attribute_Type))
+    {
+        this->Type = xmlReader->ReadAttributeValue(*SchemaNames::Attribute_Type);
+    }
+
     xmlReader->ReadElement();
 }
 
 ErrorCode ConfigParameterOverride::WriteToXml(XmlWriterUPtr const & xmlWriter)
 {
-	//Paramter
-	ErrorCode er = xmlWriter->WriteStartElement(*SchemaNames::Element_ConfigParameter, L"", *SchemaNames::Namespace);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Name, this->Name);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Value, this->Value);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteBooleanAttribute(*SchemaNames::Attribute_IsEncrypted, this->IsEncrypted);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	//</Paramter>
-	return xmlWriter->WriteEndElement();
+    //Paramter
+    ErrorCode er = xmlWriter->WriteStartElement(*SchemaNames::Element_ConfigParameter, L"", *SchemaNames::Namespace);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Name, this->Name);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Value, this->Value);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteBooleanAttribute(*SchemaNames::Attribute_IsEncrypted, this->IsEncrypted);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Type, this->Type);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    //</Paramter>
+    return xmlWriter->WriteEndElement();
 
 }

@@ -152,7 +152,8 @@ void CheckpointManager::PrepareCheckpoint(
 
 Awaitable<void> CheckpointManager::PerformCheckpointAsync(
     __in MetadataManager const & metadataManager,
-    __in CancellationToken const & cancellationToken)
+    __in CancellationToken const & cancellationToken,
+    __in bool hasPersistedState)
 {
     KShared$ApiEntry();
 
@@ -178,6 +179,13 @@ Awaitable<void> CheckpointManager::PerformCheckpointAsync(
         this->PopulateSnapshotAndMetadataCollection(*serializableMetadataCollection, MetadataMode::DelayDelete);
     }
 
+    if (hasPersistedState == false)
+    {
+        // No need to write to disk
+        // TODO: RDBug 13398799: Trace PerformCheckpoint in volatile case
+        co_return;
+    }
+
     // In the checkpoint file write path, we need to pass in the PrepareCheckpointLSN and write in the file.
     KWString filePath = KWString(GetThisAllocator(), tempCheckpointFilePath_->ToUNICODE_STRING());
     CheckpointFile::SPtr checkpointFileSPtr = nullptr;
@@ -196,6 +204,7 @@ Awaitable<void> CheckpointManager::PerformCheckpointAsync(
     co_await checkpointFileSPtr->WriteAsync(
         *serializableMetadataCollection,
         serializationMode_,
+        false,
         prepareCheckpointLSN_,
         cancellationToken);
 
@@ -325,11 +334,29 @@ Awaitable<KSharedArray<Metadata::SPtr>::SPtr> CheckpointManager::RecoverCheckpoi
 
     CheckpointFileAsyncEnumerator::SPtr enumerator = checkpointFileSPtr->GetAsyncEnumerator();
 
-    while (co_await enumerator->MoveNextAsync(CancellationToken::None))
+    while (true)
     {
-        ++count;
-        SerializableMetadata::CSPtr serializableMetadata = enumerator->GetCurrent();
+        SerializableMetadata::CSPtr serializableMetadata = nullptr;
+        status = co_await enumerator->GetNextAsync(cancellationToken, serializableMetadata);
+        if (status == STATUS_NOT_FOUND)
+        {
+            // No more item in the Enumerator.
+            break;
+        }
+        
+        if (NT_SUCCESS(status) == false)
+        {
+            co_await enumerator->CloseAsync();
 
+            Helper::ThrowIfNecessary(
+                status,
+                TracePartitionId,
+                ReplicaId,
+                L"RecoverCheckpointAsync: CheckpointFileAsyncEnumerator GetNextAsync failed.",
+                Helper::CheckpointManager);
+        }
+
+        ++count;
         TxnReplicator::IStateProvider2::SPtr stateProvider;
         status = apiDispatcherSPtr_->CreateStateProvider(
             *serializableMetadata->Name,
@@ -530,7 +557,7 @@ TxnReplicator::OperationDataStream::SPtr CheckpointManager::GetCurrentState(
         L"GetCurrentState: Create NamedOperationDataStream.",
         Helper::CheckpointManager);
 
-    auto time = stopwatch.ElapsedMilliseconds;
+    int64 time = stopwatch.ElapsedMilliseconds;
     KSharedArray<Metadata::CSPtr>::SPtr sortedMetadataArraySPtr = GetOrderedMetadataArray();
     time = stopwatch.ElapsedMilliseconds - time;
     
@@ -557,7 +584,7 @@ TxnReplicator::OperationDataStream::SPtr CheckpointManager::GetCurrentState(
             Helper::CheckpointManager);
     }
 
-    // TODO: #9175765: Ktl should support creating with KUriView const
+    // #9175765: Ktl should support creating with KUriView const
     KUri::CSPtr stateManagerName;
     status = KUri::Create(StateManager::StateManagerName.Get(KUriView::eRaw), GetThisAllocator(), stateManagerName);
     Helper::ThrowIfNecessary(
@@ -627,7 +654,7 @@ void CheckpointManager::RemoveStateProvider(
     {
         KFinally([&] {checkpointStateLock_.ReleaseExclusive(); });
 
-        // Both item exist and non-exist case, the undered_map erase will sucessfully return,
+        // Both item exist and non-exist case, the undered_map erase will successfully return,
         // so we don't need to check status and return as before.
         size_t count = copyOrCheckpointMetadataSnapshot_.erase(stateProviderId);
         ASSERT_IFNOT(count == 0 || count == 1, 
@@ -708,9 +735,12 @@ ktl::Awaitable<void> CheckpointManager::BackupCheckpointAsync(
         L"BackupCheckpointAsync: CheckpointFile::Create.",
         Helper::CheckpointManager);
 
+    // #12249219: Without the "allowPrepareCheckpointLSNToBeInvalid" being set to true in the backup code path, 
+    // It is possible for all backups before the first checkpoint after the upgrade to fail.
     co_await checkpointFileSPtr->WriteAsync(
         *serializableMetadataCollection, 
         serializationMode_,
+        true,
         prepareCheckpointLSN_,
         cancellationToken);
 
@@ -837,7 +867,7 @@ ktl::Awaitable<void> CheckpointManager::BackupActiveStateProviders(
     {
         KFinally([&] {checkpointStateLock_.ReleaseShared(); });
 
-        // CopyOrCheckpointMetadataSnapshot gets updated only during perform checkpoint and replicator  guarntees that perform and backup cannot happen at the same time,
+        // CopyOrCheckpointMetadataSnapshot gets updated only during perform checkpoint and replicator guarantees that perform and backup cannot happen at the same time,
         // so it is safe to use it here.
         // Backup all active state providers checkpoints
         for (auto & row : dynamic_cast<const std::unordered_map<FABRIC_STATE_PROVIDER_ID,Metadata::CSPtr> &>(copyOrCheckpointMetadataSnapshot_))
@@ -1056,8 +1086,6 @@ ktl::Awaitable<void> CheckpointManager::CloseEnumeratorAndThrowIfOnFailureAsync(
             ReplicaId,
             L"CloseEnumeratorAndThrowIfOnFailureAsync: Close enumerator then throw.",
             Helper::CheckpointManager);
-
-        throw ktl::Exception(status);
     }
 
     co_return;

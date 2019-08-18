@@ -3,13 +3,18 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+#ifdef UNIFY
+#define UPASSTHROUGH 1
+#endif
+
 #include <ktl.h>
 #include <ktrace.h>
-#include <minmax.h>
-#include <KtlPhysicalLog.h>
-#include "ktllogger.h"
-#include <KLogicalLog.h>
-#include <KtlLogMarshal.h>
+#include "minmax.h"
+
+#include "KtlPhysicalLog.h"
+#include "../inc/ktllogger.h"
+#include "../inc/KLogicalLog.h"
+#include "KtlLogMarshal.h"
 
 //
 // LLRecordObject
@@ -626,7 +631,7 @@ KtlLogVerify::ComputeCrc64ForIoBuffer(
          ((ioBufferElement) && (bytesLeft > 0));
          ioBufferElement = IoBuffer->Next(*ioBufferElement))
     {
-        ULONG bytesToChecksum = min(ioBufferElement->QuerySize(), bytesLeft);
+        ULONG bytesToChecksum = MIN(ioBufferElement->QuerySize(), bytesLeft);
         bytesLeft -= bytesToChecksum;
         
         Crc64 = KChecksum::Crc64(ioBufferElement->GetBuffer(),

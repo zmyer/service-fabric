@@ -130,7 +130,7 @@ namespace Naming
         // Security configuration for recovering system service partitions
         DEFINE_SECURITY_CONFIG_ADMIN( RecoverSystemPartitions )
         // Security configuration for reporting fault
-        DEFINE_SECURITY_CONFIG_ADMIN( ReportFault ) 
+        DEFINE_SECURITY_CONFIG_ADMIN( ReportFault )
 
         // Security configuration for infrastructure task management commands
         DEFINE_SECURITY_CONFIG_ADMIN( InvokeInfrastructureCommand )
@@ -138,9 +138,9 @@ namespace Naming
         // Security configuration for image store client file transfer (external to cluster)
         DEFINE_SECURITY_CONFIG_ADMIN(FileContent)
         // Security configuration for image store client file download initiation (external to cluster)
-        DEFINE_SECURITY_CONFIG_ADMIN(FileDownload)        
+        DEFINE_SECURITY_CONFIG_ADMIN(FileDownload)
         // Security configuration for image store client file list operation (internal)
-        DEFINE_SECURITY_CONFIG_ADMIN(InternalList)        
+        DEFINE_SECURITY_CONFIG_ADMIN(InternalList)
         // Security configuration for image store client delete operation
         DEFINE_SECURITY_CONFIG_ADMIN(Delete)
 
@@ -156,14 +156,14 @@ namespace Naming
         DEFINE_SECURITY_CONFIG_ADMIN(GetStoreLocation)
 
         // Security configuration for starting, stopping, and restarting nodes
-        DEFINE_SECURITY_CONFIG_ADMIN( NodeControl ) 
+        DEFINE_SECURITY_CONFIG_ADMIN( NodeControl )
 
         // Security configuration for restarting code packages
-        DEFINE_SECURITY_CONFIG_ADMIN( CodePackageControl ) 
+        DEFINE_SECURITY_CONFIG_ADMIN( CodePackageControl )
 
        // Unreliable Transport for adding and removing behaviors
-        DEFINE_SECURITY_CONFIG_ADMIN(UnreliableTransportControl)        
-       // Move replica 		
+        DEFINE_SECURITY_CONFIG_ADMIN(UnreliableTransportControl)
+       // Move replica
         DEFINE_SECURITY_CONFIG_ADMIN( MoveReplicaControl )
         //Predeployment api
         DEFINE_SECURITY_CONFIG_ADMIN( PredeployPackageToNode )
@@ -185,6 +185,9 @@ namespace Naming
         // Security configuration for starting a node transition
         DEFINE_SECURITY_CONFIG_ADMIN( StartNodeTransition )
 
+        // Get secret values
+        DEFINE_SECURITY_CONFIG_ADMIN(GetSecrets)
+
         // Induces StartClusterConfigurationUpgrade on a partition
         DEFINE_SECURITY_CONFIG_ADMIN( StartClusterConfigurationUpgrade )
 
@@ -197,8 +200,8 @@ namespace Naming
         // Induces GetUpgradeOrchestrationServiceState on a partition
         DEFINE_SECURITY_CONFIG_ADMIN( GetUpgradeOrchestrationServiceState )
 
-		// Induces SetUpgradeOrchestrationServiceState on a partition
-		DEFINE_SECURITY_CONFIG_ADMIN( SetUpgradeOrchestrationServiceState )
+        // Induces SetUpgradeOrchestrationServiceState on a partition
+        DEFINE_SECURITY_CONFIG_ADMIN( SetUpgradeOrchestrationServiceState )
 
         // Creates an compose deployment described by compose files
         DEFINE_SECURITY_CONFIG_ADMIN( CreateComposeDeployment )
@@ -212,6 +215,24 @@ namespace Naming
         // Invoke container API
         DEFINE_SECURITY_CONFIG_ADMIN( InvokeContainerApi )
 
+        // Creates a volume
+        DEFINE_SECURITY_CONFIG_ADMIN(CreateVolume)
+
+        // Deletes a volume
+        DEFINE_SECURITY_CONFIG_ADMIN(DeleteVolume)
+
+        // Creates a container network
+        DEFINE_SECURITY_CONFIG_ADMIN(CreateNetwork)
+
+        // Deletes a container network
+        DEFINE_SECURITY_CONFIG_ADMIN(DeleteNetwork)
+
+        // Create a gateway resource
+        DEFINE_SECURITY_CONFIG_ADMIN(CreateGatewayResource)
+
+        // Deletes a gateway resource
+        DEFINE_SECURITY_CONFIG_ADMIN(DeleteGatewayResource)
+
         // Admin and User operations
         //
 
@@ -219,7 +240,7 @@ namespace Naming
         DEFINE_SECURITY_CONFIG_USER( Ping )
         // Security configuration for queries
         DEFINE_SECURITY_CONFIG_USER( Query )
-        
+
         // Security configuration for Naming URI existence checks
         DEFINE_SECURITY_CONFIG_USER( NameExists )
         // Security configuration for Naming URI enumeration
@@ -238,7 +259,7 @@ namespace Naming
         // Security configuration for resolving system services
         DEFINE_SECURITY_CONFIG_USER( ResolvePartition )
         // Security configuration for event-based service notifications
-        DEFINE_SECURITY_CONFIG_USER( ServiceNotifications ) 
+        DEFINE_SECURITY_CONFIG_USER( ServiceNotifications )
         // Security configuration for complaint-based service prefix resolution
         DEFINE_SECURITY_CONFIG_USER( PrefixResolveService )
         // Security configuration for resolving system services
@@ -259,7 +280,7 @@ namespace Naming
 
         // Security configuration for Toggling Verbose ServicePlacement HealthReporting
         DEFINE_SECURITY_CONFIG_USER( ToggleVerboseServicePlacementHealthReporting )
-        
+
         // Fetches the progress for an invoke data loss api call
         DEFINE_SECURITY_CONFIG_USER( GetPartitionDataLossProgress )
         // Fetches the progress for an invoke quorum loss api call
@@ -268,10 +289,10 @@ namespace Naming
         DEFINE_SECURITY_CONFIG_USER( GetPartitionRestartProgress )
 
         // Fetches the status of Chaos within a given time range
-        DEFINE_SECURITY_CONFIG_USER( GetChaosReport )        
+        DEFINE_SECURITY_CONFIG_USER( GetChaosReport )
 
-        // Security configuration for getting progress on a node transition command        
-        DEFINE_SECURITY_CONFIG_USER( GetNodeTransitionProgress )        
+        // Security configuration for getting progress on a node transition command
+        DEFINE_SECURITY_CONFIG_USER( GetNodeTransitionProgress )
 
         // Induces GetClusterConfigurationUpgradeStatus on a partition
         DEFINE_SECURITY_CONFIG_USER( GetClusterConfigurationUpgradeStatus )

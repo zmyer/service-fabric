@@ -8,7 +8,7 @@
 namespace HttpGateway
 {
     //
-    // REST Handler for FabricClient API's 
+    // REST Handler for FabricClient API's
     // *IFabricClusterManagementCLient
     //
     class ClusterManagementHandler
@@ -26,121 +26,124 @@ namespace HttpGateway
 
     private:
 
-        void UpgradeFabric(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnUpgradeFabricComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void UpgradeFabric(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnUpgradeFabricComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void UpdateFabricUpgrade(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnUpdateFabricUpgradeComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void UpdateFabricUpgrade(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnUpdateFabricUpgradeComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void RollbackFabricUpgrade(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnRollbackFabricUpgradeComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void RollbackFabricUpgrade(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnRollbackFabricUpgradeComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void ToggleVerboseServicePlacementHealthReporting(__in Common::AsyncOperationSPtr const& thisSptr);
-        void OnToggleVerboseServicePlacementHealthReportingComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void ToggleVerboseServicePlacementHealthReporting(Common::AsyncOperationSPtr const& thisSptr);
+        void OnToggleVerboseServicePlacementHealthReportingComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetUpgradeProgress(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetUpgradeProgressComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetUpgradeProgress(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetUpgradeProgressComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void MoveNextUpgradeDomain(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnMoveNextUpgradeDomainComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void MoveNextUpgradeDomain(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnMoveNextUpgradeDomainComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetClusterManifest(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetClusterManifestComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetClusterManifest(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetClusterManifestComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void EvaluateClusterHealth(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnEvaluateClusterHealthComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetClusterVersion(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetClusterVersionComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void StartClusterConfigurationUpgrade(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnStartClusterConfigurationUpgradeComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void EvaluateClusterHealth(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnEvaluateClusterHealthComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetClusterConfigurationUpgradeStatus(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetClusterConfigurationUpgradeStatusComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void StartClusterConfigurationUpgrade(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnStartClusterConfigurationUpgradeComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetClusterConfiguration(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetClusterConfigurationComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetClusterConfigurationUpgradeStatus(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetClusterConfigurationUpgradeStatusComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetUpgradesPendingApproval(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetUpgradesPendingApprovalComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetClusterConfiguration(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetClusterConfigurationComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void StartApprovedUpgrades(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnStartApprovedUpgradesComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetUpgradesPendingApproval(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetUpgradesPendingApprovalComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetUpgradeOrchestrationServiceState(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetUpgradeOrchestrationServiceStateComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void StartApprovedUpgrades(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnStartApprovedUpgradesComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-		void SetUpgradeOrchestrationServiceState(__in Common::AsyncOperationSPtr const& thisSPtr);
-		void OnSetUpgradeOrchestrationServiceStateComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetUpgradeOrchestrationServiceState(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetUpgradeOrchestrationServiceStateComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
+
+		void SetUpgradeOrchestrationServiceState(Common::AsyncOperationSPtr const& thisSPtr);
+		void OnSetUpgradeOrchestrationServiceStateComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
         void EvaluateClusterHealthChunk(Common::AsyncOperationSPtr const& thisSPtr);
         void OnEvaluateClusterHealthChunkComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void ProvisionFabric(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnProvisionComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void ProvisionFabric(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnProvisionComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void UnprovisionFabric(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnUnprovisionComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void UnprovisionFabric(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnUnprovisionComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetProvisionedFabricCodeVersions(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetProvisionedFabricCodeVersionsComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetProvisionedFabricCodeVersions(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetProvisionedFabricCodeVersionsComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetProvisionedFabricConfigVersions(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetProvisionedFabricConfigVersionsComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetProvisionedFabricConfigVersions(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetProvisionedFabricConfigVersionsComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetTokenValidationServiceMetadata(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetMetadataComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetTokenValidationServiceMetadata(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetMetadataComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetAzureActiveDirectoryMetadata(__in Common::AsyncOperationSPtr const& thisSPtr);
-      
-        void RecoverPartitions(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnRecoverPartitionsComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void GetAzureActiveDirectoryMetadata(Common::AsyncOperationSPtr const& thisSPtr);
 
-        void RecoverSystemServicePartitions(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnRecoverSystemServicePartitionsComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void RecoverPartitions(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnRecoverPartitionsComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void GetClusterLoadInformation(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetClusterLoadInformationComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void RecoverSystemServicePartitions(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnRecoverSystemServicePartitionsComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
+
+        void GetClusterLoadInformation(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetClusterLoadInformationComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
         void ReportClusterHealth(Common::AsyncOperationSPtr const& thisSPtr);
 
-        void InvokeInfrastructureCommand(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void InvokeInfrastructureQuery(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void InnerInvokeInfrastructureService(bool isAdminCommand, __in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnInvokeInfrastructureServiceComplete(__in Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
+        void InvokeInfrastructureCommand(Common::AsyncOperationSPtr const& thisSPtr);
+        void InvokeInfrastructureQuery(Common::AsyncOperationSPtr const& thisSPtr);
+        void InnerInvokeInfrastructureService(bool isAdminCommand, Common::AsyncOperationSPtr const& thisSPtr);
+        void OnInvokeInfrastructureServiceComplete(Common::AsyncOperationSPtr const& operation, bool expectedCompletedSynchronously);
 
-        void CreateRepairTask(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnCreateRepairTaskComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void CreateRepairTask(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnCreateRepairTaskComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void CancelRepairTask(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnCancelRepairTaskComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void CancelRepairTask(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnCancelRepairTaskComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void ForceApproveRepairTask(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnForceApproveRepairTaskComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void ForceApproveRepairTask(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnForceApproveRepairTaskComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void DeleteRepairTask(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnDeleteRepairTaskComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void DeleteRepairTask(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnDeleteRepairTaskComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void UpdateRepairExecutionState(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnUpdateRepairExecutionStateComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void UpdateRepairExecutionState(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnUpdateRepairExecutionStateComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void GetRepairTaskList(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnGetRepairTaskListComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void GetRepairTaskList(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetRepairTaskListComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void UpdateRepairTaskHealthPolicy(__in Common::AsyncOperationSPtr const& thisSPtr);
-        void OnUpdateRepairTaskHealthPolicyComplete(__in Common::AsyncOperationSPtr const &operation, __in bool expectedCompletedSynchronously);
+        void UpdateRepairTaskHealthPolicy(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnUpdateRepairTaskHealthPolicyComplete(Common::AsyncOperationSPtr const &operation, bool expectedCompletedSynchronously);
 
-        void GetGenericStaticFile(__in Common::AsyncOperationSPtr const& operation);
+        void GetGenericStaticFile(Common::AsyncOperationSPtr const& operation);
 
-        void RedirectToExplorerIndexPage(__in Common::AsyncOperationSPtr const& operation);
+        void RedirectToExplorerIndexPage(Common::AsyncOperationSPtr const& operation);
 
-        void GetRootPage(__in Common::AsyncOperationSPtr const& operation);
+        void GetRootPage(Common::AsyncOperationSPtr const& operation);
 
-        void RespondWithContentFromFile(__in std::wstring const& path, __in Common::AsyncOperationSPtr const& operation);
-        Common::ErrorCode ValidateFileName(__in std::wstring const& path, __in std::wstring const& fileExtension);
+        void RespondWithContentFromFile(std::wstring const& path, Common::AsyncOperationSPtr const& operation);
+        Common::ErrorCode ValidateFileName(std::wstring const& path, std::wstring const& fileExtension);
 
 //#ifdef PLATFORM_UNIX
-        Common::ErrorCode ReadFileToBufferSyncForLinux(__in std::wstring const& path, __out Common::ByteBufferUPtr& bufferUPtr);
+        Common::ErrorCode ReadFileToBufferSyncForLinux(std::wstring const& path, __out Common::ByteBufferUPtr& bufferUPtr);
 //#else
-        void OnRespondWithContentFromFileComplete(__in Common::AsyncOperationSPtr const& operation, __in std::wstring const &contentTypeValue);
+        void OnRespondWithContentFromFileComplete(Common::AsyncOperationSPtr const& operation, std::wstring const &contentTypeValue);
 //#endif
 
         void InitializeContentTypes();
@@ -181,11 +184,27 @@ namespace HttpGateway
             std::wstring manifest_;
         };
 
+        class ClusterVersion : public Common::IFabricJsonSerializable
+        {
+        public:
+            ClusterVersion(std::wstring&& version)
+                :version_(move(version))
+            {
+            }
+
+            BEGIN_JSON_SERIALIZABLE_PROPERTIES()
+                SERIALIZABLE_PROPERTY(ServiceModel::Constants::Version, version_)
+                END_JSON_SERIALIZABLE_PROPERTIES()
+
+        private:
+            std::wstring version_;
+        };
+
         class ClusterConfiguration : public Common::IFabricJsonSerializable
         {
         public:
             ClusterConfiguration(std::wstring&& clusterConfiguration)
-                :clusterConfiguration_(move(clusterConfiguration))
+                :clusterConfiguration_(std::move(clusterConfiguration))
             {}
 
             BEGIN_JSON_SERIALIZABLE_PROPERTIES()
@@ -276,70 +295,5 @@ namespace HttpGateway
             int64 commitVersion_;
         };
 
-        class StartUpgradeData : public Common::IFabricJsonSerializable
-        {
-        public:
-            StartUpgradeData()
-                : maxPercentUnhealthyApplications_(0),
-                maxPercentUnhealthyNodes_(0),
-                maxPercentDeltaUnhealthyNodes_(0),
-                maxPercentUpgradeDomainDeltaUnhealthyNodes_(0)
-            {};
-
-            __declspec(property(get = get_ClusterConfig)) std::wstring const& ClusterConfig;
-            std::wstring const& get_ClusterConfig() const { return clusterConfig_; }
-
-            __declspec(property(get = get_HealthCheckRetryTimeout)) Common::TimeSpan const HealthCheckRetryTimeout;
-            Common::TimeSpan const get_HealthCheckRetryTimeout() const { return healthCheckRetryTimeout_; }
-
-            __declspec(property(get = get_HealthCheckWaitDurationInSeconds)) Common::TimeSpan const HealthCheckWaitDurationInSeconds;
-            Common::TimeSpan const get_HealthCheckWaitDurationInSeconds() const { return healthCheckWaitDuration_; }
-
-            __declspec(property(get = get_HealthCheckStableDurationInSeconds)) Common::TimeSpan const HealthCheckStableDurationInSeconds;
-            Common::TimeSpan const get_HealthCheckStableDurationInSeconds() const { return healthCheckStableDuration_; }
-
-            __declspec(property(get = get_UpgradeDomainTimeoutInSeconds)) Common::TimeSpan const UpgradeDomainTimeoutInSeconds;
-            Common::TimeSpan const get_UpgradeDomainTimeoutInSeconds() const { return upgradeDomainTimeout_; }
-
-            __declspec(property(get = get_UpgradeTimeoutInSeconds)) Common::TimeSpan const UpgradeTimeoutInSeconds;
-            Common::TimeSpan const get_UpgradeTimeoutInSeconds() const { return upgradeTimeout_; }
-
-            __declspec(property(get = get_MaxPercentUnhealthyApplications)) BYTE MaxPercentUnhealthyApplications;
-            inline BYTE get_MaxPercentUnhealthyApplications() const { return maxPercentUnhealthyApplications_; }
-
-            __declspec(property(get = get_MaxPercentUnhealthyNodes)) BYTE MaxPercentUnhealthyNodes;
-            inline BYTE get_MaxPercentUnhealthyNodes() const { return maxPercentUnhealthyNodes_; }
-
-            __declspec(property(get = get_MaxPercentDeltaUnhealthyNodes)) BYTE MaxPercentDeltaUnhealthyNodes;
-            inline BYTE get_MaxPercentDeltaUnhealthyNodes() const { return maxPercentDeltaUnhealthyNodes_; }
-
-            __declspec(property(get = get_MaxPercentUpgradeDomainDeltaUnhealthyNodes)) BYTE MaxPercentUpgradeDomainDeltaUnhealthyNodes;
-            inline BYTE get_MaxPercentUpgradeDomainDeltaUnhealthyNodes() const { return maxPercentUpgradeDomainDeltaUnhealthyNodes_; }
-
-            BEGIN_JSON_SERIALIZABLE_PROPERTIES()
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::ClusterConfig, clusterConfig_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::HealthCheckRetryTimeout, healthCheckRetryTimeout_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::HealthCheckWaitDurationInSeconds, healthCheckWaitDuration_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::HealthCheckStableDurationInSeconds, healthCheckStableDuration_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::UpgradeDomainTimeoutInSeconds, upgradeDomainTimeout_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::UpgradeTimeoutInSeconds, upgradeTimeout_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::MaxPercentUnhealthyApplications, maxPercentUnhealthyApplications_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::MaxPercentUnhealthyNodes, maxPercentUnhealthyNodes_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::MaxPercentDeltaUnhealthyNodes, maxPercentDeltaUnhealthyNodes_)
-                SERIALIZABLE_PROPERTY(ServiceModel::Constants::MaxPercentUpgradeDomainDeltaUnhealthyNodes, maxPercentUpgradeDomainDeltaUnhealthyNodes_)
-            END_JSON_SERIALIZABLE_PROPERTIES()
-
-        private:
-            std::wstring  clusterConfig_;
-            Common::TimeSpan healthCheckRetryTimeout_;
-            Common::TimeSpan healthCheckWaitDuration_;
-            Common::TimeSpan healthCheckStableDuration_;
-            Common::TimeSpan upgradeDomainTimeout_;
-            Common::TimeSpan upgradeTimeout_;
-            BYTE maxPercentUnhealthyApplications_;
-            BYTE maxPercentUnhealthyNodes_;
-            BYTE maxPercentDeltaUnhealthyNodes_;
-            BYTE maxPercentUpgradeDomainDeltaUnhealthyNodes_;
-        };
     };
 }

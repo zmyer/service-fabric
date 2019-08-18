@@ -22,6 +22,8 @@ namespace Data
 
         public:
 
+            virtual std::wstring ToString() const override;
+
             __declspec(property(get = get_IsEnlistedTransaction, put = set_IsEnlistedTransaction)) bool IsEnlistedTransaction;
             bool get_IsEnlistedTransaction() const
             {
@@ -68,6 +70,11 @@ namespace Data
                 return *transactionBase_;
             }
 
+            LONG64 get_TransactionId() const
+            {
+                return transactionBase_->get_TransactionId();
+            }
+
             bool Test_Equals(__in LogRecord const & other) const override;
 
         protected:
@@ -100,7 +107,8 @@ namespace Data
             virtual void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
             virtual ULONG GetSizeOnWire() const override;
 

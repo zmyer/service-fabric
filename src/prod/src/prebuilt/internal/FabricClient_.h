@@ -1,8 +1,3 @@
-// ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.  All rights reserved.
-// Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
-// ------------------------------------------------------------
-
 
 
 /* this ALWAYS GENERATED file contains the definitions for the interfaces */
@@ -51,11 +46,25 @@ typedef interface IInternalFabricServiceManagementClient IInternalFabricServiceM
 #endif 	/* __IInternalFabricServiceManagementClient_FWD_DEFINED__ */
 
 
+#ifndef __IInternalFabricServiceManagementClient2_FWD_DEFINED__
+#define __IInternalFabricServiceManagementClient2_FWD_DEFINED__
+typedef interface IInternalFabricServiceManagementClient2 IInternalFabricServiceManagementClient2;
+
+#endif 	/* __IInternalFabricServiceManagementClient2_FWD_DEFINED__ */
+
+
 #ifndef __IInternalFabricApplicationManagementClient_FWD_DEFINED__
 #define __IInternalFabricApplicationManagementClient_FWD_DEFINED__
 typedef interface IInternalFabricApplicationManagementClient IInternalFabricApplicationManagementClient;
 
 #endif 	/* __IInternalFabricApplicationManagementClient_FWD_DEFINED__ */
+
+
+#ifndef __IInternalFabricApplicationManagementClient2_FWD_DEFINED__
+#define __IInternalFabricApplicationManagementClient2_FWD_DEFINED__
+typedef interface IInternalFabricApplicationManagementClient2 IInternalFabricApplicationManagementClient2;
+
+#endif 	/* __IInternalFabricApplicationManagementClient2_FWD_DEFINED__ */
 
 
 #ifndef __IInternalFabricClusterManagementClient_FWD_DEFINED__
@@ -135,11 +144,25 @@ typedef interface IInternalFabricServiceManagementClient IInternalFabricServiceM
 #endif 	/* __IInternalFabricServiceManagementClient_FWD_DEFINED__ */
 
 
+#ifndef __IInternalFabricServiceManagementClient2_FWD_DEFINED__
+#define __IInternalFabricServiceManagementClient2_FWD_DEFINED__
+typedef interface IInternalFabricServiceManagementClient2 IInternalFabricServiceManagementClient2;
+
+#endif 	/* __IInternalFabricServiceManagementClient2_FWD_DEFINED__ */
+
+
 #ifndef __IInternalFabricApplicationManagementClient_FWD_DEFINED__
 #define __IInternalFabricApplicationManagementClient_FWD_DEFINED__
 typedef interface IInternalFabricApplicationManagementClient IInternalFabricApplicationManagementClient;
 
 #endif 	/* __IInternalFabricApplicationManagementClient_FWD_DEFINED__ */
+
+
+#ifndef __IInternalFabricApplicationManagementClient2_FWD_DEFINED__
+#define __IInternalFabricApplicationManagementClient2_FWD_DEFINED__
+typedef interface IInternalFabricApplicationManagementClient2 IInternalFabricApplicationManagementClient2;
+
+#endif 	/* __IInternalFabricApplicationManagementClient2_FWD_DEFINED__ */
 
 
 #ifndef __IInternalFabricClusterManagementClient_FWD_DEFINED__
@@ -261,6 +284,10 @@ extern "C"{
 /* interface __MIDL_itf_fabricclient__0000_0000 */
 /* [local] */ 
 
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
+// ------------------------------------------------------------
 #if ( _MSC_VER >= 1020 )
 #pragma once
 #endif
@@ -292,6 +319,8 @@ extern RPC_IF_HANDLE __MIDL_itf_fabricclient__0000_0000_v0_0_s_ifspec;
 
 
 #pragma pack(push, 8)
+
+
 
 
 
@@ -429,6 +458,139 @@ EXTERN_C const IID IID_IInternalFabricServiceManagementClient;
 
 
 #endif 	/* __IInternalFabricServiceManagementClient_INTERFACE_DEFINED__ */
+
+
+#ifndef __IInternalFabricServiceManagementClient2_INTERFACE_DEFINED__
+#define __IInternalFabricServiceManagementClient2_INTERFACE_DEFINED__
+
+/* interface IInternalFabricServiceManagementClient2 */
+/* [uuid][local][object] */ 
+
+
+EXTERN_C const IID IID_IInternalFabricServiceManagementClient2;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    MIDL_INTERFACE("ee2bc5c7-235c-4dd1-b0a9-2ed4b45ebec9")
+    IInternalFabricServiceManagementClient2 : public IInternalFabricServiceManagementClient
+    {
+    public:
+        virtual HRESULT STDMETHODCALLTYPE BeginGetCachedServiceDescription( 
+            /* [in] */ FABRIC_URI name,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context) = 0;
+        
+        virtual HRESULT STDMETHODCALLTYPE EndGetCachedServiceDescription( 
+            /* [in] */ IFabricAsyncOperationContext *context,
+            /* [retval][out] */ IFabricServiceDescriptionResult **result) = 0;
+        
+    };
+    
+    
+#else 	/* C style interface */
+
+    typedef struct IInternalFabricServiceManagementClient2Vtbl
+    {
+        BEGIN_INTERFACE
+        
+        HRESULT ( STDMETHODCALLTYPE *QueryInterface )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ REFIID riid,
+            /* [annotation][iid_is][out] */ 
+            _COM_Outptr_  void **ppvObject);
+        
+        ULONG ( STDMETHODCALLTYPE *AddRef )( 
+            IInternalFabricServiceManagementClient2 * This);
+        
+        ULONG ( STDMETHODCALLTYPE *Release )( 
+            IInternalFabricServiceManagementClient2 * This);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginMovePrimary )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ const FABRIC_MOVE_PRIMARY_REPLICA_DESCRIPTION *movePrimaryDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndMovePrimary )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginMoveSecondary )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ const FABRIC_MOVE_SECONDARY_REPLICA_DESCRIPTION *moveSecondaryDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndMoveSecondary )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginGetCachedServiceDescription )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ FABRIC_URI name,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndGetCachedServiceDescription )( 
+            IInternalFabricServiceManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context,
+            /* [retval][out] */ IFabricServiceDescriptionResult **result);
+        
+        END_INTERFACE
+    } IInternalFabricServiceManagementClient2Vtbl;
+
+    interface IInternalFabricServiceManagementClient2
+    {
+        CONST_VTBL struct IInternalFabricServiceManagementClient2Vtbl *lpVtbl;
+    };
+
+    
+
+#ifdef COBJMACROS
+
+
+#define IInternalFabricServiceManagementClient2_QueryInterface(This,riid,ppvObject)	\
+    ( (This)->lpVtbl -> QueryInterface(This,riid,ppvObject) ) 
+
+#define IInternalFabricServiceManagementClient2_AddRef(This)	\
+    ( (This)->lpVtbl -> AddRef(This) ) 
+
+#define IInternalFabricServiceManagementClient2_Release(This)	\
+    ( (This)->lpVtbl -> Release(This) ) 
+
+
+#define IInternalFabricServiceManagementClient2_BeginMovePrimary(This,movePrimaryDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginMovePrimary(This,movePrimaryDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricServiceManagementClient2_EndMovePrimary(This,context)	\
+    ( (This)->lpVtbl -> EndMovePrimary(This,context) ) 
+
+#define IInternalFabricServiceManagementClient2_BeginMoveSecondary(This,moveSecondaryDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginMoveSecondary(This,moveSecondaryDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricServiceManagementClient2_EndMoveSecondary(This,context)	\
+    ( (This)->lpVtbl -> EndMoveSecondary(This,context) ) 
+
+
+#define IInternalFabricServiceManagementClient2_BeginGetCachedServiceDescription(This,name,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginGetCachedServiceDescription(This,name,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricServiceManagementClient2_EndGetCachedServiceDescription(This,context,result)	\
+    ( (This)->lpVtbl -> EndGetCachedServiceDescription(This,context,result) ) 
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+
+#endif 	/* __IInternalFabricServiceManagementClient2_INTERFACE_DEFINED__ */
 
 
 #ifndef __IInternalFabricApplicationManagementClient_INTERFACE_DEFINED__
@@ -659,6 +821,207 @@ EXTERN_C const IID IID_IInternalFabricApplicationManagementClient;
 
 
 #endif 	/* __IInternalFabricApplicationManagementClient_INTERFACE_DEFINED__ */
+
+
+#ifndef __IInternalFabricApplicationManagementClient2_INTERFACE_DEFINED__
+#define __IInternalFabricApplicationManagementClient2_INTERFACE_DEFINED__
+
+/* interface IInternalFabricApplicationManagementClient2 */
+/* [uuid][local][object] */ 
+
+
+EXTERN_C const IID IID_IInternalFabricApplicationManagementClient2;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    MIDL_INTERFACE("94a1bed3-445a-41ae-b1b4-6a9ba4be71e5")
+    IInternalFabricApplicationManagementClient2 : public IInternalFabricApplicationManagementClient
+    {
+    public:
+        virtual HRESULT STDMETHODCALLTYPE BeginRollbackComposeDeployment( 
+            /* [in] */ const FABRIC_COMPOSE_DEPLOYMENT_ROLLBACK_DESCRIPTION *rollbackDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context) = 0;
+        
+        virtual HRESULT STDMETHODCALLTYPE EndRollbackComposeDeployment( 
+            /* [in] */ IFabricAsyncOperationContext *context) = 0;
+        
+    };
+    
+    
+#else 	/* C style interface */
+
+    typedef struct IInternalFabricApplicationManagementClient2Vtbl
+    {
+        BEGIN_INTERFACE
+        
+        HRESULT ( STDMETHODCALLTYPE *QueryInterface )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ REFIID riid,
+            /* [annotation][iid_is][out] */ 
+            _COM_Outptr_  void **ppvObject);
+        
+        ULONG ( STDMETHODCALLTYPE *AddRef )( 
+            IInternalFabricApplicationManagementClient2 * This);
+        
+        ULONG ( STDMETHODCALLTYPE *Release )( 
+            IInternalFabricApplicationManagementClient2 * This);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginRestartDeployedCodePackageInternal )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_RESTART_DEPLOYED_CODE_PACKAGE_DESCRIPTION *restartCodePackageDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndRestartDeployedCodePackageInternal )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginCreateComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_COMPOSE_DEPLOYMENT_DESCRIPTION *applicationDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndCreateComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginGetComposeDeploymentStatusList )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_COMPOSE_DEPLOYMENT_STATUS_QUERY_DESCRIPTION *queryDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndGetComposeDeploymentStatusList )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context,
+            /* [retval][out] */ IFabricGetComposeDeploymentStatusListResult **result);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginDeleteComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_DELETE_COMPOSE_DEPLOYMENT_DESCRIPTION *deleteDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndDeleteComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginUpgradeComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_COMPOSE_DEPLOYMENT_UPGRADE_DESCRIPTION *upgradeDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndUpgradeComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginGetComposeDeploymentUpgradeProgress )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ LPCWSTR deploymentName,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndGetComposeDeploymentUpgradeProgress )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context,
+            /* [retval][out] */ IFabricComposeDeploymentUpgradeProgressResult **result);
+        
+        HRESULT ( STDMETHODCALLTYPE *BeginRollbackComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ const FABRIC_COMPOSE_DEPLOYMENT_ROLLBACK_DESCRIPTION *rollbackDescription,
+            /* [in] */ DWORD timeoutMilliseconds,
+            /* [in] */ IFabricAsyncOperationCallback *callback,
+            /* [retval][out] */ IFabricAsyncOperationContext **context);
+        
+        HRESULT ( STDMETHODCALLTYPE *EndRollbackComposeDeployment )( 
+            IInternalFabricApplicationManagementClient2 * This,
+            /* [in] */ IFabricAsyncOperationContext *context);
+        
+        END_INTERFACE
+    } IInternalFabricApplicationManagementClient2Vtbl;
+
+    interface IInternalFabricApplicationManagementClient2
+    {
+        CONST_VTBL struct IInternalFabricApplicationManagementClient2Vtbl *lpVtbl;
+    };
+
+    
+
+#ifdef COBJMACROS
+
+
+#define IInternalFabricApplicationManagementClient2_QueryInterface(This,riid,ppvObject)	\
+    ( (This)->lpVtbl -> QueryInterface(This,riid,ppvObject) ) 
+
+#define IInternalFabricApplicationManagementClient2_AddRef(This)	\
+    ( (This)->lpVtbl -> AddRef(This) ) 
+
+#define IInternalFabricApplicationManagementClient2_Release(This)	\
+    ( (This)->lpVtbl -> Release(This) ) 
+
+
+#define IInternalFabricApplicationManagementClient2_BeginRestartDeployedCodePackageInternal(This,restartCodePackageDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginRestartDeployedCodePackageInternal(This,restartCodePackageDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndRestartDeployedCodePackageInternal(This,context)	\
+    ( (This)->lpVtbl -> EndRestartDeployedCodePackageInternal(This,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_BeginCreateComposeDeployment(This,applicationDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginCreateComposeDeployment(This,applicationDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndCreateComposeDeployment(This,context)	\
+    ( (This)->lpVtbl -> EndCreateComposeDeployment(This,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_BeginGetComposeDeploymentStatusList(This,queryDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginGetComposeDeploymentStatusList(This,queryDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndGetComposeDeploymentStatusList(This,context,result)	\
+    ( (This)->lpVtbl -> EndGetComposeDeploymentStatusList(This,context,result) ) 
+
+#define IInternalFabricApplicationManagementClient2_BeginDeleteComposeDeployment(This,deleteDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginDeleteComposeDeployment(This,deleteDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndDeleteComposeDeployment(This,context)	\
+    ( (This)->lpVtbl -> EndDeleteComposeDeployment(This,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_BeginUpgradeComposeDeployment(This,upgradeDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginUpgradeComposeDeployment(This,upgradeDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndUpgradeComposeDeployment(This,context)	\
+    ( (This)->lpVtbl -> EndUpgradeComposeDeployment(This,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_BeginGetComposeDeploymentUpgradeProgress(This,deploymentName,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginGetComposeDeploymentUpgradeProgress(This,deploymentName,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndGetComposeDeploymentUpgradeProgress(This,context,result)	\
+    ( (This)->lpVtbl -> EndGetComposeDeploymentUpgradeProgress(This,context,result) ) 
+
+
+#define IInternalFabricApplicationManagementClient2_BeginRollbackComposeDeployment(This,rollbackDescription,timeoutMilliseconds,callback,context)	\
+    ( (This)->lpVtbl -> BeginRollbackComposeDeployment(This,rollbackDescription,timeoutMilliseconds,callback,context) ) 
+
+#define IInternalFabricApplicationManagementClient2_EndRollbackComposeDeployment(This,context)	\
+    ( (This)->lpVtbl -> EndRollbackComposeDeployment(This,context) ) 
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+
+#endif 	/* __IInternalFabricApplicationManagementClient2_INTERFACE_DEFINED__ */
 
 
 #ifndef __IInternalFabricClusterManagementClient_INTERFACE_DEFINED__

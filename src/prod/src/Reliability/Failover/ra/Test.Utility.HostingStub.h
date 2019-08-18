@@ -460,6 +460,17 @@ namespace Reliability
                     Common::Assert::CodingError("unsupported");
                 }
 
+                Hosting2::AvailableContainerImagesEventHHandler RegisterSendAvailableContainerImagesEventHandler(
+                    Hosting2::AvailableContainerImagesEventHandler const &)
+                {
+                    Common::Assert::CodingError("unsupported");
+                }
+
+                bool UnregisterSendAvailableContainerImagesEventHandler(Hosting2::AvailableContainerImagesEventHHandler const &)
+                {
+                    Common::Assert::CodingError("unsupported");
+                }
+
                 Common::AsyncOperationSPtr OnBeginOpen(
                     Common::TimeSpan,
                     Common::AsyncCallback const &,
@@ -556,6 +567,17 @@ namespace Reliability
                     Common::Assert::CodingError("NotImpl");
                 }
 
+                __declspec(property(get = get_NetworkInventoryAgent, put = set_NetworkInventoryAgent)) Hosting2::NetworkInventoryAgentSPtr NetworkInventoryAgent;
+                Hosting2::NetworkInventoryAgentSPtr const get_NetworkInventoryAgent() const
+                {
+                    Common::Assert::CodingError("NotImpl");
+                }
+
+                void set_NetworkInventoryAgent(Hosting2::NetworkInventoryAgentSPtr value)
+                {
+                    Common::Assert::CodingError("NotImpl");
+                }                          
+
             private:
                 struct ServiceTypeRegistrationExpectation
                 {
@@ -566,7 +588,7 @@ namespace Reliability
                 std::map<std::wstring, ServiceTypeRegistrationExpectation> registrationExpectations_;
             };
 
-            class PerfTestHostingStub : public Hosting2::IHostingSubsystem
+        class PerfTestHostingStub : public Hosting2::IHostingSubsystem
             {
             public:
                 Common::ErrorCode FindServiceTypeRegistration(
@@ -755,6 +777,17 @@ namespace Reliability
                     Common::Assert::CodingError("unsupported");
                 }
 
+                Hosting2::AvailableContainerImagesEventHHandler RegisterSendAvailableContainerImagesEventHandler(
+                    Hosting2::AvailableContainerImagesEventHandler const &)
+                {
+                    Common::Assert::CodingError("unsupported");
+                }
+
+                bool UnregisterSendAvailableContainerImagesEventHandler(Hosting2::AvailableContainerImagesEventHHandler const &)
+                {
+                    Common::Assert::CodingError("unsupported");
+                }
+
                 Common::AsyncOperationSPtr OnBeginOpen(
                     Common::TimeSpan,
                     Common::AsyncCallback const &,
@@ -850,6 +883,17 @@ namespace Reliability
                 {
                     Common::Assert::CodingError("NotImpl");
                 }
+
+                __declspec(property(get = get_NetworkInventoryAgent, put = set_NetworkInventoryAgent)) Hosting2::NetworkInventoryAgentSPtr NetworkInventoryAgent;
+                Hosting2::NetworkInventoryAgentSPtr const get_NetworkInventoryAgent() const
+                {
+                    Common::Assert::CodingError("NotImpl");
+                }
+
+                void set_NetworkInventoryAgent(Hosting2::NetworkInventoryAgentSPtr value)
+                {
+                    Common::Assert::CodingError("NotImpl");
+                }          
             };
         }
     }

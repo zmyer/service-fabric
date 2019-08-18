@@ -48,9 +48,13 @@ namespace Data
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in BackupLogRecord const & lastCompletedBackupLogRecord,
                 __in ULONG progressVectorMaxEntries,
+                __in LONG64 periodicCheckpointTimeTicks,
+                __in LONG64 periodicTruncationTimeTicks,
                 __in KAllocator & allocator);
 
             ktl::Awaitable<NTSTATUS> AwaitCompletionPhase1FirstCheckpointOnFullCopy();
+
+            virtual std::wstring ToString() const override;
 
             void SignalExceptionForPhase1OfFirstCheckpointOnFullCopy(__in NTSTATUS error);
 
@@ -206,6 +210,18 @@ namespace Data
                 return isFirstCheckpointOnFullCopy_;
             }
 
+            __declspec(property(get = get_periodicCheckpointTimeTicks)) LONG64 PeriodicCheckpointTimeTicks;
+            LONG64 get_periodicCheckpointTimeTicks() const
+            {
+                return periodicCheckpointTimeTicks_;
+            }
+
+            __declspec(property(get = get_PeriodicTruncationTimeStamp)) LONG64 PeriodicTruncationTimeStampTicks;
+            LONG64 get_PeriodicTruncationTimeStamp()
+            {
+                return periodicTruncationTimeTicks_;
+            }
+
             bool FreePreviousLinksLowerThanPsn(
                 __in LONG64 newHeadPsn,
                 __in InvalidLogRecords & invalidLogRecords) override;
@@ -221,7 +237,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
         private:
 
@@ -247,7 +264,9 @@ namespace Data
                 __in_opt PhysicalLogRecord * const lastLinkedPhysicalRecord,
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in BackupLogRecord const & lastCompletedBackupLogRecord,
-                __in ULONG progressVectorMaxEntries);
+                __in ULONG progressVectorMaxEntries,
+                __in LONG64 periodicCheckpointTimeTicks,
+                __in LONG64 periodicTruncationTimeTicks);
 
             static const ULONG DiskSpaceUsed;
 
@@ -266,6 +285,8 @@ namespace Data
             LONG64 highestBackedUpLsn_;
             LONG64 lastStableLsn_;
             ProgressVector::SPtr progressVector_;
+            LONG64 periodicCheckpointTimeTicks_;
+            LONG64 periodicTruncationTimeTicks_;
 
             // Phase1 for first checkpoint on full copy on idle is when prepare and perform checkpoint are completed.
             // Phase2 is when copy pump drains the last lsn from the v1 repl and invokes complete checkpoint along with log rename

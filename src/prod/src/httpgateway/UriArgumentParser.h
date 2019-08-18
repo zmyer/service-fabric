@@ -32,6 +32,8 @@ namespace HttpGateway
         Common::ErrorCode TryGetNodeStatusFilter(
             __out DWORD& nodeStatus);
 
+        Common::ErrorCode TryGetCodePackageName(__out std::wstring & codePackageName);
+
         Common::ErrorCode TryGetContinuationToken(__out std::wstring & continuationToken);
 
         Common::ErrorCode TryGetMaxResults(
@@ -46,6 +48,9 @@ namespace HttpGateway
         Common::ErrorCode TryGetDeploymentName(
             __out std::wstring &deploymentName);
 
+        Common::ErrorCode TryGetContainerName(
+            __out std::wstring &containerName);
+
         Common::ErrorCode TryGetApplicationNameInQueryParam(
             __out Common::NamingUri &applicationName);
 
@@ -54,6 +59,9 @@ namespace HttpGateway
 
         Common::ErrorCode TryGetServiceTypeName(
             __out std::wstring & serviceTypeName);
+
+        Common::ErrorCode TryGetServiceManifestName(
+            __out std::wstring & serviceManifestName);
 
         Common::ErrorCode TryGetMode(
             __out std::wstring &marker);
@@ -119,6 +127,9 @@ namespace HttpGateway
         Common::ErrorCode TryGetImageStoreRelativePath(
             __out std::wstring & relativePath);
 
+        Common::ErrorCode TryGetInstanceId(
+            __out std::wstring & instanceId) const;
+
         Common::ErrorCode TryGetTestCommandProgressType(
             __out DWORD& );
 
@@ -156,6 +167,21 @@ namespace HttpGateway
 
         Common::ErrorCode TryGetPropertyName(
             __out std::wstring & propertyName);
+
+        Common::ErrorCode TryGetVolumeName(
+            __out std::wstring & volumeName);
+
+        Common::ErrorCode TryGetGatewayName(
+            __out std::wstring & gatewayName);
+
+        Common::ErrorCode TryGetAbsoluteServiceName(
+            __out Common::NamingUri &name);
+
+        Common::ErrorCode TryGetNetworkName(
+            __out std::wstring & networkName);
+
+        Common::ErrorCode TryGetNetworkStatusFilter(
+            __out DWORD & networkStatusFilter);
 
     private:
         Common::ErrorCode TryGetPathId(

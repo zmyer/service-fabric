@@ -61,6 +61,12 @@ namespace LoggingReplicatorTests
             __in Common::Random & rndNumber,
             __in TestStateProviderManager & stateManager);
 
+        void AddOperationToTransaction(
+            __in Transaction & transaction,
+            __in ULONG bufferCount,
+            __in ULONG bufferSize,
+            __in TestStateProviderManager & stateManager);
+
         Awaitable<NTSTATUS> WaitForLogFlushUptoLsn(__in LONG64 upToLsn);
         CopyStream::WaitForLogFlushUpToLsnCallback GetWaitForLogFlushUpToLsnCallback();
 
@@ -185,6 +191,16 @@ namespace LoggingReplicatorTests
             return ret;
         }
 
+        ULONG64 GetBytesUsed(__in TestReplica & replica, __in LogRecord & startingRecord)
+        {
+            ULONG64 tail = replica.ReplicatedLogManager->InnerLogManager->CurrentLogTailPosition;
+            LONG64 bufferedBytes = replica.ReplicatedLogManager->InnerLogManager->BufferedBytes;
+            LONG64 pendingFlushBytes = replica.ReplicatedLogManager->InnerLogManager->PendingFlushBytes;
+            ULONG tailRecordSize = replica.ReplicatedLogManager->InnerLogManager->CurrentLogTailRecord->ApproximateSizeOnDisk;
+            auto bytesUsed = tail + (ULONG64)tailRecordSize + (ULONG64)bufferedBytes + (ULONG64)pendingFlushBytes - startingRecord.RecordPosition;
+            return bytesUsed;
+        }
+
         wstring cwd_;
         KGuid pId_;
         ::FABRIC_REPLICA_ID rId_;
@@ -249,6 +265,7 @@ namespace LoggingReplicatorTests
             *copyContext,
             *copyStageBuffers,
             currentConfig,
+            true,
             allocator);
     }
 
@@ -278,6 +295,7 @@ namespace LoggingReplicatorTests
             *oldPrimary->RoleContextDrainState,
             *oldPrimary->OperationProcessor,
             *oldPrimary->StateReplicator,
+            *oldPrimary->BackupManager,
             *oldPrimary->CheckpointManager,
             *oldPrimary->TransactionManager,
             *oldPrimary->ReplicatedLogManager,
@@ -379,20 +397,30 @@ namespace LoggingReplicatorTests
         __in Common::Random & rndNumber,
         __in TestStateProviderManager & stateManager)
     {
-        UNREFERENCED_PARAMETER(rndNumber);
+        AddOperationToTransaction(
+            transaction,
+            rndNumber.Next(0, 5),
+            rndNumber.Next(0, 50),
+            stateManager);
+    }
+
+    void IntegrationTests::AddOperationToTransaction(
+        __in Transaction & transaction,
+        __in ULONG bufferCount,
+        __in ULONG bufferSize,
+        __in TestStateProviderManager & stateManager)
+    {
         TestStateProviderManager::SPtr stateManagerPtr = &stateManager;
         KAllocator & allocator = underlyingSystem_->NonPagedAllocator();
-        int bufferCount = rndNumber.Next(0, 5);
-        int bufferSize = rndNumber.Next(0, 50);
 
         Trace.WriteInfo(
-            TraceComponent, 
+            TraceComponent,
             "{0}: Adding Operation Data with buffer count {1} bufferSize {2} to Tx {3}",
             prId_->TraceId,
             bufferCount,
             bufferSize,
             transaction.TransactionId);
-        
+
         OperationData::CSPtr data = TestTransaction::GenerateOperationData(bufferCount, bufferSize, allocator).RawPtr();
 
         stateManagerPtr->AddExpectedTransactionApplyData(
@@ -845,7 +873,7 @@ namespace LoggingReplicatorTests
             transaction1->Dispose();
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -900,7 +928,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->FailApi(ApiName::CompleteCheckpoint, STATUS_INSUFFICIENT_POWER);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // commit tx1
             SyncAwait(transaction1->CommitAsync());
@@ -962,7 +990,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1027,7 +1055,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
             
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1098,7 +1126,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1170,7 +1198,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1244,7 +1272,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
             
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1305,7 +1333,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = replica->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*replica->TestTransactionManager, allocator);
             int opCount = 2;
@@ -1331,7 +1359,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1356,9 +1384,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
             
             // Now that the checkpoint is done, initiate a truncate head operation
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            replica->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            replica->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            replica->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -1422,7 +1450,7 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(reader2to15->IsValid, true);
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*replica->TestTransactionManager, allocator);
             int opCount = 2;
@@ -1448,7 +1476,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1473,9 +1501,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
             
             // Now that the checkpoint is done, initiate a truncate head operation
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            replica->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            replica->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            replica->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -1536,7 +1564,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = replica->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*replica->TestTransactionManager, allocator);
             int opCount = 2;
@@ -1562,7 +1590,7 @@ namespace LoggingReplicatorTests
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *replica->StateManager);
@@ -1587,9 +1615,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
             
             // Now that the checkpoint is done, initiate a truncate head operation
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            replica->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            replica->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            replica->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // this is needed to ensure truncate head's barrier is not stable
             replica->ApiFaultUtility->BlockApi(ApiName::ReplicateAsync);
@@ -1919,6 +1947,7 @@ namespace LoggingReplicatorTests
                 *copyContext, 
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             OperationData::CSPtr op1;
@@ -2060,6 +2089,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             primary->StateManager->Reuse();
@@ -2072,6 +2102,7 @@ namespace LoggingReplicatorTests
                 *secondary->RoleContextDrainState,
                 *secondary->OperationProcessor,
                 *secondary->StateReplicator,
+                *secondary->BackupManager,
                 *secondary->CheckpointManager,
                 *secondary->TransactionManager,
                 *secondary->ReplicatedLogManager,
@@ -2128,7 +2159,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = primary->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*primary->TestTransactionManager, allocator);
             int opCount = 2;
@@ -2154,7 +2185,7 @@ namespace LoggingReplicatorTests
             primary->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            primary->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *primary->StateManager);
@@ -2179,9 +2210,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
 
             // Now that the checkpoint is done, initiate a truncate head operation
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            primary->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            primary->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            primary->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -2222,6 +2253,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             // reuse the primary state manager so the validation will be run again for all the records being received in the secondary side
@@ -2235,6 +2267,7 @@ namespace LoggingReplicatorTests
                 *secondary->RoleContextDrainState,
                 *secondary->OperationProcessor,
                 *secondary->StateReplicator,
+                *secondary->BackupManager,
                 *secondary->CheckpointManager,
                 *secondary->TransactionManager,
                 *secondary->ReplicatedLogManager,
@@ -2356,6 +2389,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             p2->StateManager->Reuse();
@@ -2370,6 +2404,7 @@ namespace LoggingReplicatorTests
                 *p1->RoleContextDrainState,
                 *p1->OperationProcessor,
                 *p1->StateReplicator,
+                *p1->BackupManager,
                 *p1->CheckpointManager,
                 *p1->TransactionManager,
                 *p1->ReplicatedLogManager,
@@ -2425,7 +2460,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = primary->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*primary->TestTransactionManager, allocator);
             int opCount = 2;
@@ -2451,7 +2486,7 @@ namespace LoggingReplicatorTests
             primary->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            primary->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *primary->StateManager);
@@ -2476,9 +2511,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
 
             // Now that the checkpoint is done, initiate a truncate head operation
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            primary->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            primary->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            primary->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -2519,6 +2554,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             // reuse the primary state manager so the validation will be run again for all the records being received in the secondary side
@@ -2532,6 +2568,7 @@ namespace LoggingReplicatorTests
                 *secondary->RoleContextDrainState,
                 *secondary->OperationProcessor,
                 *secondary->StateReplicator,
+                *secondary->BackupManager,
                 *secondary->CheckpointManager,
                 *secondary->TransactionManager,
                 *secondary->ReplicatedLogManager,
@@ -2587,7 +2624,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = primary->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             int transactionCount = 1;
             int opCount = 200;
@@ -2619,7 +2656,7 @@ namespace LoggingReplicatorTests
             primary->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            primary->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *primary->StateManager);
@@ -2644,9 +2681,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
 
             // Now that the checkpoint is done, initiate a truncate head operation
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            primary->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            primary->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            primary->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -2690,6 +2727,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             // reuse the primary state manager so the validation will be run again for all the records being received in the secondary side
@@ -2703,6 +2741,7 @@ namespace LoggingReplicatorTests
                 *secondary->RoleContextDrainState,
                 *secondary->OperationProcessor,
                 *secondary->StateReplicator,
+                *secondary->BackupManager,
                 *secondary->CheckpointManager,
                 *secondary->TransactionManager,
                 *secondary->ReplicatedLogManager,
@@ -2763,7 +2802,7 @@ namespace LoggingReplicatorTests
             IndexingLogRecord::SPtr currentLogHead = primary->ReplicatedLogManager->CurrentLogHeadRecord;
 
             // Insert indexing records frequently to ensure we have sufficient options for head record after a committed transaction
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             Transaction::SPtr transaction1 = Transaction::CreateTransaction(*primary->TestTransactionManager, allocator);
             int opCount = 10;
@@ -2789,7 +2828,7 @@ namespace LoggingReplicatorTests
             primary->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
 
             // enable 1 checkpoint
-            primary->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // add 3rd operation to tx2
             AddOperationToTransaction(*transaction2, r, *primary->StateManager);
@@ -2814,9 +2853,9 @@ namespace LoggingReplicatorTests
             VERIFY_ARE_EQUAL(endCheckpoint->LastCompletedBeginCheckpointRecord->EarliestPendingTransaction->BaseTransaction.TransactionId, transaction2->TransactionId);
 
             // Now that the checkpoint is done, initiate a truncate head operation
-            primary->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
-            primary->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            primary->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+            primary->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            primary->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             // This should trigger the truncate head record
             SyncAwait(transaction2->CommitAsync());
             transaction2->Dispose();
@@ -2857,6 +2896,7 @@ namespace LoggingReplicatorTests
                 *copyContext,
                 *copyStageBuffers,
                 config,
+                true,
                 allocator);
 
             // reuse the primary state manager so the validation will be run again for all the records being received in the secondary side
@@ -2870,6 +2910,7 @@ namespace LoggingReplicatorTests
                 *secondary->RoleContextDrainState,
                 *secondary->OperationProcessor,
                 *secondary->StateReplicator,
+                *secondary->BackupManager,
                 *secondary->CheckpointManager,
                 *secondary->TransactionManager,
                 *secondary->ReplicatedLogManager,
@@ -3362,7 +3403,7 @@ namespace LoggingReplicatorTests
             }
 
             // Enable 1 checkpoint
-            p1->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            p1->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // Barrier replication triggers the start of a checkpoint
             BarrierLogRecord::SPtr barrier;
@@ -3487,7 +3528,7 @@ namespace LoggingReplicatorTests
             }
             Awaitable<NTSTATUS> commitTask = t1->CommitAsync();
 
-            p1->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            p1->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // Block PerformCheckpoint
             // Ensures additional records can be inserted before EndCheckpoint is logged
@@ -3653,8 +3694,8 @@ namespace LoggingReplicatorTests
             // p1 blocks ReplicateAsync API
             apiFaultUtility_->BlockApi(ApiName::ReplicateAsync);
 
-            p1->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            p1->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            p1->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            p1->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
             AddOperationToTransaction(*t1, r, *p1->StateManager);
 
             // Barrier replication triggers the start of a checkpoint
@@ -3689,8 +3730,8 @@ namespace LoggingReplicatorTests
             }
 
             // Enable TruncateHead / IsGoodLogHeadCandidate operations from TestLogTruncationManager 
-            p1->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::Yes);
-            p1->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::Yes);
+            p1->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::Yes);
+            p1->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::Yes);
 
             // Initiate truncate head operation
             Awaitable<NTSTATUS> commitTask = t1->CommitAsync();
@@ -3734,7 +3775,7 @@ namespace LoggingReplicatorTests
             p2_t1->Dispose();
 
             // Enable checkpoint
-            p2->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            p2->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // Trigger checkpoint by replicating barrier 
             BarrierLogRecord::SPtr barrierp2;
@@ -3976,9 +4017,13 @@ namespace LoggingReplicatorTests
             
             TestReplica::SPtr replica = TestReplica::Create(pId_, *invalidLogRecords_, true, nullptr, *apiFaultUtility_, allocator);
             primaryTestReplica_ = replica;
-            replica->Initialize(seed);
+            TRANSACTIONAL_REPLICATOR_SETTINGS settings = { 0 };
+            settings.Flags = FABRIC_TRANSACTIONAL_REPLICATOR_MAX_STREAM_SIZE_MB | FABRIC_TRANSACTIONAL_REPLICATOR_OPTIMIZE_LOG_FOR_LOWER_DISK_USAGE;
+            settings.MaxStreamSizeInMB = 1024;
+            settings.OptimizeLogForLowerDiskUsage = false;
+            replica->Initialize(seed, false, true, true, &settings);
 
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
     
             // Add a large transaction with a lot of indexing records
             {
@@ -3990,7 +4035,7 @@ namespace LoggingReplicatorTests
                     if (i == (opcount - 500))
                     {
                         // Set indexing to NO so that the new HEAD is here
-                        replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
+                        replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::No);
                     }
                 }
 
@@ -4023,7 +4068,7 @@ namespace LoggingReplicatorTests
             }
 
             replica->ApiFaultUtility->BlockApi(ApiName::PrepareCheckpoint);
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // Trigger checkpoint
             {
@@ -4040,11 +4085,11 @@ namespace LoggingReplicatorTests
 
             SyncAwait(beginCheckpoint->AwaitProcessing());
 
-            replica->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // This is NoOnceThenYes so that the second to last index record is the new HEAD instead of the last so that
             // we have only 1 ref count on it
-            replica->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::NoOnceThenYes);
+            replica->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::NoOnceThenYes);
 
             // This transaction is to initiate the truncation
             {
@@ -4138,7 +4183,7 @@ namespace LoggingReplicatorTests
             vector<KWeakRef<PhysicalLogRecord>::SPtr> physicalLogRecords;
             physicalLogRecords.push_back(replica->ReplicatedLogManager->InnerLogManager->CurrentLastPhysicalRecord->GetWeakRef());
 
-            replica->LogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
+            replica->TestLogTruncationManager->SetIndex(TestLogTruncationManager::OperationProbability::Yes);
 
             // Commit 5 transactions
             {
@@ -4168,7 +4213,7 @@ namespace LoggingReplicatorTests
             // at this point, the last indexing record must be the new head. we can stop capturing the physical records into the vector
             
             // We will do a checkpoint after all transactions
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
     
             // Add another 2 transactions
             {
@@ -4193,12 +4238,12 @@ namespace LoggingReplicatorTests
                 VERIFY_ARE_EQUAL(isProcessingComplete, true);
             }
 
-            replica->LogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
-            replica->LogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetIsGoodLogHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
+            replica->TestLogTruncationManager->SetTruncateHead(TestLogTruncationManager::OperationProbability::YesOnceThenNo);
 
             // This transaction is to initiate the truncation
             // Ensure at least one additional checkpoint is performed after the truncation
-            replica->LogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::NoOnceThenYes);
+            replica->TestLogTruncationManager->SetCheckpoint(TestLogTruncationManager::OperationProbability::NoOnceThenYes);
 
             {
                 int txCount = 5;
@@ -4347,6 +4392,87 @@ namespace LoggingReplicatorTests
             replica->EndTest(true, true);
         }
     }
+
+    //
+    // Await LSN Ordering insert in replicated log manager had a bug where 
+    // the thread which did the ordered insert never signalled the awaiter because 
+    // it was checking the queue empty condition before removing items from the queue 
+    // that just got inserted
+    //
+    // This is a unit test that verifies the bug is fixed
+    //
+    BOOST_AUTO_TEST_CASE(AwaitLsnOrderingTcsTest_OutOfOrderReplicates)
+    {
+        TEST_TRACE_BEGIN("AwaitLsnOrderingTcsTest_OutOfOrderReplicates")
+
+        {
+            InitializeTest();
+            TestReplica::SPtr replica = TestReplica::Create(pId_, *invalidLogRecords_, true, nullptr, *apiFaultUtility_, allocator);
+            primaryTestReplica_ = replica;
+            replica->Initialize(seed);
+
+            // Add the first 2 operations so that LSN 2 and 3 are invoked BeginReplicate
+            {
+                Transaction::SPtr transaction = Transaction::CreateTransaction(*replica->TestTransactionManager, allocator);
+
+                // close the PLW so that no records are actually buffered
+                // otherwise, it is hard to simulate this scenario
+                replica->LogManager->PhysicalLogWriter->PrepareToClose();
+
+                for (int i = 0; i < 2; i++)
+                {
+                    AddOperationToTransaction(*transaction, r, *replica->StateManager);
+                }
+
+                // Now LSN must be 4
+                ASSERT_IFNOT(replica->StateReplicator->LSN == 4, "Lsn must be 4. It is {0}", replica->StateReplicator->LSN);
+
+                // Replicate 7,6,5 and ensure Await LSN Ordering TCS is signalled once all of them complete
+
+                // First replicate 7
+                // After adding this operation, LSN assigned should be 7
+                replica->StateReplicator->LSN = 6; // +1 is done during replicate
+                AddOperationToTransaction(*transaction, r, *replica->StateManager);
+
+                Awaitable<void> awaitLsnOrderingTcs = replica->ReplicatedLogManager->AwaitLsnOrderingTaskOnPrimaryAsync();
+                Awaitable<void> awaitLsnOrderingTcs2;
+
+                if ((r.Next() % 2) == 0)
+                {
+                    Trace.WriteInfo(
+                        TraceComponent,
+                        "{0}: Waiting in lsn ordering tcs for consecutive calls",
+                        prId_->TraceId);
+
+                    awaitLsnOrderingTcs2 = replica->ReplicatedLogManager->AwaitLsnOrderingTaskOnPrimaryAsync();
+                    ASSERT_IF(awaitLsnOrderingTcs.IsComplete(), "LsnOrderingTcs is not expected to be complete");
+                }
+
+                ASSERT_IF(awaitLsnOrderingTcs.IsComplete(), "LsnOrderingTcs is not expected to be complete");
+
+                replica->StateReplicator->LSN = 5;
+                AddOperationToTransaction(*transaction, r, *replica->StateManager);
+
+                replica->StateReplicator->LSN = 4;
+                AddOperationToTransaction(*transaction, r, *replica->StateManager);
+
+                SyncAwait(awaitLsnOrderingTcs);
+                if (awaitLsnOrderingTcs2)
+                {
+                    SyncAwait(awaitLsnOrderingTcs2);
+                }
+
+                // Set the LSN back to the highest number
+                replica->StateReplicator->LSN = 7;
+                transaction->Dispose();
+            }
+            
+            SyncAwait(replica->CloseAndQuiesceReplica());
+            replica->EndTest(false, true);
+        }
+    }
+
 #pragma endregion
+
     BOOST_AUTO_TEST_SUITE_END()
 }

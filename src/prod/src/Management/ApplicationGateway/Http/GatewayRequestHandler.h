@@ -33,6 +33,7 @@ namespace HttpApplicationGateway
             __in std::wstring const& traceId,
             __in HttpServer::IRequestMessageContextUPtr &request,
             __in Common::ByteBufferUPtr && body,
+            std::wstring const & forwardingUri,
             Common::AsyncCallback const& callback,
             Common::AsyncOperationSPtr const& parent);
 

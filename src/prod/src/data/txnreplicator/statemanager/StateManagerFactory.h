@@ -15,9 +15,10 @@ namespace Data
             static NTSTATUS Create(
                 __in Utilities::PartitionedReplicaId const & traceId,
                 __in TxnReplicator::IRuntimeFolders & runtimeFolders, 
-                __in KWfStatefulServicePartition & partition,
+                __in Data::Utilities::IStatefulPartition & partition,
                 __in IStateProvider2Factory & stateProviderFactory,
                 __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+                __in bool hasPersistedState,
                 __in KAllocator & allocator,
                 __out IStateManager::SPtr & stateManager);
         };

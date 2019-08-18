@@ -77,16 +77,11 @@ void Helpers::EnableTracing()
 
     FABRIC_NODE_CONTEXT const * nodeContextResult = nodeContext->get_NodeContext();
 
-    wstring traceFileName = wformatString("{0}_{1}", nodeContextResult->NodeName, DateTime::Now().Ticks);
-    wstring traceFilePath = Path::Combine(activationContext->get_WorkDirectory(), traceFileName);
-
     TraceProvider::GetSingleton()->SetDefaultLevel(TraceSinkType::ETW, LogLevel::Noise);
-    TraceTextFileSink::SetOption(L"");
-    TraceTextFileSink::SetPath(traceFilePath);
 
     Trace.WriteInfo(
         TraceComponent,
-        "Node Name = {0}, IP = {1}",
+        "[Helpers::EnableTracing] NodeName = '{0}', IP = '{1}'",
         nodeContextResult->NodeName,
         nodeContextResult->IPAddressOrFQDN);
 }
@@ -202,3 +197,80 @@ ULONG Helpers::GetHttpPortFromConfigurationPackage(__in wstring const & endpoint
     return port;
 
 }
+
+
+struct ClusterConfig_DnsSettings
+{
+    uint32_t Size;
+    BOOL EnablePartitionedQuery;
+    wchar_t* PrefixBuffer;
+    uint32_t PrefixBufferSize;
+    wchar_t* SuffixBuffer;
+    uint32_t SuffixBufferSize;
+};
+
+struct ClusterConfig_DnsSettings_V1
+{
+    uint32_t Size;
+    BOOL EnablePartitionedQuery;
+    wchar_t* PrefixBuffer;
+    uint32_t PrefixBufferSize;
+    wchar_t* SuffixBuffer;
+    uint32_t SuffixBufferSize;
+};
+
+extern "C" __declspec(dllexport) HRESULT ClusterConfig_GetDnsSettings(__inout ClusterConfig_DnsSettings* dnsSettings)
+{
+   if (dnsSettings == nullptr)
+       return E_POINTER;
+
+    DNS::DnsServiceConfig& config = DNS::DnsServiceConfig::GetConfig();
+
+    if (dnsSettings->Size >= sizeof(ClusterConfig_DnsSettings_V1))
+    {
+        dnsSettings->EnablePartitionedQuery = config.EnablePartitionedQuery;
+
+        wstring PartitionPrefix = config.PartitionPrefix;
+        uint32_t prefixSize = static_cast<uint32_t>(PartitionPrefix.length()) + 1;
+        if (dnsSettings->PrefixBuffer != nullptr)
+        {
+            errno_t error = wcscpy_s(dnsSettings->PrefixBuffer, dnsSettings->PrefixBufferSize, PartitionPrefix.c_str());
+            if (error != 0)
+            {
+                Trace.WriteError(
+                    TraceComponent,
+                    "[ClusterConfig_GetDnsSettings] Failed to copy PartitionPrefix '{0}' to provided buffer. Error: '{1}'",
+                    PartitionPrefix,
+                    error);
+                return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+            }
+        }
+        else
+        {
+            dnsSettings->PrefixBufferSize = prefixSize;
+        }
+
+        wstring PartitionSuffix = config.PartitionSuffix;
+        uint32_t suffixSize = static_cast<uint32_t>(PartitionSuffix.length()) + 1;
+        if (dnsSettings->SuffixBuffer != nullptr)
+        {
+            errno_t error = wcscpy_s(dnsSettings->SuffixBuffer, dnsSettings->SuffixBufferSize, PartitionSuffix.c_str());
+            if (error != 0)
+            {
+                Trace.WriteError(
+                    TraceComponent,
+                    "[ClusterConfig_GetDnsSettings] Failed to copy PartitionSuffix '{0}' to provided buffer. Error: '{1}'",
+                    PartitionSuffix,
+                    error);
+                return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+            }
+        }
+        else
+        {
+            dnsSettings->SuffixBufferSize = suffixSize;
+        }
+    }
+
+    return S_OK;
+}
+

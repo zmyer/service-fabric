@@ -169,6 +169,18 @@ void ApplicationsHandler::GetApplicationApiHandlers(vector<HandlerUriTemplate> &
         false));
 
     uris.push_back(HandlerUriTemplate(
+        MAKE_SUFFIX_PATH(Constants::ApplicationsEntityKeyPath, Constants::SuspendBackup),
+        Constants::HttpPostVerb,
+        MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
+        false));
+
+    uris.push_back(HandlerUriTemplate(
+        MAKE_SUFFIX_PATH(Constants::ApplicationsEntityKeyPath, Constants::ResumeBackup),
+        Constants::HttpPostVerb,
+        MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
+        false));
+
+    uris.push_back(HandlerUriTemplate(
         MAKE_SUFFIX_PATH(Constants::ApplicationsEntityKeyPath, Constants::GetBackups),
         Constants::HttpGetVerb,
         MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
@@ -338,6 +350,11 @@ void ApplicationsHandler::GetApplicationApiHandlers(vector<HandlerUriTemplate> &
         Constants::HttpGetVerb,
         MAKE_HANDLER_CALLBACK(GetUnplacedReplicaInformation)));
 
+    uris.push_back(HandlerUriTemplate(
+        Constants::NetworksEntitySetPathViaApplication,
+        Constants::HttpGetVerb,
+        MAKE_HANDLER_CALLBACK(GetAllApplicationNetworks)));
+
     handlerUris = move(uris);
 }
 
@@ -389,8 +406,8 @@ void ApplicationsHandler::GetServiceApiHandlers(vector<HandlerUriTemplate> &hand
         Constants::HttpGetVerb,
         MAKE_HANDLER_CALLBACK(GetApplicationName)));
 
-//	ServicesEntitySetPath
-    // /Services/{0}/$/ResolvePartition?api-version=1.0
+    //	ServicesEntitySetPath
+        // /Services/{0}/$/ResolvePartition?api-version=1.0
     uris.push_back(HandlerUriTemplate(
         MAKE_SUFFIX_PATH(Constants::ServicesEntityKeyPath, Constants::ResolvePartition),
         Constants::HttpGetVerb,
@@ -506,6 +523,18 @@ void ApplicationsHandler::GetServiceApiHandlers(vector<HandlerUriTemplate> &hand
 
     uris.push_back(HandlerUriTemplate(
         MAKE_SUFFIX_PATH(Constants::ServicesEntityKeyPath, Constants::DisableBackup),
+        Constants::HttpPostVerb,
+        MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
+        false));
+
+    uris.push_back(HandlerUriTemplate(
+        MAKE_SUFFIX_PATH(Constants::ServicesEntityKeyPath, Constants::SuspendBackup),
+        Constants::HttpPostVerb,
+        MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
+        false));
+
+    uris.push_back(HandlerUriTemplate(
+        MAKE_SUFFIX_PATH(Constants::ServicesEntityKeyPath, Constants::ResumeBackup),
         Constants::HttpPostVerb,
         MAKE_HANDLER_CALLBACK(PerformBackupRestoreOperation),
         false));
@@ -669,16 +698,21 @@ void ApplicationsHandler::GetAllApplications(AsyncOperationSPtr const& thisSPtr)
 
     if (handlerOperation->Uri.ApiVersion != Constants::V1ApiVersion)
     {
-        GetApplicationQueryDescription(thisSPtr, false, queryDescription);
+        auto error = GetApplicationQueryDescription(thisSPtr, false, queryDescription);
+        if (!error.IsSuccess())
+        {
+            handlerOperation->OnError(thisSPtr, error);
+            return;
+        }
     }
 
     AsyncOperationSPtr operation = client.QueryClient->BeginGetApplicationList(
         move(queryDescription),
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetAllApplicationsComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetAllApplicationsComplete(operation, false);
+    },
         thisSPtr);
 
     OnGetAllApplicationsComplete(operation, true);
@@ -753,7 +787,12 @@ void ApplicationsHandler::GetApplicationById(AsyncOperationSPtr const& thisSPtr)
 
     if (handlerOperation->Uri.ApiVersion != Constants::V1ApiVersion)
     {
-        GetApplicationQueryDescription(thisSPtr, true, queryDescription);
+        auto error = GetApplicationQueryDescription(thisSPtr, true, queryDescription);
+        if (!error.IsSuccess())
+        {
+            handlerOperation->OnError(thisSPtr, error);
+            return;
+        }
     }
     else
     {
@@ -771,16 +810,16 @@ void ApplicationsHandler::GetApplicationById(AsyncOperationSPtr const& thisSPtr)
     AsyncOperationSPtr operation = client.QueryClient->BeginGetApplicationList(
         move(queryDescription),
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetApplicationByIdComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetApplicationByIdComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetApplicationByIdComplete(operation, true);
 }
 
-void ApplicationsHandler::GetApplicationQueryDescription(
+ErrorCode ApplicationsHandler::GetApplicationQueryDescription(
     Common::AsyncOperationSPtr const & thisSPtr,
     bool includeApplicationName,
     __out ApplicationQueryDescription & queryDescription)
@@ -800,8 +839,7 @@ void ApplicationsHandler::GetApplicationQueryDescription(
         error = argumentParser.TryGetApplicationName(nameUri);
         if (!error.IsSuccess())
         {
-            handlerOperation->OnError(thisSPtr, error);
-            return;
+            return error;
         }
         queryDescription.ApplicationNameFilter = move(nameUri);
     }
@@ -816,10 +854,9 @@ void ApplicationsHandler::GetApplicationQueryDescription(
         error = argumentParser.TryGetPagingDescription(pagingDescription);
         if (!error.IsSuccess())
         {
-            handlerOperation->OnError(thisSPtr, error);
-            return;
+            return error;
         }
-        queryDescription.QueryPagingDescriptionObject = make_unique<QueryPagingDescription>(move(pagingDescription));
+        queryDescription.PagingDescription = make_unique<QueryPagingDescription>(move(pagingDescription));
 
         // ApplicationTypeName
         error = argumentParser.TryGetApplicationTypeName(applicationTypeNameFilter);
@@ -830,8 +867,7 @@ void ApplicationsHandler::GetApplicationQueryDescription(
         else if (!error.IsSuccess() && !error.IsError(ErrorCodeValue::ApplicationTypeNotFound))
         {
             // If an error occurred and a applicationTypeNameFilter has been provided
-            handlerOperation->OnError(thisSPtr, error);
-            return;
+            return error;
         }
 
         // ApplicationDefinitionKindFilter
@@ -847,8 +883,7 @@ void ApplicationsHandler::GetApplicationQueryDescription(
 
         if (!error.IsSuccess())
         {
-            handlerOperation->OnError(thisSPtr, error);
-            return;
+            return error;
         }
     }
 
@@ -861,9 +896,10 @@ void ApplicationsHandler::GetApplicationQueryDescription(
     }
     else if (!error.IsSuccess() && !error.IsError(ErrorCodeValue::NotFound))
     {
-        handlerOperation->OnError(thisSPtr, error);
-        return;
+        return error;
     }
+
+    return ErrorCodeValue::Success;
 }
 
 void ApplicationsHandler::OnGetApplicationByIdComplete(
@@ -947,9 +983,9 @@ void ApplicationsHandler::CreateApplication(AsyncOperationSPtr const& thisSPtr)
         appDescData,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnCreateApplicationComplete(operation, false);
-        },
+    {
+        this->OnCreateApplicationComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnCreateApplicationComplete(inner, true);
@@ -972,7 +1008,7 @@ void ApplicationsHandler::OnCreateApplicationComplete(
     }
 
     ByteBufferUPtr emptyBody;
-    handlerOperation->OnSuccess(operation->Parent, move(emptyBody), Constants::StatusCreated, *Constants::StatusDecsriptionCreated);
+    handlerOperation->OnSuccess(operation->Parent, move(emptyBody), Constants::StatusCreated, *Constants::StatusDescriptionCreated);
 }
 
 void ApplicationsHandler::DeleteApplication(AsyncOperationSPtr const& thisSPtr)
@@ -1006,9 +1042,9 @@ void ApplicationsHandler::DeleteApplication(AsyncOperationSPtr const& thisSPtr)
             isForce),
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnDeleteApplicationComplete(operation, false);
-        },
+    {
+        this->OnDeleteApplicationComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnDeleteApplicationComplete(inner, true);
@@ -1054,9 +1090,9 @@ void ApplicationsHandler::UpgradeApplication(AsyncOperationSPtr const& thisSPtr)
         appUpgDescData,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnUpgradeApplicationComplete(operation, false);
-        },
+    {
+        this->OnUpgradeApplicationComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnUpgradeApplicationComplete(inner, true);
@@ -1102,9 +1138,9 @@ void ApplicationsHandler::UpdateApplicationUpgrade(AsyncOperationSPtr const& thi
         updateDescription,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnUpdateApplicationUpgradeComplete(operation, false);
-        },
+    {
+        this->OnUpdateApplicationUpgradeComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnUpdateApplicationUpgradeComplete(inner, true);
@@ -1151,9 +1187,9 @@ void ApplicationsHandler::RollbackApplicationUpgrade(AsyncOperationSPtr const& t
         appNameUri,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnRollbackApplicationUpgradeComplete(operation, false);
-        },
+    {
+        this->OnRollbackApplicationUpgradeComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnRollbackApplicationUpgradeComplete(inner, true);
@@ -1200,9 +1236,9 @@ void ApplicationsHandler::GetUpgradeProgress(AsyncOperationSPtr const& thisSPtr)
         appNameUri,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnGetUpgradeProgressComplete(operation, false);
-        },
+    {
+        this->OnGetUpgradeProgressComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetUpgradeProgressComplete(inner, true);
@@ -1274,9 +1310,9 @@ void ApplicationsHandler::MoveNextUpgradeDomain(AsyncOperationSPtr const& thisSP
         data.NextUpgradeDomain,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnMoveNextUpgradeDomainComplete(operation, false);
-        },
+    {
+        this->OnMoveNextUpgradeDomainComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnMoveNextUpgradeDomainComplete(inner, true);
@@ -1338,10 +1374,10 @@ void ApplicationsHandler::GetAllPartitions(AsyncOperationSPtr const& thisSPtr)
         Guid::Empty(),
         continuationToken,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetAllPartitionsComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetAllPartitionsComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetAllPartitionsComplete(operation, true);
@@ -1376,6 +1412,15 @@ void ApplicationsHandler::OnGetAllPartitionsComplete(
         if (pagingStatus)
         {
             list.ContinuationToken = pagingStatus->TakeContinuationToken();
+        }
+
+        if (handlerOperation->Uri.ApiVersion >= Constants::V64ApiVersion)
+        {
+            for (auto it = partitionResult.begin(); it != partitionResult.end(); ++it)
+            {
+                // Rename field CurrentConfigurationEpoch to PrimaryEpoch to match powershell output
+                it->SetRenameAsPrimaryEpoch(true);
+            }
         }
 
         list.Items = move(partitionResult);
@@ -1419,10 +1464,10 @@ void ApplicationsHandler::GetPartitionByIdAndServiceName(AsyncOperationSPtr cons
         partitionId,
         EMPTY_STRING_QUERY_FILTER /*continuationToken*/,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetPartitionByIdAndServiceNameComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetPartitionByIdAndServiceNameComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetPartitionByIdAndServiceNameComplete(operation, true);
@@ -1547,10 +1592,10 @@ void ApplicationsHandler::GetAllReplicas(AsyncOperationSPtr const& thisSPtr)
         replicaStatus,
         continuationToken,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetAllReplicasComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetAllReplicasComplete(operation, false);
+    },
         thisSPtr);
 
     OnGetAllReplicasComplete(operation, true);
@@ -1647,10 +1692,10 @@ void ApplicationsHandler::GetReplicaById(AsyncOperationSPtr const& thisSPtr)
         replicaStatus,
         EMPTY_STRING_QUERY_FILTER /*continuationToken*/,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetReplicaByIdComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetReplicaByIdComplete(operation, false);
+    },
         thisSPtr);
 
     OnGetReplicaByIdComplete(operation, true);
@@ -1716,14 +1761,28 @@ void ApplicationsHandler::GetAllServices(AsyncOperationSPtr const& thisSPtr)
     }
 
     // Starting with Constants::V2ApiVersion, input can specify continuation token
-    wstring continuationToken;
     wstring serviceTypeNameFilter;
+    ServiceModel::QueryPagingDescription pagingDescription;
     if (handlerOperation->Uri.ApiVersion != Constants::V1ApiVersion)
     {
-        error = argumentParser.TryGetContinuationToken(continuationToken);
-        if (error.IsError(ErrorCodeValue::NameNotFound))
+        if (handlerOperation->Uri.ApiVersion >= Constants::V64ApiVersion)
         {
-            error = ErrorCode::Success();
+            error = argumentParser.TryGetPagingDescription(pagingDescription);
+            if (!error.IsSuccess())
+            {
+                handlerOperation->OnError(thisSPtr, error);
+                return;
+            }
+        }
+        else
+        {
+            wstring continuationToken;
+            error = argumentParser.TryGetContinuationToken(continuationToken);
+            if (error.IsError(ErrorCodeValue::NameNotFound))
+            {
+                error = ErrorCode::Success();
+            }
+            pagingDescription.ContinuationToken = move(continuationToken);
         }
 
         if (!error.IsSuccess())
@@ -1745,17 +1804,19 @@ void ApplicationsHandler::GetAllServices(AsyncOperationSPtr const& thisSPtr)
         }
     }
 
+    ServiceQueryDescription queryDescription(
+        move(appNameUri),
+        NamingUri(*EMPTY_URI_QUERY_FILTER),
+        move(serviceTypeNameFilter),
+        move(pagingDescription));
+
     AsyncOperationSPtr operation = client.QueryClient->BeginGetServiceList(
-        ServiceQueryDescription(
-            move(appNameUri),
-            NamingUri(*EMPTY_URI_QUERY_FILTER),
-            move(serviceTypeNameFilter),
-            move(continuationToken)),
+        move(queryDescription),
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetAllServicesComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetAllServicesComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetAllServicesComplete(operation, true);
@@ -1846,13 +1907,12 @@ void ApplicationsHandler::GetServiceById(AsyncOperationSPtr const& thisSPtr)
             move(appNameUri),
             move(serviceNameFilter),
             wstring(EMPTY_STRING_QUERY_FILTER) /*serviceTypeNameFilter*/,
-            wstring(EMPTY_STRING_QUERY_FILTER) /*continuationToken*/
-            ),
+            QueryPagingDescription()),
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetServiceByIdComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetServiceByIdComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetServiceByIdComplete(operation, true);
@@ -1968,9 +2028,9 @@ void ApplicationsHandler::CreateServiceFromTemplate(AsyncOperationSPtr const& th
             cstData.InitData),
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnCreateServiceFromTemplateComplete(operation, false);
-        },
+    {
+        this->OnCreateServiceFromTemplateComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnCreateServiceFromTemplateComplete(inner, true);
@@ -2151,9 +2211,9 @@ void ApplicationsHandler::CreateService(AsyncOperationSPtr const& thisSPtr)
         psd,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnCreateServiceComplete(operation, false);
-        },
+    {
+        this->OnCreateServiceComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnCreateServiceComplete(inner, true);
@@ -2200,9 +2260,9 @@ void ApplicationsHandler::CreateServiceGroup(AsyncOperationSPtr const& thisSPtr)
         psd,
         TimeSpan::FromMinutes(Constants::DefaultFabricTimeoutMin),
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnCreateServiceGroupComplete(operation, false);
-        },
+    {
+        this->OnCreateServiceGroupComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnCreateServiceGroupComplete(inner, true);
@@ -2256,10 +2316,10 @@ void ApplicationsHandler::UpdateService(AsyncOperationSPtr const& operation)
         serviceName,
         updateDescription,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnUpdateServiceComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnUpdateServiceComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnUpdateServiceComplete(inner, true);
@@ -2313,10 +2373,10 @@ void ApplicationsHandler::UpdateServiceGroup(AsyncOperationSPtr const& operation
         serviceName,
         updateDescription,
         TimeSpan::FromMinutes(Constants::DefaultFabricTimeoutMin),
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnUpdateServiceGroupComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnUpdateServiceGroupComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnUpdateServiceGroupComplete(inner, true);
@@ -2372,9 +2432,9 @@ void ApplicationsHandler::DeleteService(AsyncOperationSPtr const& thisSPtr)
             isForce),
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnDeleteServiceComplete(operation, false);
-        },
+    {
+        this->OnDeleteServiceComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnDeleteServiceComplete(inner, true);
@@ -2420,9 +2480,9 @@ void ApplicationsHandler::DeleteServiceGroup(AsyncOperationSPtr const& thisSPtr)
         serviceNameUri,
         TimeSpan::FromMinutes(Constants::DefaultFabricTimeoutMin),
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnDeleteServiceGroupComplete(operation, false);
-        },
+    {
+        this->OnDeleteServiceGroupComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnDeleteServiceGroupComplete(inner, true);
@@ -2468,9 +2528,9 @@ void ApplicationsHandler::GetServiceDescription(AsyncOperationSPtr const& thisSP
         serviceNameUri,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnServiceDescriptionComplete(operation, false);
-        },
+    {
+        this->OnServiceDescriptionComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnServiceDescriptionComplete(inner, true);
@@ -2519,7 +2579,6 @@ void ApplicationsHandler::GetServiceGroupDescription(AsyncOperationSPtr const& t
         return;
     }
 
-
     //
     // Make the actual fabricclient operation.
     //
@@ -2530,7 +2589,7 @@ void ApplicationsHandler::GetServiceGroupDescription(AsyncOperationSPtr const& t
     {
         this->OnServiceGroupDescriptionComplete(operation, false);
     },
-    handlerOperation->shared_from_this());
+        handlerOperation->shared_from_this());
 
     OnServiceGroupDescriptionComplete(inner, true);
 }
@@ -2735,10 +2794,10 @@ void ApplicationsHandler::EvaluateApplicationHealth(AsyncOperationSPtr const& th
     auto operation = client.HealthClient->BeginGetApplicationHealth(
         queryDescription,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->EvaluateApplicationHealthComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->EvaluateApplicationHealthComplete(operation, false);
+    },
         thisSPtr);
 
     EvaluateApplicationHealthComplete(operation, true);
@@ -2847,10 +2906,10 @@ void ApplicationsHandler::EvaluateServiceHealth(AsyncOperationSPtr const& thisSP
     AsyncOperationSPtr operation = client.HealthClient->BeginGetServiceHealth(
         queryDescription,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->EvaluateServiceHealthComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->EvaluateServiceHealthComplete(operation, false);
+    },
         thisSPtr);
 
     EvaluateServiceHealthComplete(operation, true);
@@ -2960,10 +3019,10 @@ void ApplicationsHandler::EvaluatePartitionHealth(AsyncOperationSPtr const& this
     auto operation = client.HealthClient->BeginGetPartitionHealth(
         queryDescription,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->EvaluatePartitionHealthComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->EvaluatePartitionHealthComplete(operation, false);
+    },
         thisSPtr);
 
     EvaluatePartitionHealthComplete(operation, true);
@@ -3053,10 +3112,10 @@ void ApplicationsHandler::EvaluateReplicaHealth(AsyncOperationSPtr const& thisSP
     AsyncOperationSPtr operation = client.HealthClient->BeginGetReplicaHealth(
         queryDescription,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->EvaluateReplicaHealthComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->EvaluateReplicaHealthComplete(operation, false);
+    },
         thisSPtr);
 
     EvaluateReplicaHealthComplete(operation, true);
@@ -3107,10 +3166,10 @@ void ApplicationsHandler::RecoverAllPartitions(AsyncOperationSPtr const& thisSPt
     AsyncOperationSPtr operation = client.ClusterMgmtClient->BeginRecoverServicePartitions(
         serviceName.ToString(),
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnRecoverAllPartitionsComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnRecoverAllPartitionsComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnRecoverAllPartitionsComplete(operation, true);
@@ -3153,10 +3212,10 @@ void ApplicationsHandler::RecoverPartition(AsyncOperationSPtr const& thisSPtr)
     AsyncOperationSPtr operation = client.ClusterMgmtClient->BeginRecoverPartition(
         partitionId,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnRecoverPartitionComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnRecoverPartitionComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnRecoverPartitionComplete(operation, true);
@@ -3281,7 +3340,7 @@ void ApplicationsHandler::ResolveServicePartition(AsyncOperationSPtr const& this
         }
     }
     else if (handlerOperation->Uri.GetItem(Constants::PreviousRspVersion, previousRspVersion) &&
-             !previousRspVersion.empty())
+        !previousRspVersion.empty())
     {
         wstring unescapedString;
         error = NamingUri::UnescapeString(previousRspVersion, unescapedString);
@@ -3306,10 +3365,10 @@ void ApplicationsHandler::ResolveServicePartition(AsyncOperationSPtr const& this
         partitionKey,
         rspMetadataSPtr,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnResolveServicePartitionComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnResolveServicePartitionComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnResolveServicePartitionComplete(operation, true);
@@ -3681,10 +3740,10 @@ void ApplicationsHandler::GetPartitionLoadInformation(AsyncOperationSPtr const& 
     auto operation = client.QueryClient->BeginGetPartitionLoadInformation(
         partitionId,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->GetPartitionLoadInformationComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->GetPartitionLoadInformationComplete(operation, false);
+    },
         thisSPtr);
 
     GetPartitionLoadInformationComplete(operation, true);
@@ -3746,10 +3805,10 @@ void ApplicationsHandler::GetReplicaLoadInformation(AsyncOperationSPtr const& th
         partitionId,
         replicaId,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->GetReplicaLoadInformationComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->GetReplicaLoadInformationComplete(operation, false);
+    },
         thisSPtr);
 
     GetReplicaLoadInformationComplete(operation, true);
@@ -3817,10 +3876,10 @@ void ApplicationsHandler::GetUnplacedReplicaInformation(AsyncOperationSPtr const
         partitionId,
         onlyQueryPrimary,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->GetUnplacedReplicaInformationComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->GetUnplacedReplicaInformationComplete(operation, false);
+    },
         thisSPtr);
 
     GetUnplacedReplicaInformationComplete(operation, true);
@@ -3908,13 +3967,12 @@ void ApplicationsHandler::StartPartitionDataLoss(AsyncOperationSPtr const& thisS
         description,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnStartPartitionDataLossComplete(operation, false);
-        },
+    {
+        this->OnStartPartitionDataLossComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnStartPartitionDataLossComplete(inner, true);
-
 }
 
 void ApplicationsHandler::OnStartPartitionDataLossComplete(
@@ -3935,7 +3993,6 @@ void ApplicationsHandler::OnStartPartitionDataLossComplete(
     ByteBufferUPtr emptyBody;
     handlerOperation->OnSuccess(operation->Parent, move(emptyBody), Constants::StatusAccepted, *Constants::StatusDescriptionAccepted);
 }
-
 
 void ApplicationsHandler::StartPartitionQuorumLoss(AsyncOperationSPtr const& thisSPtr)
 {
@@ -3962,8 +4019,8 @@ void ApplicationsHandler::StartPartitionQuorumLoss(AsyncOperationSPtr const& thi
     Guid operationId = Guid::Empty();
     if (!Guid::TryParse(data.OperationId, Constants::HttpGatewayTraceId, operationId))
     {
-      handlerOperation->OnError(thisSPtr, ErrorCodeValue::InvalidArgument);
-      return;
+        handlerOperation->OnError(thisSPtr, ErrorCodeValue::InvalidArgument);
+        return;
     }
 
     FABRIC_PARTITION_SELECTOR partitionSelector;
@@ -3971,7 +4028,6 @@ void ApplicationsHandler::StartPartitionQuorumLoss(AsyncOperationSPtr const& thi
     partitionSelector.ServiceName = tempString.c_str();
     partitionSelector.PartitionSelectorType = data.PartitionSelectorType;
     partitionSelector.PartitionKey = data.PartitionKey.c_str();
-
 
     FABRIC_START_PARTITION_QUORUM_LOSS_DESCRIPTION qld;
     qld.OperationId = operationId.AsGUID();
@@ -3992,9 +4048,9 @@ void ApplicationsHandler::StartPartitionQuorumLoss(AsyncOperationSPtr const& thi
         description,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnStartPartitionQuorumLossComplete(operation, false);
-        },
+    {
+        this->OnStartPartitionQuorumLossComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnStartPartitionQuorumLossComplete(inner, true);
@@ -4071,9 +4127,9 @@ void ApplicationsHandler::StartPartitionRestart(AsyncOperationSPtr const& thisSP
         description,
         handlerOperation->Timeout,
         [this](AsyncOperationSPtr const& operation)
-        {
-            this->OnStartPartitionRestartComplete(operation, false);
-        },
+    {
+        this->OnStartPartitionRestartComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnStartPartitionRestartComplete(inner, true);
@@ -4115,10 +4171,10 @@ void ApplicationsHandler::GetServiceName(AsyncOperationSPtr const& thisSPtr)
     AsyncOperationSPtr operation = client.QueryClient->BeginGetServiceName(
         partitionId,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetServiceNameComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetServiceNameComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetServiceNameComplete(operation, true);
@@ -4177,10 +4233,10 @@ void ApplicationsHandler::GetApplicationName(AsyncOperationSPtr const& thisSPtr)
     AsyncOperationSPtr operation = client.QueryClient->BeginGetApplicationName(
         serviceNameUri,
         handlerOperation->Timeout,
-        [this] (AsyncOperationSPtr const& operation)
-        {
-            this->OnGetApplicationNameComplete(operation, false);
-        },
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetApplicationNameComplete(operation, false);
+    },
         handlerOperation->shared_from_this());
 
     OnGetApplicationNameComplete(operation, true);
@@ -4313,6 +4369,7 @@ void ApplicationsHandler::PerformBackupRestoreOperation(AsyncOperationSPtr const
         Common::Guid::NewGuid().ToString(), // New trace Id for tracking the request end to end
         handlerOperation->MessageContextUPtr,
         handlerOperation->TakeBody(),
+        wstring(),
         [this](AsyncOperationSPtr const& operation)
     {
         this->OnPerformBackupRestoreOperationComplete(operation, false);
@@ -4341,3 +4398,81 @@ void ApplicationsHandler::OnPerformBackupRestoreOperationComplete(
     handlerOperation->TryComplete(operation->Parent, error);
 }
 #endif
+
+void ApplicationsHandler::GetAllApplicationNetworks(AsyncOperationSPtr const& thisSPtr)
+{
+    auto handlerOperation = AsyncOperation::Get<HandlerAsyncOperation>(thisSPtr);
+    auto &client = handlerOperation->FabricClient;
+    UriArgumentParser argumentParser(handlerOperation->Uri);
+
+    ApplicationNetworkQueryDescription applicationNetworkQueryDescription;
+
+    NamingUri applicationName;
+    auto error = argumentParser.TryGetApplicationName(applicationName);
+    if (!error.IsSuccess())
+    {
+        handlerOperation->OnError(thisSPtr, error);
+        return;
+    }
+
+    applicationNetworkQueryDescription.ApplicationName = move(applicationName);
+
+    QueryPagingDescription pagingDescription;
+    error = argumentParser.TryGetPagingDescription(pagingDescription);
+    if (!error.IsSuccess())
+    {
+        handlerOperation->OnError(thisSPtr, error);
+        return;
+    }
+
+    applicationNetworkQueryDescription.QueryPagingDescriptionObject = make_unique<QueryPagingDescription>(move(pagingDescription));
+
+    AsyncOperationSPtr operation = client.NetworkMgmtClient->BeginGetApplicationNetworkList(
+        move(applicationNetworkQueryDescription),
+        handlerOperation->Timeout,
+        [this](AsyncOperationSPtr const& operation)
+    {
+        this->OnGetAllApplicationNetworksComplete(operation, false);
+    },
+        handlerOperation->shared_from_this());
+
+    OnGetAllApplicationNetworksComplete(operation, true);
+}
+
+void ApplicationsHandler::OnGetAllApplicationNetworksComplete(
+    AsyncOperationSPtr const& operation,
+    __in bool expectedCompletedSynchronously)
+{
+    if (operation->CompletedSynchronously != expectedCompletedSynchronously) { return; }
+
+    auto handlerOperation = AsyncOperation::Get<HandlerAsyncOperation>(operation->Parent);
+    auto &client = handlerOperation->FabricClient;
+
+    vector<ApplicationNetworkQueryResult> applicationNetworks;
+    PagingStatusUPtr pagingStatus;
+    auto error = client.NetworkMgmtClient->EndGetApplicationNetworkList(operation, applicationNetworks, pagingStatus);
+    if (!error.IsSuccess())
+    {
+        handlerOperation->OnError(operation->Parent, error);
+        return;
+    }
+
+    ApplicationNetworkList applicationNetworkList;
+    if (pagingStatus)
+    {
+        applicationNetworkList.ContinuationToken = pagingStatus->TakeContinuationToken();
+    }
+
+    applicationNetworkList.Items = move(applicationNetworks);
+
+    ByteBufferUPtr bufferUPtr;
+    error = handlerOperation->Serialize(applicationNetworkList, bufferUPtr);
+
+    if (!error.IsSuccess())
+    {
+        handlerOperation->OnError(operation->Parent, error);
+        return;
+    }
+
+    handlerOperation->OnSuccess(operation->Parent, move(bufferUPtr));
+}

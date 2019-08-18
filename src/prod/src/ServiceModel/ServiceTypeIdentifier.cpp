@@ -21,6 +21,9 @@ Global<ServiceTypeIdentifier> ServiceTypeIdentifier::NamespaceManagerServiceType
 Global<ServiceTypeIdentifier> ServiceTypeIdentifier::FaultAnalysisServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"FAS"), L"FaultAnalysisServiceType");
 Global<ServiceTypeIdentifier> ServiceTypeIdentifier::BackupRestoreServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"BRS"), L"BackupRestoreServiceType");
 Global<ServiceTypeIdentifier> ServiceTypeIdentifier::UpgradeOrchestrationServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"UOS"), L"UpgradeOrchestrationServiceType");
+Global<ServiceTypeIdentifier> ServiceTypeIdentifier::CentralSecretServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"CSS"), L"CentralSecretServiceType");
+Global<ServiceTypeIdentifier> ServiceTypeIdentifier::EventStoreServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"ES"), L"EventStoreServiceType");
+Global<ServiceTypeIdentifier> ServiceTypeIdentifier::GatewayResourceManagerServiceTypeId = make_global<ServiceTypeIdentifier>(ServicePackageIdentifier(ApplicationIdentifier(L"__FabricSystem", 4294967295), L"GRM"), L"GatewayResourceManagerType");
 
 INITIALIZE_SIZE_ESTIMATION(ServiceTypeIdentifier)
 

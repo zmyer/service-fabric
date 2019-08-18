@@ -30,6 +30,8 @@ namespace Data
 
             bool Test_Equals(__in LogRecord const & other) const override;
 
+            virtual std::wstring ToString() const override;
+
         protected:
 
             void Read(
@@ -39,7 +41,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
         private:
 

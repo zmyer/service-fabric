@@ -45,6 +45,7 @@ _htAnswers(256, K_DefaultHashFunction, CompareKString, GetThisAllocator())
 
 DnsResolveOp::~DnsResolveOp()
 {
+    _tracer.Trace(DnsTraceLevel_Noise, "Destructing DnsResolveOp.");
 }
 
 //***************************************
@@ -53,11 +54,14 @@ DnsResolveOp::~DnsResolveOp()
 
 void DnsResolveOp::OnCompleted()
 {
+    _tracer.Trace(DnsTraceLevel_Noise, "DnsResolveOp OnCompleted Called.");
     _resolveCallback(*_spMessage);
 }
 
 void DnsResolveOp::OnReuse()
 {
+    _tracer.Trace(DnsTraceLevel_Noise, "DnsResolveOp OnReuse Called.");
+
     _pendingFabricResolveOps = 0;
     _arrFabricOps.Clear();
 
@@ -131,7 +135,10 @@ void DnsResolveOp::OnStateEnter_StartFabricResolveOps()
             IDnsRecord& question = *arrQuestions[i];
 
             IFabricResolveOp::SPtr spFabricResolveOp = _fabricResolve.CreateResolveOp(
-                _params.FabricQueryTimeoutInSeconds
+                _params.FabricQueryTimeoutInSeconds,
+                _params.PartitionPrefix,
+                _params.PartitionSuffix,
+                _params.EnablePartitionedQuery
             );
             if (STATUS_SUCCESS != _arrFabricOps.Append(spFabricResolveOp))
             {

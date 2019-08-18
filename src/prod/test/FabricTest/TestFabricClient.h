@@ -39,6 +39,7 @@ namespace FabricTest
 
         bool CreateName(Common::StringCollection const & params);
         bool DeleteName(Common::StringCollection const & params);
+        bool DnsNameExists(Common::StringCollection const & params);
         bool NameExists(Common::StringCollection const & params);
         bool PutProperty(Common::StringCollection const & params);
         bool PutCustomProperty(Common::StringCollection const & params);
@@ -86,6 +87,11 @@ namespace FabricTest
         bool UpdateRepairHealthPolicy(StringCollection const & params);
         bool GetRepair(StringCollection const & params);
 
+        bool CreateNetwork(Common::StringCollection const & params);
+        bool DeleteNetwork(Common::StringCollection const & params);
+        bool GetNetwork(Common::StringCollection const & params);
+        bool ShowNetworks(Common::StringCollection const & params);
+
         bool DeployServicePackages(Common::StringCollection const & params);
 
         void DeployServicePackageToNode(
@@ -97,6 +103,13 @@ namespace FabricTest
             FABRIC_PACKAGE_SHARING_POLICY_LIST const & sharingPolicies,
             std::vector<std::wstring> const & expectedInCache,
             std::vector<std::wstring> const & expectedShared);
+
+        bool VerifyDeployedCodePackageCount(Common::StringCollection const & params);
+
+        ULONG VerifyDeployedCodePackageCount(
+            std::wstring const & nodeName,
+            std::wstring const & applicationName,
+            std::wstring const & serviceManifestName);
 
         bool AddBehavior(Common::StringCollection const & params);
         bool RemoveBehavior(Common::StringCollection const & params);
@@ -209,6 +222,7 @@ namespace FabricTest
         static bool GetServiceMetrics(Common::StringCollection const & metricsString, std::vector<Reliability::ServiceLoadMetricDescription> & metrics, bool isStateful);
         static bool GetCorrelations(Common::StringCollection const & correlationCollection, std::vector<Reliability::ServiceCorrelationDescription> & serviceCorrelations);
         static bool GetPlacementPolicies(Common::StringCollection const & policiesCollection, vector<ServiceModel::ServicePlacementPolicyDescription> & placementPolicies);
+        static bool GetServiceScalingPolicy(std::wstring const & scalingCollection, vector<Reliability::ServiceScalingPolicyDescription> & scalingPolicy);
 
         typedef std::function<HRESULT(DWORD const, Common::ComPointer<ComCallbackWaiter> const &, Common::ComPointer<IFabricAsyncOperationContext> &)>
             BeginFabricClientOperationCallback;
@@ -333,6 +347,13 @@ namespace FabricTest
             std::wstring const& propertyName,
             std::wstring const& expectedValue,
             std::wstring const& expectedCustomTypeId);
+        void GetDnsNamePropertyValue(
+            std::wstring const& propertyName,
+            std::wstring const& expectedValue,
+            HRESULT expectedError);
+        void CheckDnsProperty(
+            Common::ComPointer<IFabricPropertyValueResult> const& propertyResult,
+            std::wstring const& expectedValue);
         int EnumerateNames(
             Common::NamingUri const& parentName,
             bool doRecursive,
@@ -410,6 +431,12 @@ namespace FabricTest
         void ReportFault(std::wstring const & nodeName, FABRIC_PARTITION_ID partitionId, FABRIC_REPLICA_ID replicaId, FABRIC_FAULT_TYPE faultType, bool isForce, HRESULT expectedError);
         void MovePrimaryReplicaFromClient(std::wstring const & nodeName, FABRIC_PARTITION_ID partitionId, bool ignoreConstraints, HRESULT expectedError);
         void MoveSecondaryReplicaFromClient(std::wstring const & currentNodeName, std::wstring const & newNodeName, FABRIC_PARTITION_ID partitionId, bool ignoreConstraints, HRESULT expectedError);
+
+        ComPointer<IFabricNetworkManagementClient> CreateNetworkClient();
+        ComPointer<IFabricGetNetworkListResult> GetNetworkList(
+            __in std::wstring const & operationName,
+            __in ComPointer<IFabricNetworkManagementClient> const & networkClient,
+            __in FABRIC_NETWORK_QUERY_DESCRIPTION const & queryDescription) const;
 
         static bool CheckExpectedErrorMessage(
             std::wstring const & operationName,

@@ -286,6 +286,9 @@ ErrorCode FabricClientProxy::Initialize()
     error = clientFactory_->CreatePropertyManagementClient(propertyMgmtClient_);
     if (!error.IsSuccess()) { return error; }
 
+    error = clientFactory_->CreateApplicationManagementClient(applicationManagementClient_);
+    if (!error.IsSuccess()) { return error; }
+
     return clientFactory_->CreateServiceManagementClient(serviceMgmtClient_);
 }
 
@@ -336,7 +339,8 @@ ErrorCode FabricClientProxy::EndDeleteName(AsyncOperationSPtr const & operation)
     //
     if (error.IsError(ErrorCodeValue::NameNotFound) ||
         error.IsError(ErrorCodeValue::NameNotEmpty) ||
-        error.IsError(ErrorCodeValue::AccessDenied))
+        error.IsError(ErrorCodeValue::AccessDenied) ||
+        error.IsError(ErrorCodeValue::InvalidNameUri))
     {
         error = ErrorCodeValue::Success;
     }
@@ -725,4 +729,22 @@ AsyncOperationSPtr FabricClientProxy::BeginReportTaskFailure(
 ErrorCode FabricClientProxy::EndReportTaskFailure(Common::AsyncOperationSPtr const & operation) const
 {
     return infrastructureClient_->EndReportTaskFailure(operation);
+}
+
+Common::AsyncOperationSPtr Management::ClusterManager::FabricClientProxy::BeginUnprovisionApplicationType(
+    Management::ClusterManager::UnprovisionApplicationTypeDescription const & description, 
+    Common::TimeSpan const timeout, 
+    Common::AsyncCallback const & callback, 
+    Common::AsyncOperationSPtr const &root) const
+{
+    return applicationManagementClient_->BeginUnprovisionApplicationType(
+        description,
+        timeout,
+        callback,
+        root);
+}
+
+Common::ErrorCode Management::ClusterManager::FabricClientProxy::EndUnprovisionApplicationType(Common::AsyncOperationSPtr const &operation) const
+{
+    return applicationManagementClient_->EndUnprovisionApplicationType(operation);
 }

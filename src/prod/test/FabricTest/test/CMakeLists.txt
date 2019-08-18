@@ -7,6 +7,7 @@ add_definitions(-DNO_INLINE_EVENTDESCCREATE)
 add_executable(${exe_FabricTest}
     ./testmain.cpp
     ../ApplicationBuilder.cpp
+    ../CheckpointTruncationTimestampValidator.cpp
     ../ClientSecurityHelper.cpp
     ../ConfigurationSetter.cpp
     ../ComTestServiceFactory.cpp
@@ -98,7 +99,7 @@ set_target_properties(${exe_FabricTest} PROPERTIES
 target_link_libraries(${exe_FabricTest}
   ${lib_FabricNode}
   ${lib_Communication}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_ManagementSubsystem}
   ${lib_UpgradeOrchestrationService}
   ${lib_UpgradeService}
@@ -130,6 +131,7 @@ target_link_libraries(${exe_FabricTest}
   ${lib_txnreplicator_testcommon}
   ${lib_data_testcommon}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_LoadBalancing}
   ${lib_FailoverCommon}
   ${lib_SystemServices}
@@ -155,9 +157,10 @@ target_link_libraries(${exe_FabricTest}
   ${lib_FabricUUID}
   ${lib_FabricResources}
   ${lib_DnsServiceConfig}
+  ${lib_GatewayResourceManager}
   ${KtlUser}
   ${KtlLoggerUser}
-  ${lib_KtlLoggerShimUPassthrough}
+  ${lib_KtlLoggerShimUnify}
   ${KtlLoggerUser}
   ${Ktlfull}
   ${Cxx}
@@ -174,8 +177,6 @@ target_link_libraries(${exe_FabricTest}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(
@@ -235,7 +236,7 @@ install(
 )
 
 install(
-    CODE "file( GLOB FabricTestFiles \"${CMAKE_CURRENT_SOURCE_DIR}/*.test\" \"${CMAKE_CURRENT_SOURCE_DIR}/*.Test\")"
+    CODE "file( GLOB_RECURSE FabricTestFiles \"${CMAKE_CURRENT_SOURCE_DIR}/*.test\" \"${CMAKE_CURRENT_SOURCE_DIR}/*.Test\")"
     CODE "file( INSTALL \${FabricTestFiles} DESTINATION ${TEST_OUTPUT_DIR} )"
 )
 

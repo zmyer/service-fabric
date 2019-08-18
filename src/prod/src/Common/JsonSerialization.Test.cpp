@@ -1,4 +1,4 @@
-// ------------------------------------------------------------
+﻿// ------------------------------------------------------------
 // Copyright (c) Microsoft Corporation.  All rights reserved.
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
@@ -909,6 +909,13 @@ namespace Common
         data.push_back(0x10);
         data.push_back(0xff);
 
+        auto averageLoadPolicy = make_shared<Reliability::AveragePartitionLoadScalingTrigger>(L"servicefabric:/_MemoryInMB", 0.5, 1.2, 50);
+        auto instanceMechanism = make_shared<Reliability::InstanceCountScalingMechanism>(2, 5, 1);
+
+        Reliability::ServiceScalingPolicyDescription scalingPolicy(averageLoadPolicy, instanceMechanism);
+        std::vector<Reliability::ServiceScalingPolicyDescription> scalingPolicies;
+        scalingPolicies.push_back(scalingPolicy);
+
         PartitionedServiceDescWrapper psdWrapper(
             FABRIC_SERVICE_KIND_STATEFUL,
             appName,
@@ -934,7 +941,8 @@ namespace Common
             10,
             FABRIC_MOVE_COST_MEDIUM,
             ServicePackageActivationMode::SharedProcess,
-            L"");
+            L"",
+            scalingPolicies);
 
         PartitionedServiceDescriptor psd;
         PartitionedServiceDescriptor psd1;
@@ -950,6 +958,7 @@ namespace Common
         psd1.FromWrapper(psdWrapper1);
 
         VERIFY_IS_TRUE(StringUtility::AreEqualCaseInsensitive(psd.ToString(), psd1.ToString()));
+        VERIFY_IS_TRUE(psd.Service.ScalingPolicies == psd1.Service.ScalingPolicies);
     }
 
     BOOST_AUTO_TEST_CASE(OutofOrderFieldsTest)
@@ -1148,7 +1157,8 @@ namespace Common
             faultDomain,
             nodeId,
             0,
-            NodeDeactivationQueryResult());
+            NodeDeactivationQueryResult(),
+            0);
         wstring data;
 
         //
@@ -2226,6 +2236,21 @@ namespace Common
         // Validate the deserialized data.
         //
         VERIFY_IS_TRUE(StringUtility::AreEqualCaseInsensitive(containerInfoData.Content, containerInfoDataDeserialized.Content));
+    }
+
+    BOOST_AUTO_TEST_CASE(VectorOfObjects)
+    {
+        vector<TempObject> vectorObject;
+        vectorObject.push_back(move(TempObject(L"TempObject", 10)));
+        vectorObject.push_back(move(TempObject(L"TempObject1", 11)));
+
+        ByteBufferUPtr data;
+        auto error = JsonHelper::Serialize(vectorObject, data);
+        VERIFY_IS_TRUE(error.IsSuccess());
+
+        vector<TempObject> vectorObject1;
+        error = JsonHelper::Deserialize(vectorObject1, data);
+        VERIFY_IS_TRUE(error.IsSuccess());
     }
 
     BOOST_AUTO_TEST_SUITE_END()

@@ -20,6 +20,8 @@
 #define __RPC__in_string
 #define __RPC__in_opt_string
 
+typedef LONG LSTATUS;
+
 /* ----- Taken from evenprov.h from rtcpal */
 typedef ULONGLONG REGHANDLE, *PREGHANDLE;
 
@@ -30,6 +32,25 @@ typedef LONG SECURITY_STATUS;
 
 #define E_NOT_VALID_STATE 0x8007139f
 #define E_BOUNDS 0x8000000B
+
+// From Accctrl.h
+typedef enum _SE_OBJECT_TYPE {
+  SE_UNKNOWN_OBJECT_TYPE = 0,
+  SE_FILE_OBJECT,
+  SE_SERVICE,
+  SE_PRINTER,
+  SE_REGISTRY_KEY,
+  SE_LMSHARE,
+  SE_KERNEL_OBJECT,
+  SE_WINDOW_OBJECT,
+  SE_DS_OBJECT,
+  SE_DS_OBJECT_ALL,
+  SE_PROVIDER_DEFINED_OBJECT,
+  SE_WMIGUID_OBJECT,
+  SE_REGISTRY_WOW64_32KEY
+} SE_OBJECT_TYPE;
+
+// end Accctrl.h
 
 //
 //
@@ -285,15 +306,210 @@ typedef DWORD ACCESS_MASK;
 
 typedef ACCESS_MASK REGSAM;
 
+#define ACL_REVISION	(2)
+#define ACL_REVISION_DS	(4)
+
 typedef ULONGLONG REGHANDLE, *PREGHANDLE;
 typedef HKEY *PHKEY;
 
+typedef struct _ACL {
+    BYTE AclRevision;
+    BYTE Sbz1;
+    WORD AclSize;
+    WORD AceCount;
+    WORD Sbz2;
+}ACL;
+
+typedef struct _ACE_HEADER {
+    BYTE AceType;
+    BYTE AceFlags;
+    WORD AceSize;
+} ACE_HEADER;
+typedef ACE_HEADER * PACE_HEADER;
+
+typedef struct _ACCESS_ALLOWED_ACE {
+    ACE_HEADER Header;
+    ACCESS_MASK Mask;
+    DWORD SidStart;
+} ACCESS_ALLOWED_ACE;
+
+typedef ACCESS_ALLOWED_ACE *PACCESS_ALLOWED_ACE;
+
+typedef struct _ACCESS_DENIED_ACE {
+    ACE_HEADER Header;
+    ACCESS_MASK Mask;
+    DWORD SidStart;
+} ACCESS_DENIED_ACE;
+
+typedef ACCESS_DENIED_ACE * PACCESS_DENIED_ACE;
+
+
+typedef struct _ACL_SIZE_INFORMATION {
+    DWORD AceCount;
+    DWORD AclBytesInUse;
+    DWORD AclBytesFree;
+} ACL_SIZE_INFORMATION;
+typedef ACL_SIZE_INFORMATION *PACL_SIZE_INFORMATION;
+
+//TODO - waa
+// PACL is defined as typedef void * PACL in the palrt.h file
+// the definition here should be the real one
+//typedef ACL * PACL;
+
+#define ACCESS_ALLOWED_ACE_TYPE		(0x0)
+#define ACCESS_DENIED_ACE_TYPE		(0x1)
+
+typedef enum _ACL_INFORMATION_CLASS {
+    AclRevisionInformation = 1,
+    AclSizeInformation
+} ACL_INFORMATION_CLASS;
+
+typedef enum _JOBOBJECTINFOCLASS {
+// TODO -waa
+// fill this in with all the values
+    JobObjectBasicAccountingInformation = 1,
+    JobObjectExtendedLimitInformation = 9,
+    JobObjectReserved1Information = 18,
+    MaxJobObjectInfoClass
+} JOBOBJECTINFOCLASS;
+
+//FORCEINLINE
 PVOID
 RtlSecureZeroMemory(
     PVOID ptr,
     SIZE_T cnt
     );
 
+#define OBJECT_INHERIT_ACE                (0x1)
+#define CONTAINER_INHERIT_ACE             (0x2)
+#define NO_PROPAGATE_INHERIT_ACE          (0x4)
+#define INHERIT_ONLY_ACE                  (0x8)
+#define INHERITED_ACE                     (0x10)
+#define VALID_INHERIT_FLAGS               (0x1F)
+
+
+typedef DWORD SECURITY_INFORMATION, *PSECURITY_INFORMATION;
+
+#define OWNER_SECURITY_INFORMATION       (0x00000001L)
+#define GROUP_SECURITY_INFORMATION       (0x00000002L)
+#define DACL_SECURITY_INFORMATION        (0x00000004L)
+#define SACL_SECURITY_INFORMATION        (0x00000008L)
+#define LABEL_SECURITY_INFORMATION       (0x00000010L)
+#define ATTRIBUTE_SECURITY_INFORMATION   (0x00000020L)
+#define SCOPE_SECURITY_INFORMATION       (0x00000040L)
+#define PROCESS_TRUST_LABEL_SECURITY_INFORMATION (0x00000080L)
+#define BACKUP_SECURITY_INFORMATION      (0x00010000L)
+
+#define PROTECTED_DACL_SECURITY_INFORMATION     (0x80000000L)
+#define PROTECTED_SACL_SECURITY_INFORMATION     (0x40000000L)
+#define UNPROTECTED_DACL_SECURITY_INFORMATION   (0x20000000L)
+#define UNPROTECTED_SACL_SECURITY_INFORMATION   (0x10000000L)
+
+
+typedef WORD   SECURITY_DESCRIPTOR_CONTROL, *PSECURITY_DESCRIPTOR_CONTROL;
+
+#define SE_OWNER_DEFAULTED               (0x0001)
+#define SE_GROUP_DEFAULTED               (0x0002)
+#define SE_DACL_PRESENT                  (0x0004)
+#define SE_DACL_DEFAULTED                (0x0008)
+#define SE_SACL_PRESENT                  (0x0010)
+#define SE_SACL_DEFAULTED                (0x0020)
+#define SE_DACL_AUTO_INHERIT_REQ         (0x0100)
+#define SE_SACL_AUTO_INHERIT_REQ         (0x0200)
+#define SE_DACL_AUTO_INHERITED           (0x0400)
+#define SE_SACL_AUTO_INHERITED           (0x0800)
+#define SE_DACL_PROTECTED                (0x1000)
+#define SE_SACL_PROTECTED                (0x2000)
+#define SE_RM_CONTROL_VALID              (0x4000)
+#define SE_SELF_RELATIVE                 (0x8000)
+//typedef USHORT SECURITY_DESCRIPTOR_CONTROL;
+//typedef USHORT* PSECURITY_DESCRIPTOR_CONTROL;
+
+BOOL WINAPI GetSecurityDescriptorControl(
+  _In_   PSECURITY_DESCRIPTOR pSecurityDescriptor,
+  _Out_  PSECURITY_DESCRIPTOR_CONTROL pControl,
+  _Out_  LPDWORD lpdwRevision
+  );
+
+DWORD
+WINAPI
+GetNamedSecurityInfoA(
+    _In_  LPCSTR               pObjectName,
+    _In_  SE_OBJECT_TYPE         ObjectType,
+    _In_  SECURITY_INFORMATION   SecurityInfo,
+    _Out_opt_       PSID         * ppsidOwner,
+    _Out_opt_       PSID         * ppsidGroup,
+    _Out_opt_       PACL         * ppDacl,
+    _Out_opt_       PACL         * ppSacl,
+    _Out_ PSECURITY_DESCRIPTOR   * ppSecurityDescriptor
+    );
+
+DWORD
+WINAPI
+GetNamedSecurityInfoW(
+    _In_  LPCWSTR               pObjectName,
+    _In_  SE_OBJECT_TYPE         ObjectType,
+    _In_  SECURITY_INFORMATION   SecurityInfo,
+    _Out_opt_       PSID         * ppsidOwner,
+    _Out_opt_       PSID         * ppsidGroup,
+    _Out_opt_       PACL         * ppDacl,
+    _Out_opt_       PACL         * ppSacl,
+    _Out_ PSECURITY_DESCRIPTOR   * ppSecurityDescriptor
+    );
+#ifdef UNICODE
+#define GetNamedSecurityInfo  GetNamedSecurityInfoW
+#else
+#define GetNamedSecurityInfo  GetNamedSecurityInfoA
+#endif // !UNICODE
+
+DWORD
+WINAPI
+SetNamedSecurityInfoA(
+    _In_ LPSTR               pObjectName,
+    _In_ SE_OBJECT_TYPE        ObjectType,
+    _In_ SECURITY_INFORMATION  SecurityInfo,
+    _In_opt_ PSID              psidOwner,
+    _In_opt_ PSID              psidGroup,
+    _In_opt_ PACL              pDacl,
+    _In_opt_ PACL              pSacl
+    );
+
+DWORD
+WINAPI
+SetNamedSecurityInfoW(
+    _In_ LPWSTR               pObjectName,
+    _In_ SE_OBJECT_TYPE        ObjectType,
+    _In_ SECURITY_INFORMATION  SecurityInfo,
+    _In_opt_ PSID              psidOwner,
+    _In_opt_ PSID              psidGroup,
+    _In_opt_ PACL              pDacl,
+    _In_opt_ PACL              pSacl
+    );
+#ifdef UNICODE
+#define SetNamedSecurityInfo  SetNamedSecurityInfoW
+#else
+#define SetNamedSecurityInfo  SetNamedSecurityInfoA
+#endif // !UNICODE
+
+BOOL WINAPI GetSecurityDescriptorDacl(
+  _In_   PSECURITY_DESCRIPTOR pSecurityDescriptor,
+  _Out_  LPBOOL lpbDaclPresent,
+  _Out_  PACL *pDacl,
+  _Out_  LPBOOL lpbDaclDefaulted
+  );
+
+BOOL WINAPI SetSecurityDescriptorDacl(
+  _Inout_   PSECURITY_DESCRIPTOR pSecurityDescriptor,
+  _In_      BOOL bDaclPresent,
+  _In_opt_  PACL pDacl,
+  _In_      BOOL bDaclDefaulted
+);
+
+BOOL WINAPI SetKernelObjectSecurity(
+  _In_  HANDLE Handle,
+  _In_  SECURITY_INFORMATION SecurityInformation,
+  _In_  PSECURITY_DESCRIPTOR SecurityDescriptor
+  );
 
 #define GENERIC_READ		(0x80000000L)
 #define GENERIC_WRITE		(0x40000000L)
@@ -457,6 +673,17 @@ typedef struct _TP_POOL
 
 typedef struct _TP_TIMER TP_TIMER, *PTP_TIMER;
 
+typedef DWORD TP_WAIT_RESULT;
+
+typedef struct _TP_WAIT TP_WAIT, *PTP_WAIT;
+
+typedef VOID (NTAPI *PTP_WAIT_CALLBACK)(
+    _Inout_     PTP_CALLBACK_INSTANCE Instance,
+    _Inout_opt_ PVOID                 Context,
+    _Inout_     PTP_WAIT              Wait,
+    _In_        TP_WAIT_RESULT        WaitResult
+    );
+
 typedef VOID (NTAPI *PTP_SIMPLE_CALLBACK)(
     _Inout_     PTP_CALLBACK_INSTANCE Instance,
     _Inout_opt_ PVOID                 Context
@@ -496,6 +723,12 @@ typedef struct _TP_CALLBACK_ENVIRON_V3 {
 } TP_CALLBACK_ENVIRON_V3;
 
 typedef TP_CALLBACK_ENVIRON_V3 TP_CALLBACK_ENVIRON, *PTP_CALLBACK_ENVIRON;
+
+typedef VOID (NTAPI *PTP_TIMER_CALLBACK)(
+    PTP_CALLBACK_INSTANCE Instance,
+    PVOID Context,
+    PTP_TIMER	Timer
+    );
 
 WINBASEAPI
 PTP_WORK
@@ -682,6 +915,11 @@ extern "C" int wcsncpy_s(wchar_t* dst, size_t dsize, wchar_t const* src, size_t 
 #define ERROR_NO_SUCH_USER               1317L
 #define ERROR_LOGON_FAILURE              1326L
 #define ERROR_PASSWORD_EXPIRED           1330L
+#define ERROR_ABANDONED_WAIT_0           735L
+#define ERROR_NET_OPEN_FAILED            570L
+#define ERROR_ALREADY_ASSIGNED           85L
+#define ERROR_SEEK                       25L
+
 
 // Winnt.h // // Token Specific Access Rights.
 //
@@ -799,6 +1037,28 @@ RaiseFailFastException(
 #define STATUS_LOG_FULL                  ((NTSTATUS)0xC01A001DL)
 #define STATUS_FILE_CLOSED               ((NTSTATUS)0xC0000128L)
 
+#define STATUS_QUOTA_EXCEEDED             ((NTSTATUS)0xC0000044L)
+#define STATUS_FILE_IS_A_DIRECTORY        ((NTSTATUS)0xC00000BAL)
+#define STATUS_REPARSE_POINT_NOT_RESOLVED ((NTSTATUS)0xC0000280L)
+#define STATUS_NO_SUCH_FILE              ((NTSTATUS)0xC000000FL)
+#define STATUS_PIPE_NOT_AVAILABLE        ((NTSTATUS)0xC00000ACL)
+#define STATUS_INSTANCE_NOT_AVAILABLE    ((NTSTATUS)0xC00000ABL)
+#define STATUS_INVALID_PIPE_STATE        ((NTSTATUS)0xC00000ADL)
+#define STATUS_PIPE_BUSY                 ((NTSTATUS)0xC00000AEL)
+#define STATUS_ILLEGAL_FUNCTION          ((NTSTATUS)0xC00000AFL)
+#define STATUS_PIPE_DISCONNECTED         ((NTSTATUS)0xC00000B0L)
+#define STATUS_PIPE_CLOSING              ((NTSTATUS)0xC00000B1L)
+#define STATUS_PIPE_CONNECTED            ((NTSTATUS)0xC00000B2L)
+#define STATUS_PIPE_LISTENING            ((NTSTATUS)0xC00000B3L)
+#define STATUS_INVALID_READ_MODE         ((NTSTATUS)0xC00000B4L)
+#define STATUS_PIPE_BROKEN               ((NTSTATUS)0xC000014BL)
+#define STATUS_PIPE_EMPTY                ((NTSTATUS)0xC00000D9L)
+#define STATUS_ENCOUNTERED_WRITE_IN_PROGRESS    ((NTSTATUS)0xC0000433)
+#define STATUS_RESOURCE_IN_USE          ((NTSTATUS)0xC0000708)
+#define STATUS_OPEN_FAILED              ((NTSTATUS)0xC0000136)
+#define STATUS_UNEXPECTED_IO_ERROR       ((NTSTATUS)0xC00000E9L)
+#define STATUS_NO_MORE_FILES             ((NTSTATUS)0x80000006L)
+#define STATUS_DISK_FULL                 ((NTSTATUS)0xC000007FL)
 
 // From Windows sdk ntstatus.h
 // The object was not found.
@@ -816,18 +1076,28 @@ RaiseFailFastException(
 
 #define STATUS_BUFFER_OVERFLOW           ((NTSTATUS)0x80000005L)
 
+#define STATUS_INVALID_LOCK_SEQUENCE     ((NTSTATUS)0xC000001EL)
+#define STATUS_FILE_FORCED_CLOSED        ((NTSTATUS)0xC00000B6L)
+#define STATUS_INSUFF_SERVER_RESOURCES   ((NTSTATUS)0xC0000205L)
+
 #define STATUS_NOT_IMPLEMENTED           ((NTSTATUS)0xC0000002L)
 #define STATUS_CANCELLED                 ((NTSTATUS)0xC0000120L)
 #define STATUS_TIMEOUT                   ((NTSTATUS)0x00000102L)
 #define STATUS_ACCESS_DENIED             ((NTSTATUS)0xC0000022L)
-#define STATUS_INVALID_PARAMETER_11      ((NTSTATUS)0xC00000F9L)
-#define STATUS_INVALID_PARAMETER_12      ((NTSTATUS)0xC00000FAL)
+
+#define STATUS_OBJECT_PATH_SYNTAX_BAD    ((NTSTATUS)0xC000003BL)
+#define STATUS_INTERNAL_ERROR            ((NTSTATUS)0xC00000E5L)
+#define STATUS_PENDING                   ((NTSTATUS)0x00000103L)    // winnt
+#define STATUS_SHUTDOWN_IN_PROGRESS      ((NTSTATUS)0xC00002FEL)
+#define STATUS_OBJECT_NAME_NOT_FOUND     ((NTSTATUS)0xC0000034L)
+#define STATUS_OBJECT_TYPE_MISMATCH      ((NTSTATUS)0xC0000024L)
+#define STATUS_NOT_SUPPORTED             ((NTSTATUS)0xC00000BBL)
+#define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
 
 #define STATUS_BUFFER_TOO_SMALL          ((NTSTATUS)0xC0000023L)
 
 #define STATUS_DISK_FULL                 ((NTSTATUS)0xC000007FL)
 #define STATUS_OPEN_FAILED               ((NTSTATUS)0xC0000136L)
-#define STATUS_ACCESS_DENIED             ((NTSTATUS)0xC0000022L)
 #define STATUS_DELETE_PENDING            ((NTSTATUS)0xC0000056L)
 #define STATUS_SHARING_VIOLATION         ((NTSTATUS)0xC0000043L)
 #define STATUS_NOT_IMPLEMENTED           ((NTSTATUS)0xC0000002L)
@@ -846,9 +1116,6 @@ RaiseFailFastException(
 #define STATUS_NAME_TOO_LONG             ((NTSTATUS)0xC0000106L)
 #define STATUS_REQUEST_OUT_OF_SEQUENCE   ((NTSTATUS)0xC000042AL)
 
-#define STATUS_INVALID_PARAMETER_1       ((NTSTATUS)0xC00000EFL)
-#define STATUS_INVALID_PARAMETER_2       ((NTSTATUS)0xC00000F0L)
-#define STATUS_INVALID_PARAMETER_3       ((NTSTATUS)0xC00000F1L)
 #define STATUS_ALERTED                   ((NTSTATUS)0x00000101L)
 #define STATUS_INVALID_DEVICE_REQUEST    ((NTSTATUS)0xC0000010L)
 #define STATUS_FILE_CLOSED               ((NTSTATUS)0xC0000128L)
@@ -869,8 +1136,6 @@ RaiseFailFastException(
 #define STATUS_RANGE_NOT_FOUND           ((NTSTATUS)0xC000028CL)
 #define STATUS_REVISION_MISMATCH         ((NTSTATUS)0xC0000059L)
 
-#define STATUS_ABANDONED                 ((NTSTATUS)0x00000080L)
-#define STATUS_TIMEOUT                   ((NTSTATUS)0x00000102L)
 #define STATUS_ABANDONED_WAIT_0          ((NTSTATUS)0x00000080L)
 #define STATUS_ABANDONED_WAIT_63         ((NTSTATUS)0x000000BFL)
 #define STATUS_WAIT_63                   ((NTSTATUS)0x0000003FL)
@@ -879,6 +1144,32 @@ RaiseFailFastException(
 #define STATUS_DIRECTORY_NOT_EMPTY       ((NTSTATUS)0xC0000101L)
 #define STATUS_ABIOS_INVALID_COMMAND     ((NTSTATUS)0xC0000113L)
 #define STATUS_INTERNAL_DB_ERROR         ((NTSTATUS)0xC0000158L)
+
+#define STATUS_OBJECT_PATH_SYNTAX_BAD    ((NTSTATUS)0xC000003BL)
+#define STATUS_INTERNAL_ERROR            ((NTSTATUS)0xC00000E5L)
+#define STATUS_PENDING                   ((NTSTATUS)0x00000103L)    // winnt
+#define STATUS_SHUTDOWN_IN_PROGRESS      ((NTSTATUS)0xC00002FEL)
+#define STATUS_OBJECT_NAME_NOT_FOUND     ((NTSTATUS)0xC0000034L)
+#define STATUS_OBJECT_TYPE_MISMATCH      ((NTSTATUS)0xC0000024L)
+#define STATUS_NOT_SUPPORTED             ((NTSTATUS)0xC00000BBL)
+#define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
+#define STATUS_INVALID_STATE_TRANSITION  ((NTSTATUS)0xC000A003L)
+#define STATUS_INSUFFICIENT_POWER        ((NTSTATUS)0xC00002DEL)
+#define STATUS_INTERNAL_DB_CORRUPTION    ((NTSTATUS)0xC00000E4L)
+#define STATUS_MEMORY_NOT_ALLOCATED      ((NTSTATUS)0xC00000A0L)
+#define STATUS_INVALID_PARAMETER_1       ((NTSTATUS)0xC00000EFL)
+#define STATUS_INVALID_PARAMETER_2       ((NTSTATUS)0xC00000F0L)
+#define STATUS_INVALID_PARAMETER_3       ((NTSTATUS)0xC00000F1L)
+#define STATUS_INVALID_PARAMETER_4       ((NTSTATUS)0xC00000F2L)
+#define STATUS_INVALID_PARAMETER_5       ((NTSTATUS)0xC00000F3L)
+#define STATUS_INVALID_PARAMETER_6       ((NTSTATUS)0xC00000F4L)
+#define STATUS_INVALID_PARAMETER_7       ((NTSTATUS)0xC00000F5L)
+#define STATUS_INVALID_PARAMETER_8       ((NTSTATUS)0xC00000F6L)
+#define STATUS_INVALID_PARAMETER_9       ((NTSTATUS)0xC00000F7L)
+#define STATUS_INVALID_PARAMETER_10      ((NTSTATUS)0xC00000F8L)
+#define STATUS_INVALID_PARAMETER_11      ((NTSTATUS)0xC00000F9L)
+#define STATUS_INVALID_PARAMETER_12      ((NTSTATUS)0xC00000FAL)
+#define STATUS_DISK_CORRUPT_ERROR        ((NTSTATUS)0xC0000032L)
 
 #define VER_PRODUCTBUILD            /* NT */   10011
 
@@ -1104,6 +1395,8 @@ WSAGetLastError(
 
 #endif
 
+#define Int32x32To64(a, b)  (((__int64)((long)(a))) * ((__int64)((long)(b))))
+
 #define BIT_NUMBER ULONG
 #define BITMAP_ELEMENT ULONG
 #define PBITMAP_ELEMENT PULONG
@@ -1226,7 +1519,12 @@ ULongLongToULong(
     return hr;
 }
 
-__inline
+HRESULT Int64ToDWord(
+  _In_   INT64 i64Operand,
+  _Out_  DWORD *pdwResult
+);
+
+inline
 HRESULT
 ULongMult(
     IN ULONG ulMultiplicand,
@@ -1238,43 +1536,101 @@ ULongMult(
     return ULongLongToULong(ull64Result, pulResult);
 }
 
+inline
 HRESULT
-UIntAdd(
-    uint uiAugend,
-    uint uiAddend,
-    uint* puiResult);
+SizeTMult(
+    size_t Multiplicand,
+    size_t Multiplier,
+    size_t* pResult)
+{
+    HRESULT hr = INTSAFE_E_ARITHMETIC_OVERFLOW;
+    *pResult = SIZET_ERROR;
 
+    ULONGLONG ull64Result = (ULONGLONG)((ULONGLONG)(ULONG)(Multiplicand) * (ULONG)(Multiplier));
+    if (ull64Result <= SIZE_MAX)
+    {
+        *pResult = (SIZE_T)ull64Result;
+        hr = S_OK;
+    }
+
+    return hr;
+}
+
+inline
+HRESULT
+SizeTAdd(
+    size_t Augend,
+    size_t Addend,
+    size_t* pResult)
+{
+    HRESULT hr = INTSAFE_E_ARITHMETIC_OVERFLOW;
+    *pResult = SIZET_ERROR;
+
+    if ((Augend + Addend) >= Augend)
+    {
+        *pResult = (Augend + Addend);
+        hr = S_OK;
+    }
+
+    return hr;
+}
+
+inline
 HRESULT
 ULongAdd(
     ULONG ulAugend,
     ULONG ulAddend,
-    ULONG* pulResult);
+    ULONG* pulResult)
+{
+    HRESULT hr = INTSAFE_E_ARITHMETIC_OVERFLOW;
+    *pulResult = ULONG_ERROR;
 
-HRESULT Int64ToDWord(
-  _In_   INT64 i64Operand,
-  _Out_  DWORD *pdwResult
-);
+    if ((ulAugend + ulAddend) >= ulAugend)
+    {
+        *pulResult = (ulAugend + ulAddend);
+        hr = S_OK;
+    }
 
+    return hr;
+}
+
+inline
 HRESULT
-SizeTMult(
-    SIZE_T Multiplicand,
-    SIZE_T Multiplier,
-    SIZE_T* pResult);
+UIntAdd(
+    uint Augend,
+    uint Addend,
+    uint* pResult)
+{
+    HRESULT hr = INTSAFE_E_ARITHMETIC_OVERFLOW;
+    *pResult = SIZET_ERROR;
 
-HRESULT
-SizeTAdd(
-    SIZE_T Augend,
-    SIZE_T Addend,
-    SIZE_T* pResult);
+    if ((Augend + Addend) >= Augend)
+    {
+        *pResult = (Augend + Addend);
+        hr = S_OK;
+    }
 
+    return hr;
+}
+
+inline
 HRESULT
 ULongSub(
     IN ULONG ulMinuend,
     IN ULONG ulSubtrahend,
-    OUT ULONG* pulResult);
+    OUT ULONG* pulResult)
+{
+    HRESULT hr = INTSAFE_E_ARITHMETIC_OVERFLOW;
+    *pulResult = ULONG_ERROR;
 
+    if (ulMinuend >= ulSubtrahend)
+    {
+        *pulResult = (ulMinuend - ulSubtrahend);
+        hr = S_OK;
+    }
 
-
+    return hr;
+}
 
 // end intsafe functions
 
@@ -3004,8 +3360,6 @@ public:
 
 };
 
-typedef LONG LSTATUS;
-
 typedef VOID (NTAPI *PTP_TIMER_CALLBACK)(
     PTP_CALLBACK_INSTANCE Instance,
     PVOID Context,
@@ -3360,7 +3714,7 @@ typedef struct _IO_STATUS_BLOCK {
     union {
         NTSTATUS Status;
         PVOID Pointer;
-    } DUMMYUNIONNAME;
+    } ;//DUMMYUNIONNAME;
 
     ULONG_PTR Information;
 } IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
@@ -3769,30 +4123,6 @@ typedef struct _RTL_AVL_TABLE {
 } RTL_AVL_TABLE;
 typedef RTL_AVL_TABLE *PRTL_AVL_TABLE;
 
-#define STATUS_OBJECT_PATH_SYNTAX_BAD    ((NTSTATUS)0xC000003BL)
-#define STATUS_INTERNAL_ERROR            ((NTSTATUS)0xC00000E5L)
-#define STATUS_PENDING                   ((NTSTATUS)0x00000103L)    // winnt
-#define STATUS_SHUTDOWN_IN_PROGRESS      ((NTSTATUS)0xC00002FEL)
-#define STATUS_OBJECT_NAME_NOT_FOUND     ((NTSTATUS)0xC0000034L)
-#define STATUS_OBJECT_TYPE_MISMATCH      ((NTSTATUS)0xC0000024L)
-#define STATUS_INVALID_PARAMETER_1       ((NTSTATUS)0xC00000EFL)
-#define STATUS_NOT_SUPPORTED             ((NTSTATUS)0xC00000BBL)
-#define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
-#define STATUS_INVALID_STATE_TRANSITION  ((NTSTATUS)0xC000A003L)
-#define STATUS_INSUFFICIENT_POWER        ((NTSTATUS)0xC00002DEL)
-#define STATUS_INTERNAL_DB_CORRUPTION    ((NTSTATUS)0xC00000E4L)
-#define STATUS_MEMORY_NOT_ALLOCATED      ((NTSTATUS)0xC00000A0L)
-#define STATUS_INVALID_PARAMETER_1       ((NTSTATUS)0xC00000EFL)
-#define STATUS_INVALID_PARAMETER_2       ((NTSTATUS)0xC00000F0L)
-#define STATUS_INVALID_PARAMETER_3       ((NTSTATUS)0xC00000F1L)
-#define STATUS_INVALID_PARAMETER_4       ((NTSTATUS)0xC00000F2L)
-#define STATUS_INVALID_PARAMETER_5       ((NTSTATUS)0xC00000F3L)
-#define STATUS_INVALID_PARAMETER_6       ((NTSTATUS)0xC00000F4L)
-#define STATUS_INVALID_PARAMETER_7       ((NTSTATUS)0xC00000F5L)
-#define STATUS_INVALID_PARAMETER_8       ((NTSTATUS)0xC00000F6L)
-#define STATUS_INVALID_PARAMETER_9       ((NTSTATUS)0xC00000F7L)
-#define STATUS_INVALID_PARAMETER_10      ((NTSTATUS)0xC00000F8L)
-
 typedef struct _STRING {
 	USHORT Length;
 	USHORT MaximumLength;
@@ -3889,12 +4219,18 @@ HeapDestroy(
 #define NULL 0
 
 #define SYNCHRONIZE                      (0x00100000L)
-#define FILE_EXECUTE              ( 0x0020 )    // file
+#define FILE_EXECUTE                     ( 0x0020 )    // file
 #define READ_CONTROL                     (0x00020000L)
 #define STANDARD_RIGHTS_EXECUTE          (READ_CONTROL)
 #define FILE_GENERIC_EXECUTE      (STANDARD_RIGHTS_EXECUTE  |\
                                    FILE_READ_ATTRIBUTES     |\
                                    FILE_EXECUTE             |\
+                                   SYNCHRONIZE)
+#define FILE_GENERIC_WRITE        (STANDARD_RIGHTS_WRITE    |\
+                                   FILE_WRITE_DATA          |\
+                                   FILE_WRITE_ATTRIBUTES    |\
+                                   FILE_WRITE_EA            |\
+                                   FILE_APPEND_DATA         |\
                                    SYNCHRONIZE)
 
 #if !defined(UNDER_RTCPAL)
@@ -4843,8 +5179,114 @@ NET_API_STATUS NetLocalGroupSetInfo(
 NET_API_STATUS NetApiBufferFree(void *a_bufptr);
 
 //////////////////////////////////////////////////////////////////
-//64-bit interlock functions
+// interlock functions
 //////////////////////////////////////////////////////////////////
+inline CHAR InterlockedExchange8(CHAR volatile *Target, CHAR Value)
+{
+    return __sync_swap(Target, Value);
+}
+
+inline SHORT InterlockedCompareExchange16(SHORT volatile *Destination, SHORT Exchange, SHORT Comperand)
+{
+    return __sync_val_compare_and_swap(Destination, Comperand, Exchange);
+}
+
+// LONG
+inline LONG InterlockedXor(LONG volatile *Destination,LONG Value)
+{
+    return __sync_fetch_and_xor(Destination, Value);
+}
+
+// ULONG
+inline ULONG InterlockedIncrement(ULONG volatile *lpAddend)
+{
+    return __sync_add_and_fetch(lpAddend, (ULONG)1);
+}
+
+inline ULONG InterlockedDecrement(ULONG volatile *lpAddend)
+{
+    return __sync_sub_and_fetch(lpAddend, (ULONG)1);
+}
+
+inline ULONG InterlockedCompareExchange(ULONG volatile *Destination, ULONG Exchange, ULONG Comperand)
+{
+    return __sync_val_compare_and_swap(Destination, Comperand, Exchange);
+}
+
+// LONGLONG
+inline LONGLONG InterlockedIncrement(LONGLONG volatile *lpAddend)
+{
+    return __sync_add_and_fetch(lpAddend, (LONGLONG)1);
+}
+
+inline LONGLONG InterlockedDecrement(LONGLONG volatile *lpAddend)
+{
+    return __sync_sub_and_fetch(lpAddend, (LONGLONG)1);
+}
+
+inline LONGLONG InterlockedAdd64(LONGLONG volatile *lpAddend, LONGLONG addent)
+{
+   return __sync_add_and_fetch(lpAddend, (LONGLONG)addent);
+}
+
+// ULONGLONG
+inline ULONGLONG InterlockedIncrement(ULONGLONG volatile *lpAddend)
+{
+    return __sync_add_and_fetch(lpAddend, (ULONGLONG)1);
+}
+
+inline ULONGLONG InterlockedDecrement(ULONGLONG volatile *lpAddend)
+{
+    return __sync_sub_and_fetch(lpAddend, (ULONGLONG)1);
+}
+
+inline ULONGLONG InterlockedExchange(ULONGLONG volatile *Target, ULONGLONG Value)
+{
+    return __sync_swap(Target, Value);
+}
+
+inline ULONGLONG InterlockedCompareExchange(ULONGLONG volatile *Destination, ULONGLONG Exchange, ULONGLONG Comperand)
+{
+    return __sync_val_compare_and_swap(Destination, Comperand, Exchange);
+}
+
+inline ULONGLONG InterlockedCompareExchangeAcquire(ULONGLONG volatile *Destination, ULONGLONG Exchange, ULONGLONG Comperand)
+{
+    return __sync_val_compare_and_swap(Destination, Comperand, Exchange);
+}
+
+inline ULONGLONG InterlockedCompareExchangeRelease(ULONGLONG volatile *Destination, ULONGLONG Exchange, ULONGLONG Comperand)
+{
+    return __sync_val_compare_and_swap(Destination, Comperand, Exchange);
+}
+
+inline ULONGLONG InterlockedExchangeAdd(ULONGLONG volatile *Addend, ULONGLONG Value)
+{
+    return __sync_fetch_and_add(Addend, Value);
+}
+
+inline ULONGLONG InterlockedExchangeSubtract(ULONGLONG volatile *Addend, ULONGLONG Value)
+{
+    return __sync_fetch_and_sub(Addend, Value);
+}
+
+inline ULONGLONG InterlockedAnd(ULONGLONG volatile *Destination, ULONGLONG Value)
+{
+    return __sync_fetch_and_and(Destination, Value);
+}
+
+inline ULONGLONG InterlockedOr(ULONGLONG volatile *Destination, ULONGLONG Value)
+{
+    return __sync_fetch_and_or(Destination, Value);
+}
+
+inline ULONGLONG InterlockedXor(ULONGLONG volatile *Destination, ULONGLONG Value)
+{
+    return __sync_fetch_and_xor(Destination, Value);
+}
+
+#if 0
+
 PALIMPORT
 ULONGLONG
 PALAPI
@@ -4990,6 +5432,7 @@ inline LONGLONG InterlockedAdd64(LONGLONG volatile *lpAddend, LONGLONG addent)
 {
     return __sync_add_and_fetch(lpAddend, (LONGLONG)addent);
 }
+#endif
 
 #if !defined(CLANG_5_0_1_PLUS)
 inline LONG _InterlockedIncrement(LONG volatile *lpAddend)
@@ -5015,6 +5458,19 @@ inline ULONGLONG _InterlockedDecrement(ULONGLONG volatile *lpAddend)
     return __sync_sub_and_fetch(lpAddend, (ULONGLONG)1);
 }
 
+typedef USHORT SECURITY_DESCRIPTOR_CONTROL, *PSECURITY_DESCRIPTOR_CONTROL;
+
+typedef struct _SECURITY_DESCRIPTOR {
+    UCHAR Revision;
+    UCHAR Sbz1;
+    SECURITY_DESCRIPTOR_CONTROL Control;
+    PSID Owner;
+    PSID Group;
+    PACL Sacl;
+    PACL Dacl;
+
+} SECURITY_DESCRIPTOR, *PISECURITY_DESCRIPTOR;
+
 // This is also defined in pal.h, but is hidden behind __APPLE__ define. Need
 // to find out why.
 WINBASEAPI
@@ -5033,6 +5489,53 @@ HeapValidate(
         _In_ DWORD dwFlags,
         _In_opt_ LPCVOID lpMem
         );
+
+FORCEINLINE
+CHAR
+ReadNoFence8 (
+    _In_ CHAR const volatile *Source
+    )
+
+{
+
+    CHAR Value;
+
+    Value = *Source;
+    return Value;
+}
+
+FORCEINLINE
+LONG
+ReadNoFence (
+    _In_ LONG const volatile *Source
+    )
+{
+    LONG Value;
+
+    Value = *Source;
+    return Value;
+}
+
+FORCEINLINE
+ULONG
+ReadULongNoFence (
+    _In_ ULONG const volatile *Source
+    )
+
+{
+    return (ULONG)ReadNoFence((PLONG)Source);
+}
+
+FORCEINLINE
+UCHAR
+ReadUCharNoFence (
+    _In_ UCHAR const volatile *Source
+    )
+
+{
+    return (UCHAR)ReadNoFence8((PCHAR)Source);
+}
+
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -5074,6 +5577,16 @@ typedef enum _SECTION_INHERIT {
 #define MAXULONG32  ((ULONG32)~((ULONG32)0))
 #define MAXLONG32   ((LONG32)(MAXULONG32 >> 1))
 #define MINLONG32   ((LONG32)~MAXLONG32)
+
+#define CONVERT_TO_ARGS(argc, cargs) \
+    std::vector<WCHAR*> args_vec(argc);\
+    WCHAR** args = (WCHAR**)args_vec.data();\
+    std::vector<std::wstring> wargs(argc);\
+    for (int iter = 0; iter < argc; iter++)\
+    {\
+        wargs[iter] = Utf8To16(cargs[iter]);\
+        args[iter] = (WCHAR*)(wargs[iter].data());\
+    }\
 
 typedef struct _RTL_SPLAY_LINKS {
     struct _RTL_SPLAY_LINKS *Parent;

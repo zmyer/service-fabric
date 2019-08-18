@@ -35,6 +35,8 @@ namespace Data
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in KAllocator & allocator);
 
+            virtual std::wstring ToString() const override;
+
             _declspec(property(get = get_InformationEvent)) InformationEvent::Enum InformationEvent;
             InformationEvent::Enum get_InformationEvent() const
             {
@@ -52,7 +54,8 @@ namespace Data
             virtual void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite, 
+                __in bool forceRecomputeOffsets) override;
 
         private:
 

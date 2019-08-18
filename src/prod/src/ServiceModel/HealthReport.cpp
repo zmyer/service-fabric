@@ -217,6 +217,18 @@ HealthReport HealthReport::CreateSystemHealthReport(
         removeWhenExpired = true;
         break;
 
+    case SystemHealthReportCode::RA_StoreProviderHealthy:
+        sourceId = *Constants::HealthReportRASource;
+        property = *Constants::HealthRAStoreProvider;
+        healthState = FABRIC_HEALTH_STATE_OK;
+        break;
+
+    case SystemHealthReportCode::RA_StoreProviderUnhealthy:
+        sourceId = *Constants::HealthReportRASource;
+        property = *Constants::HealthRAStoreProvider;
+        healthState = FABRIC_HEALTH_STATE_WARNING;
+        break;
+
     case SystemHealthReportCode::RA_ReplicaChangeRoleStatusError:
         sourceId = *Constants::HealthReportRASource;
         property = *Constants::HealthReplicaChangeRoleStatusProperty;
@@ -424,6 +436,13 @@ HealthReport HealthReport::CreateSystemHealthReport(
         description = HMResource::GetResources().NodeDown;
         break;
 
+    case SystemHealthReportCode::FM_SeedNodeDown:
+        sourceId = *Constants::HealthReportFMSource;
+        property = *Constants::HealthStateProperty;
+        healthState = FABRIC_HEALTH_STATE_ERROR;
+        description = HMResource::GetResources().SeedNodeDown;
+        break;
+
     case SystemHealthReportCode::FM_NodeDownDuringUpgrade:
         sourceId = *Constants::HealthReportFMSource;
         property = *Constants::HealthStateProperty;
@@ -623,6 +642,12 @@ HealthReport HealthReport::CreateSystemHealthReport(
     case SystemHealthReportCode::Hosting_DockerHealthCheckStatusUnhealthy:
         sourceId = *Constants::HealthReportHostingSource;
         healthState = FABRIC_HEALTH_STATE_WARNING;
+        break;
+
+    case SystemHealthReportCode::Hosting_DockerDaemonUnhealthy:
+        sourceId = *Constants::HealthReportHostingSource;
+        healthState = FABRIC_HEALTH_STATE_WARNING;
+        removeWhenExpired = true;
         break;
 
     case SystemHealthReportCode::PLB_NodeCapacityViolation:
@@ -1151,29 +1176,6 @@ HealthReport HealthReport::CreateHealthInformationForDelete(
         AttributeList());
 }
 
-HealthReport::HealthReport(HealthReport && other)
-    : HealthInformation(move(other))
-    , entityInformation_(move(other.entityInformation_))
-    , attributeList_(move(other.attributeList_))
-    , entityPropertyId_(move(other.entityPropertyId_))
-    , priority_(move(other.priority_))
-{
-}
-
-HealthReport & HealthReport::operator = (HealthReport && other)
-{
-    if (this != &other)
-    {
-        entityInformation_ = move(other.entityInformation_);
-        attributeList_ = move(other.attributeList_);
-        entityPropertyId_ = move(other.entityPropertyId_);
-        priority_ = move(other.priority_);
-    }
-
-    HealthInformation::operator=(move(other));
-    return *this;
-}
-
 ErrorCode HealthReport::ToPublicApi(
     __in ScopedHeap & heap,
     __out FABRIC_HEALTH_REPORT & healthReport) const
@@ -1295,7 +1297,7 @@ void HealthReport::FillEventData(Common::TraceEventContext & context) const
 {
     CheckEntityExists();
     context.Write<std::wstring>(entityInformation_->EntityId);
-    context.Write<FABRIC_INSTANCE_ID>(entityInformation_->EntityInstance);
+    context.WriteCopy<FABRIC_INSTANCE_ID>(entityInformation_->EntityInstance);
     context.Write<std::wstring>(sourceId_);
     context.Write<std::wstring>(property_);
     context.WriteCopy<std::wstring>(wformatString(state_));

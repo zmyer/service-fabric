@@ -15,62 +15,104 @@ using namespace Common;
 #define RELIABLECOLLECTION_STANDALONE_DLL L"libReliableCollectionServiceStandalone.so"
 #endif
 
+StringLiteral const TraceComponent("ReliableCollectionRuntime");
+
 static ReliableCollectionApis g_reliableCollectionApis;
 
-#ifdef _WIN32
+extern "C" HRESULT ReliableCollectionRuntime_StartTraceSessions()
+{
+    auto error =  Common::TraceSession::Instance()->StartTraceSessions();
+    if (!error.IsSuccess())
+    {
+        return error.ToHResult();
+    }
+
+    Trace.WriteNoise(TraceComponent, "Trace sessions successfully started");
+    return S_OK;
+}
+
 extern "C" HRESULT ReliableCollectionRuntime_Initialize(uint16_t apiVersion)
 {
+    return ReliableCollectionRuntime_Initialize2(apiVersion, /*standaloneMode*/ false);
+}
+
+#ifdef _WIN32
+extern "C" HRESULT ReliableCollectionRuntime_Initialize2(uint16_t apiVersion, BOOL standAloneMode)
+{
     HMODULE module;
-    wstring env;
     std::wstring currentModuleFullName;
     std::wstring fullName;
     Environment::GetCurrentModuleFileName(currentModuleFullName);
     std::wstring directoryName = Path::GetDirectoryName(currentModuleFullName);
+    
+    Trace.WriteInfo(TraceComponent, "[ReliableCollectionRuntime_Initialize2] apiVersion={0} standAloneMode={1}", apiVersion, standAloneMode);
 
-    if (Environment::GetEnvironmentVariable(L"SF_RELIABLECOLLECTION_STANDALONE", env, NOTHROW()))
-        fullName = Path::Combine(directoryName, RELIABLECOLLECTION_STANDALONE_DLL);
+    if (standAloneMode)
+        fullName = Path::Combine(directoryName, RELIABLECOLLECTION_STANDALONE_DLL); // This is app local, so need to loaded from current directory
     else
-        fullName = Path::Combine(directoryName, RELIABLECOLLECTION_CLUSTER_DLL);
+        fullName = wstring(RELIABLECOLLECTION_CLUSTER_DLL);
 
     module = ::LoadLibrary(fullName.c_str());
     if (module == NULL)
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] LoadLibrary failed for filename={0} error={1}", fullName, GetLastError());
         return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     pfnFabricGetReliableCollectionApiTable pfnGetReliableCollectionApiTable = (pfnFabricGetReliableCollectionApiTable)GetProcAddress(module, "FabricGetReliableCollectionApiTable");
     if (pfnGetReliableCollectionApiTable == NULL)
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] GetProcAddress failed error={0}", GetLastError());
         return HRESULT_FROM_WIN32(GetLastError());
+    }
 
-    pfnGetReliableCollectionApiTable(apiVersion, &g_reliableCollectionApis);
-    return S_OK;
+    HRESULT status = pfnGetReliableCollectionApiTable(apiVersion, &g_reliableCollectionApis);
+    if (FAILED(status))
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] FabricGetReliableCollectionApiTable failed error={0}", status);
+    }
+
+    return status;
 }
 #else
 #include <dlfcn.h>
-extern "C" HRESULT ReliableCollectionRuntime_Initialize(uint16_t apiVersion)
+extern "C" HRESULT ReliableCollectionRuntime_Initialize2(uint16_t apiVersion, BOOL standAloneMode)
 {
     void* module = nullptr;
-    wstring env;
     std::wstring currentModuleFullName;
     std::wstring fullName;
     Environment::GetCurrentModuleFileName(currentModuleFullName);
     std::wstring directoryName = Path::GetDirectoryName(currentModuleFullName);
 
-    if (Environment::GetEnvironmentVariable(L"SF_RELIABLECOLLECTION_STANDALONE", env, NOTHROW()))
-        // shared library is already loaded in the process
-        fullName = wstring(RELIABLECOLLECTION_STANDALONE_DLL);
+    Trace.WriteInfo(TraceComponent, "[ReliableCollectionRuntime_Initialize2] apiVersion={0} standAloneMode={1}", apiVersion, standAloneMode);
+
+    if (standAloneMode)
+        fullName = Path::Combine(directoryName, RELIABLECOLLECTION_STANDALONE_DLL);
     else
-        fullName = Path::Combine(directoryName, RELIABLECOLLECTION_CLUSTER_DLL);
+        fullName = wstring(RELIABLECOLLECTION_CLUSTER_DLL);
 
     string name = Utf16To8(fullName.c_str());
-    module = dlopen(name.c_str(), RTLD_NOW);
+    module = dlopen(name.c_str(), RTLD_LAZY);
     if (module == nullptr)
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] dlopen failed for filename={0} error={1}", name, GetLastError());
         return HRESULT_FROM_WIN32(GetLastError());
+    }
 
     pfnFabricGetReliableCollectionApiTable pfnGetReliableCollectionApiTable = (pfnFabricGetReliableCollectionApiTable)dlsym(module, "FabricGetReliableCollectionApiTable");
     if (pfnGetReliableCollectionApiTable == nullptr)
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] dlsym failed error={0}", GetLastError());
         return HRESULT_FROM_WIN32(GetLastError());
+    }
 
-    pfnGetReliableCollectionApiTable(apiVersion, &g_reliableCollectionApis);
-    return S_OK;
+    HRESULT status = pfnGetReliableCollectionApiTable(apiVersion, &g_reliableCollectionApis);
+    if (FAILED(status))
+    {
+        Trace.WriteError(TraceComponent, "[ReliableCollectionRuntime_Initialize2] FabricGetReliableCollectionApiTable failed error={0}", status);
+    }
+
+    return status;
 }
 #endif
 
@@ -301,7 +343,7 @@ extern "C" HRESULT Store_SetNotifyStoreChangeCallback(
     return g_reliableCollectionApis.Store_SetNotifyStoreChangeCallback(stateProvider, callback, cleanupCallback, ctx);
 }
 
-CLASS_DECLSPEC HRESULT Store_SetNotifyStoreChangeCallbackMask(
+extern "C" HRESULT Store_SetNotifyStoreChangeCallbackMask(
     __in StateProviderHandle stateProvider,
     __in NotifyStoreChangeCallbackMask mask)
 {
@@ -326,17 +368,28 @@ extern "C" HRESULT TxnReplicator_SetNotifyTransactionChangeCallback(
     return g_reliableCollectionApis.TxnReplicator_SetNotifyTransactionChangeCallback(txnReplicator, callback, cleanupCallback, ctx);
 }
 
+extern "C" HRESULT TxnReplicator_GetInfo(
+    __in TxnReplicatorHandle txnReplicator,
+    __out TxnReplicator_Info* info)
+{
+    return g_reliableCollectionApis.TxnReplicator_GetInfo(
+        txnReplicator,
+        info);
+}
+
+extern "C" HRESULT PrimaryReplicator_UpdateReplicatorSettings(
+    __in PrimaryReplicatorHandle primaryReplicator,
+    __in TxnReplicator_Settings const* replicatorSettings)
+{
+    return g_reliableCollectionApis.PrimaryReplicator_UpdateReplicatorSettings(
+        primaryReplicator,
+        replicatorSettings);
+}
 
 extern "C" void Transaction_Release(
     __in TransactionHandle txn) noexcept
 {
     g_reliableCollectionApis.Transaction_Release(txn);
-}
-
-extern "C" void Transaction_Release2(
-    __in TransactionHandle txn) noexcept
-{
-    g_reliableCollectionApis.Transaction_Release2(txn);
 }
 
 extern "C" void Transaction_Dispose(
@@ -401,39 +454,24 @@ extern "C" void TxnReplicator_Release(
 }
 
 extern "C" HRESULT GetTxnReplicator(
+    __in int64_t replicaId,
     __in void* statefulServicePartition,
     __in void* dataLossHandler,
-    __in void const* fabricReplicatorSettings,
-    __in void const* txnReplicatorSettings,
-    __in void const* ktlLoggerSharedSettings,
-    __out void** primaryReplicator,
+    __in TxnReplicator_Settings const* replicatorSettings,
+    __in LPCWSTR configPackageName,
+    __in LPCWSTR replicatorSettingsSectionName,
+    __in LPCWSTR replicatorSecuritySectionName,
+    __out PrimaryReplicatorHandle* primaryReplicator,
     __out TxnReplicatorHandle* txnReplicatorHandle) noexcept
 {
     return g_reliableCollectionApis.GetTxnReplicator(
-        statefulServicePartition,
-        dataLossHandler,
-        fabricReplicatorSettings,
-        txnReplicatorSettings,
-        ktlLoggerSharedSettings,
-        primaryReplicator,
-        txnReplicatorHandle);
-}
-
-extern "C" HRESULT GetTransactionalReplicator(
-    __in void* statefulServicePartition,
-    __in void* dataLossHandler,
-    __in const TxnReplicator_Settings* replicatorSettings,
-    __in LPCWSTR configPackageName,
-    __in LPCWSTR replicatorSettingsSectionName,
-    __out void** primaryReplicator,
-    __out TxnReplicatorHandle* txnReplicatorHandle) noexcept
-{
-    return g_reliableCollectionApis.GetTransactionalReplicator(
+        replicaId,
         statefulServicePartition,
         dataLossHandler,
         replicatorSettings,
         configPackageName,
         replicatorSettingsSectionName,
+        replicatorSecuritySectionName,
         primaryReplicator,
         txnReplicatorHandle);
 }
@@ -442,6 +480,8 @@ extern "C" HRESULT TxnReplicator_GetOrAddStateProviderAsync(
     __in TxnReplicatorHandle txnReplicator,
     __in TransactionHandle txn,
     __in LPCWSTR name,
+    __in LPCWSTR lang,
+    __in StateProvider_Info* stateProviderInfo,
     __in int64_t timeout,
     __out CancellationTokenSourceHandle* cts,
     __out StateProviderHandle* stateProvider,
@@ -454,6 +494,8 @@ extern "C" HRESULT TxnReplicator_GetOrAddStateProviderAsync(
         txnReplicator,
         txn,
         name,
+        lang,
+        stateProviderInfo,
         timeout,
         cts,
         stateProvider,
@@ -467,6 +509,8 @@ extern "C" HRESULT TxnReplicator_AddStateProviderAsync(
     __in TxnReplicatorHandle txnReplicator,
     __in TransactionHandle txn,
     __in LPCWSTR name,
+    __in LPCWSTR lang,
+    __in StateProvider_Info* stateProviderInfo,
     __in int64_t timeout,
     __out CancellationTokenSourceHandle* cts,
     __in fnNotifyAsyncCompletion callback,
@@ -477,6 +521,8 @@ extern "C" HRESULT TxnReplicator_AddStateProviderAsync(
         txnReplicator,
         txn,
         name,
+        lang,
+        stateProviderInfo,
         timeout,
         cts,
         callback,
@@ -539,6 +585,27 @@ HRESULT TxnReplicator_BackupAsync(
     __out BOOL* synchronousComplete)
 {
     return g_reliableCollectionApis.TxnReplicator_BackupAsyn(
+        txnReplicator,
+        uploadAsyncCallback,
+        backupOption,
+        timeout,
+        cts,
+        callback,
+        ctx,
+        synchronousComplete);
+}
+
+HRESULT TxnReplicator_BackupAsync2(
+    __in TxnReplicatorHandle txnReplicator,
+    __in fnUploadAsync2 uploadAsyncCallback,
+    __in Backup_Option backupOption,
+    __in int64_t timeout,
+    __out CancellationTokenSourceHandle* cts,
+    __in fnNotifyAsyncCompletion callback,
+    __in void* ctx,
+    __out BOOL* synchronousComplete)
+{
+    return g_reliableCollectionApis.TxnReplicator_BackupAsync2(
         txnReplicator,
         uploadAsyncCallback,
         backupOption,
@@ -696,57 +763,61 @@ extern "C" void StateProvider_Release(
     g_reliableCollectionApis.StateProvider_Release(stateProviderHandle);
 }
 
-extern "C" HRESULT TxnReplicator_GetOrAddStateProviderAsync2(
-    __in TxnReplicatorHandle txnReplicator,
+extern "C" HRESULT ConcurrentQueue_EnqueueAsync(
+    __in StateProviderHandle concurrentQueue,
     __in TransactionHandle txn,
-    __in LPCWSTR name,
-    __in LPCWSTR lang,
-    __in StateProvider_Info* stateProviderInfo,
-    __in int64_t timeout,
-    __out CancellationTokenSourceHandle* cts,
-    __out StateProviderHandle* stateProvider,
-    __out BOOL* alreadyExist,
-    __in fnNotifyGetOrAddStateProviderAsyncCompletion callback,
-    __in void* ctx,
-    __out BOOL* synchronousComplete)
-{
-    return g_reliableCollectionApis.TxnReplicator_GetOrAddStateProviderAsync2(
-        txnReplicator,
-        txn,
-        name,
-        lang,
-        stateProviderInfo,
-        timeout,
-        cts,
-        stateProvider,
-        alreadyExist,
-        callback,
-        ctx,
-        synchronousComplete);
-}
-
-extern "C" HRESULT TxnReplicator_AddStateProviderAsync2(
-    __in TxnReplicatorHandle txnReplicator,
-    __in TransactionHandle txn,
-    __in LPCWSTR name,
-    __in LPCWSTR lang,
-    __in StateProvider_Info* stateProviderInfo,
+    __in size_t objectHandle,               // handle of object to be stored  
+    __in void* bytes,                       // serialized byte array of object
+    __in uint32_t bytesLength,              // byte array length
     __in int64_t timeout,
     __out CancellationTokenSourceHandle* cts,
     __in fnNotifyAsyncCompletion callback,
     __in void* ctx,
     __out BOOL* synchronousComplete)
 {
-    return g_reliableCollectionApis.TxnReplicator_AddStateProviderAsync2(
-        txnReplicator,
+    return g_reliableCollectionApis.ConcurrentQueue_EnqueueAsync(
+        concurrentQueue,
         txn,
-        name,
-        lang,
-        stateProviderInfo,
+        objectHandle,
+        bytes,
+        bytesLength,
         timeout,
         cts,
         callback,
         ctx,
         synchronousComplete);
 }
+
+extern "C" HRESULT ConcurrentQueue_TryDequeueAsync(
+    __in StateProviderHandle concurrentQueue,
+    __in TransactionHandle txn,
+    __in int64_t timeout,
+    __out size_t* objectHandle,
+    __out Buffer* value,
+    __out CancellationTokenSourceHandle* cts,
+    __out BOOL* succeeded,
+    __in fnNotifyTryDequeueAsyncCompletion callback,
+    __in void* ctx,
+    __out BOOL* synchronousComplete)
+{
+    return g_reliableCollectionApis.ConcurrentQueue_TryDequeueAsync(
+        concurrentQueue,
+        txn,
+        timeout,
+        objectHandle,
+        value,
+        cts,
+        succeeded,
+        callback,
+        ctx,
+        synchronousComplete);
+}
+
+extern "C" HRESULT ConcurrentQueue_GetCount(
+    __in StateProviderHandle concurrentQueue,
+    __out int64_t* count)
+{
+    return g_reliableCollectionApis.ConcurrentQueue_GetCount(concurrentQueue, count);
+}
+
 

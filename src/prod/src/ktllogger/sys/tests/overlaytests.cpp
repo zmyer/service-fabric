@@ -486,7 +486,11 @@ NTSTATUS DeleteInitialKtlLogStream(
     KServiceSynchronizer        serviceSync;
     KSynchronizer sync;
 
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -536,7 +540,8 @@ NTSTATUS CreateInitialKtlLogStream(
     ULONG MaxContainerRecordSize = DEFAULT_MAX_RECORD_SIZE,
     ULONG MaxStreamRecordSize = DEFAULT_MAX_RECORD_SIZE,
     KString::CSPtr Alias = nullptr,
-    LONGLONG streamSize = DEFAULT_STREAM_SIZE
+    LONGLONG streamSize = DEFAULT_STREAM_SIZE,
+    LONGLONG logSize = (LONGLONG)((LONGLONG)2 * (LONGLONG)1024 * (LONGLONG)0x100000)   // 2GB
     )
 {
     NTSTATUS status;
@@ -552,7 +557,11 @@ NTSTATUS CreateInitialKtlLogStream(
     //
     // Setup the test by create a log container and a stream in it
     //
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -568,7 +577,6 @@ NTSTATUS CreateInitialKtlLogStream(
 
     {
         KtlLogManager::AsyncCreateLogContainer::SPtr createContainerAsync;
-        LONGLONG logSize = (LONGLONG)((LONGLONG)2 * (LONGLONG)1024 * (LONGLONG)0x100000);   // 2GB
 
         status = logManager->CreateAsyncCreateLogContainerContext(createContainerAsync);
         VERIFY_IS_TRUE(NT_SUCCESS(status));
@@ -659,7 +667,11 @@ NTSTATUS AddNewKtlLogStream(
     //
     // Setup the test by create a log container and a stream in it
     //
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -798,6 +810,7 @@ VOID ReadTest(
     //
     // Reopen the streams via the overlay log
     //
+    OverlayLog::SPtr overlayLog;
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
@@ -805,6 +818,7 @@ VOID ReadTest(
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -813,7 +827,24 @@ VOID ReadTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    RvdLogId rvdLogId = logContainerGuid;
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -1721,12 +1752,14 @@ VOID MultiRecordCornerCaseTest(
     // from shared to dedicated
     //
     OverlayStream::SPtr overlayStream;
+    OverlayLog::SPtr overlayLog;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -1735,7 +1768,23 @@ VOID MultiRecordCornerCaseTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -1894,6 +1943,14 @@ VOID MultiRecordCornerCaseTest(
 
     coreOpenLog = nullptr;
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -1960,12 +2017,14 @@ VOID MultiRecordCornerCase2Test(
     // from shared to dedicated
     //
     OverlayStream::SPtr overlayStream;
+    OverlayLog::SPtr overlayLog;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -1974,7 +2033,24 @@ VOID MultiRecordCornerCase2Test(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -2163,6 +2239,14 @@ VOID MultiRecordCornerCase2Test(
 
     coreOpenLog = nullptr;
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -2170,6 +2254,17 @@ VOID MultiRecordCornerCase2Test(
     DeleteInitialKtlLogStream(diskId,
                               logContainerGuid);
 
+}
+
+
+NTSTATUS
+VerifyRecordCallback(
+    __in_bcount(MetaDataBufferSize) UCHAR const *const,
+    __in ULONG,
+    __in const KIoBuffer::SPtr&
+)
+{
+    return(STATUS_SUCCESS);
 }
 
 VOID RecoveryTest(
@@ -2205,6 +2300,14 @@ VOID RecoveryTest(
     status = RvdLogManager::Create(ALLOCATION_TAG, *g_Allocator, coreLogManager);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
+    status = coreLogManager->RegisterVerificationCallback(KLogicalLogInformation::GetLogicalLogStreamType(),
+                                                          &VerifyRecordCallback);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    status = coreLogManager->RegisterVerificationCallback(KtlLogInformation::KtlLogDefaultStreamType(),
+                                                           &VerifyRecordCallback);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
     status = coreLogManager->Activate(NULL,       // parentasync
                                       activateSync);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
@@ -2277,12 +2380,14 @@ VOID RecoveryTest(
     // from shared to dedicated
     //
     OverlayStream::SPtr overlayStream;
+    OverlayLog::SPtr overlayLog;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -2291,7 +2396,24 @@ VOID RecoveryTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -2351,6 +2473,14 @@ VOID RecoveryTest(
     coreOpenLog = nullptr;
     coreOpenStream = nullptr;
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;   
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -2360,16 +2490,6 @@ VOID RecoveryTest(
 
 }
 
-
-NTSTATUS
-VerifyRecordCallback(
-    __in_bcount(MetaDataBufferSize) UCHAR const *const,
-    __in ULONG,
-    __in const KIoBuffer::SPtr&
-)
-{
-    return(STATUS_SUCCESS);
-}
 
 
 typedef struct
@@ -2456,10 +2576,13 @@ VOID Recovery2Test(
     coreSharedLog = nullptr;
     coreOpenLog = nullptr;
     
+    OverlayLog::SPtr overlayLog;
+    RvdLogId rvdLogId = logContainerGuid;
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -2468,6 +2591,21 @@ VOID Recovery2Test(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
     srand((ULONG)GetTickCount());   
 
     KBuffer::SPtr metadataKBuffer;
@@ -2753,8 +2891,8 @@ VOID Recovery2Test(
         // Reopen the streams via the overlay log. This will move records
         // from shared to dedicated
         //
-        
-        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
                                                                          *coreSharedLog,
                                                                          logStreamId,
                                                                          diskId,
@@ -3192,9 +3330,9 @@ VOID Recovery2Test(
         //
         // Reopen the streams via the overlay log. This will move records
         // from shared to dedicated
-        //
-        
-        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+        //        
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
                                                                          *coreSharedLog,
                                                                          logStreamId,
                                                                          diskId,
@@ -3628,7 +3766,8 @@ VOID Recovery2Test(
         // from shared to dedicated
         //
         
-        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
                                                                          *coreSharedLog,
                                                                          logStreamId,
                                                                          diskId,
@@ -4079,7 +4218,8 @@ VOID Recovery2Test(
         // from shared to dedicated
         //
         
-        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
                                                                          *coreSharedLog,
                                                                          logStreamId,
                                                                          diskId,
@@ -4239,6 +4379,14 @@ VOID Recovery2Test(
     coreSharedOpenStream = nullptr;
     coreSharedLog = nullptr;
     coreOpenLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;   
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -4365,6 +4513,7 @@ VOID RecoveryViaOpenContainerTest(
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -4621,6 +4770,7 @@ VOID RecoveryPartlyCreatedStreamTestWorker(
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -4811,6 +4961,7 @@ VOID DestagedWriteTest(
     // Reopen the streams via the overlay log. This will move records
     // from shared to dedicated
     //
+    OverlayLog::SPtr overlayLog;
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
@@ -4818,6 +4969,7 @@ VOID DestagedWriteTest(
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -4825,8 +4977,24 @@ VOID DestagedWriteTest(
         KTL_TAG_TEST,
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -5159,6 +5327,14 @@ VOID DestagedWriteTest(
     coreOpenLog = nullptr;
     coreOpenStream = nullptr;
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+        
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -5289,7 +5465,11 @@ VOID OfflineDestageContainerTest(
     //
     KtlLogManager::SPtr logManager;
 
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -5646,7 +5826,7 @@ VOID WriteABunchOfRandomRecords(
     {
         version++;
 
-        dataSizeWritten = rand() % (maxIndividualRecordSize / numberWrites);
+        dataSizeWritten = (maxIndividualRecordSize / numberWrites) -1 ; // rand() % (maxIndividualRecordSize / numberWrites);
         status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer,
             logStreamId, version, asn,
             dataBufferPtr + dataWritePosition, dataSizeWritten,
@@ -5739,6 +5919,7 @@ VOID CoalescedWriteTest(
     // Reopen the streams via the overlay log. This will move records
     // from shared to dedicated
     //
+    OverlayLog::SPtr overlayLog;
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
@@ -5746,6 +5927,7 @@ VOID CoalescedWriteTest(
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -5754,15 +5936,31 @@ VOID CoalescedWriteTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
-        *coreLog,
-        logStreamId,
-        diskId,
-        nullptr,
-        maxStreamRecordSize,
-        streamSize,
-        metadataLength,
-        *throttledAllocator);
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId,
+                                                                     diskId,
+                                                                     nullptr,
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
 
     VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
     status = overlayStream->Status();
@@ -5827,7 +6025,7 @@ VOID CoalescedWriteTest(
     // checkpoint records so remove that as well.
     //
     ULONG maxIndividualRecordSize;
-    maxIndividualRecordSize = 3 * (maxContainerRecordSize / 4);
+    maxIndividualRecordSize = 2 * (maxContainerRecordSize / 4);
     maxIndividualRecordSize -= (2 * KLogicalLogInformation::FixedMetadataSize);
     maxIndividualRecordSize += KLogicalLogInformation::FixedMetadataSize - (coreLoggerOffset + reservedMetadataSize +
                                                                             sizeof(KLogicalLogInformation::MetadataBlockHeader) +
@@ -6665,7 +6863,7 @@ VOID CoalescedWriteTest(
         writeContext = nullptr;
         ioctlContext = nullptr;
         status = overlayStream->StartServiceClose(NULL,      // ParentAsync
-            serviceSync.CloseCompletionCallback());
+                                                  serviceSync.CloseCompletionCallback());
         VERIFY_IS_TRUE(NT_SUCCESS(status));
         status = serviceSync.WaitForCompletion();
         VERIFY_IS_TRUE(NT_SUCCESS(status));
@@ -6673,9 +6871,18 @@ VOID CoalescedWriteTest(
 
         coreOpenLog = nullptr;
         coreOpenStream = nullptr;
+        
     }
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -6765,10 +6972,13 @@ VOID CoalescedWrite2Test(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -6777,15 +6987,32 @@ VOID CoalescedWrite2Test(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
-        *coreLog,
-        logStreamId,
-        diskId,
-        nullptr,
-        maxStreamRecordSize,
-        streamSize,
-        metadataLength,
-        *throttledAllocator);
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId,
+                                                                     diskId,
+                                                                     nullptr,
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
 
     VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
     status = overlayStream->Status();
@@ -6969,6 +7196,14 @@ VOID CoalescedWrite2Test(
     }
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;   
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -7032,6 +7267,7 @@ VOID StreamQuotaTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -7108,6 +7344,7 @@ VOID StreamQuotaTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -7195,6 +7432,7 @@ VOID StreamQuotaTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -7295,6 +7533,7 @@ VOID StreamQuotaTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -7401,6 +7640,7 @@ VOID StreamQuotaTest(
         //
         // Reopen the streams via the overlay log
         //
+        OverlayLog::SPtr overlayLog;
         OverlayStream::SPtr overlayStream;
         ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
@@ -7408,6 +7648,7 @@ VOID StreamQuotaTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -7416,7 +7657,24 @@ VOID StreamQuotaTest(
             throttledAllocator);
         VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+        rvdLogId = logContainerGuid;
+        overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                                   diskId,
+                                                                   NULL,        // Path
+                                                                   rvdLogId,
+                                                                   *throttledAllocator);
+        VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+        status = overlayLog->Status();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                                 serviceSync.OpenCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
                                                                          *coreLog,
                                                                          logStreamId,
                                                                          diskId,
@@ -7497,6 +7755,14 @@ VOID StreamQuotaTest(
         VERIFY_IS_TRUE(NT_SUCCESS(status));
         overlayStream = nullptr;
 
+        coreLog = nullptr;
+        coreOpenLog = nullptr;
+        status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                                  serviceSync.CloseCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        overlayLog = nullptr;
     }
 
     //
@@ -7635,6 +7901,12 @@ public:
     {
         return(RvdLogStreamShim::QueryCurrentReservation());
     }
+
+    NTSTATUS
+    SetTruncationCompletionEvent(__in_opt KAsyncEvent* const EventToSignal)
+    {
+        return(RvdLogStreamShim::SetTruncationCompletionEvent(EventToSignal));
+    }   
 
     NTSTATUS
     CreateAsyncWriteContext(__out AsyncWriteContext::SPtr& Context)
@@ -8116,10 +8388,13 @@ VOID ReadRaceConditionsTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -8128,7 +8403,24 @@ VOID ReadRaceConditionsTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -8517,6 +8809,14 @@ VOID ReadRaceConditionsTest(
     }
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -8567,6 +8867,7 @@ public:
     {
         KAsyncEvent* WaitEvent;
         NTSTATUS FailStatus;
+        volatile LONG FailedCount;
     };
 
     static NTSTATUS Create(WriteStuckRvdLogStream::SPtr& Context,
@@ -8620,6 +8921,12 @@ public:
     }
 
     NTSTATUS
+    SetTruncationCompletionEvent(__in_opt KAsyncEvent* const EventToSignal)
+    {
+        return(RvdLogStreamShim::SetTruncationCompletionEvent(EventToSignal));
+    }   
+    
+    NTSTATUS
     CreateAsyncReadContext(__out AsyncReadContext::SPtr& Context)
     {
         return(RvdLogStreamShim::CreateAsyncReadContext(Context));
@@ -8640,7 +8947,8 @@ public:
             StartWriteApi,
             StartWriteWithLowPriorityIOApi,
             StartReservedWriteApi,
-            StartReservedWriteWithLowPriorityIOApi
+            StartReservedWriteWithLowPriorityIOApi,
+            StartReservedWriteWithLogSizeAndSpaceRemaining
         } _ApiCalled;
 
         VOID
@@ -8651,7 +8959,7 @@ public:
             __in const KBuffer::SPtr& MetaDataBuffer,
             __in const KIoBuffer::SPtr& IoBuffer,
             __in_opt KAsyncContextBase* const ParentAsyncContext,
-            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr)
+            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
         {
             _ApiCalled = StartWriteWithLowPriorityIOApi;
 
@@ -8660,6 +8968,8 @@ public:
             _Version = Version;
             _MetaDataBuffer = MetaDataBuffer;
             _IoBuffer = IoBuffer;
+            _LogSize = nullptr;
+            _LogSpaceRemaining = nullptr;
 
             Start(ParentAsyncContext, CallbackPtr);
         }
@@ -8671,7 +8981,7 @@ public:
             __in const KBuffer::SPtr& MetaDataBuffer,
             __in const KIoBuffer::SPtr& IoBuffer,
             __in_opt KAsyncContextBase* const ParentAsyncContext,
-            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr)
+            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
         {
             _ApiCalled = StartWriteApi;
 
@@ -8679,6 +8989,9 @@ public:
             _Version = Version;
             _MetaDataBuffer = MetaDataBuffer;
             _IoBuffer = IoBuffer;
+            _LogSize = nullptr;
+            _LogSpaceRemaining = nullptr;
+
             Start(ParentAsyncContext, CallbackPtr);
         }
 
@@ -8690,7 +9003,7 @@ public:
             __in const KBuffer::SPtr& MetaDataBuffer,
             __in const KIoBuffer::SPtr& IoBuffer,
             __in_opt KAsyncContextBase* const ParentAsyncContext,
-            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr)
+            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
         {
             _ApiCalled = StartReservedWriteApi;
 
@@ -8699,6 +9012,34 @@ public:
             _Version = Version;
             _MetaDataBuffer = MetaDataBuffer;
             _IoBuffer = IoBuffer;
+            _LogSize = nullptr;
+            _LogSpaceRemaining = nullptr;
+
+            Start(ParentAsyncContext, CallbackPtr);
+        }
+        
+        VOID
+        StartReservedWrite(
+            __in ULONGLONG ReserveToUse,
+            __in RvdLogAsn RecordAsn,
+            __in ULONGLONG Version,
+            __in const KBuffer::SPtr& MetaDataBuffer,
+            __in const KIoBuffer::SPtr& IoBuffer,
+            __out ULONGLONG& LogSize,
+            __out ULONGLONG& LogSpaceRemaining,
+            __in_opt KAsyncContextBase* const ParentAsyncContext,
+            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
+        {
+            _ApiCalled = StartReservedWriteWithLogSizeAndSpaceRemaining;
+
+            _ReserveToUse = ReserveToUse;
+            _RecordAsn = RecordAsn;
+            _Version = Version;
+            _MetaDataBuffer = MetaDataBuffer;
+            _IoBuffer = IoBuffer;
+            _LogSize = &LogSize;
+            _LogSpaceRemaining = &LogSpaceRemaining;
+
             Start(ParentAsyncContext, CallbackPtr);
         }
 
@@ -8711,7 +9052,7 @@ public:
             __in const KBuffer::SPtr& MetaDataBuffer,
             __in const KIoBuffer::SPtr& IoBuffer,
             __in_opt KAsyncContextBase* const ParentAsyncContext,
-            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr)
+            __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
         {
             _ApiCalled = StartReservedWriteWithLowPriorityIOApi;
 
@@ -8721,10 +9062,11 @@ public:
             _Version = Version;
             _MetaDataBuffer = MetaDataBuffer;
             _IoBuffer = IoBuffer;
+            _LogSize = nullptr;
+            _LogSpaceRemaining = nullptr;
 
             Start(ParentAsyncContext, CallbackPtr);
         }
-
 
     private:
         VOID OperationCompletion(
@@ -8798,6 +9140,23 @@ public:
                     break;
                 }
 
+                case StartReservedWriteWithLogSizeAndSpaceRemaining:
+                {
+                    KInvariant(_LogSize != nullptr);
+                    KInvariant(_LogSpaceRemaining != nullptr);
+
+                    _CoreWriteContext->StartReservedWrite(_ReserveToUse,
+                                                          _RecordAsn,
+                                                          _Version,
+                                                          _MetaDataBuffer,
+                                                          _IoBuffer,
+                                                          *_LogSize,
+                                                          *_LogSpaceRemaining,
+                                                          this,
+                                                          completion);
+                    break;
+                }
+
                 default:
                 {
                     VERIFY_IS_TRUE(FALSE);
@@ -8829,6 +9188,7 @@ public:
             //
             ForwardStartWrite();
         }
+
         VOID EventFailCompletion(
             __in_opt KAsyncContextBase* const,
             __in KAsyncContextBase&
@@ -8840,6 +9200,7 @@ public:
             //
             WaitForEventAndFailStruct* s = (WaitForEventAndFailStruct*)_LogStreamShim->GetTestCaseData();
             Complete(s->FailStatus);
+            InterlockedIncrement(&s->FailedCount);
         }
                 
         VOID
@@ -8931,6 +9292,8 @@ public:
         ULONGLONG _Version;
         KBuffer::SPtr _MetaDataBuffer;
         KIoBuffer::SPtr _IoBuffer;
+        ULONGLONG* _LogSize;
+        ULONGLONG* _LogSpaceRemaining;
     };
 
     NTSTATUS
@@ -9124,10 +9487,13 @@ VOID WriteStuckConditionsTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -9136,7 +9502,24 @@ VOID WriteStuckConditionsTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -9401,6 +9784,14 @@ VOID WriteStuckConditionsTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -9411,6 +9802,444 @@ VOID WriteStuckConditionsTest(
         logStreamGuid);
 
 }
+
+VOID VerifySharedLogUsageThrottlingTest(
+    KGuid& diskId
+    )
+{
+    NTSTATUS status;
+    KGuid logStreamGuid;
+    KGuid logStreamGuid1;
+    KGuid logContainerGuid;
+    KSynchronizer sync, sync1;
+    KSynchronizer activateSync;
+    KServiceSynchronizer        serviceSync;
+    ULONG metadataLength = 0x10000;
+    ULONG maxStreamRecordSize = 0x40 * 0x1000; // 256k
+    ULONG maxContainerRecordSize = maxStreamRecordSize;
+    LONGLONG streamSize = DEFAULT_STREAM_SIZE;
+
+    
+    logStreamGuid.CreateNew();
+    logStreamGuid1.CreateNew();
+    logContainerGuid.CreateNew();
+
+    CreateInitialKtlLogStream(diskId,
+                              logContainerGuid,
+                              1,
+                              &logStreamGuid,
+                              KLogicalLogInformation::GetLogicalLogStreamType(),
+                              maxContainerRecordSize,
+                              maxStreamRecordSize,
+                              nullptr,                   // Alias
+                              512 * 1024 * 1024,         // Stream Size
+                              32 * 1024 * 1024);         // Shared Log Size
+
+    AddNewKtlLogStream(diskId,
+                       logContainerGuid,
+                       logStreamGuid1,
+                       streamSize);
+
+    
+    //
+    // Open up base log manager and container and stream via the core logger
+    //
+    RvdLogManager::SPtr coreLogManager;
+    RvdLogManager::AsyncOpenLog::SPtr coreOpenLog;
+    RvdLog::SPtr coreLog;
+    RvdLogId rvdLogId;
+
+    status = RvdLogManager::Create(ALLOCATION_TAG, *g_Allocator, coreLogManager);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->Activate(NULL,       // parentasync
+                                      activateSync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->CreateAsyncOpenLogContext(coreOpenLog);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    rvdLogId = logContainerGuid;
+    coreOpenLog->Reuse();
+    coreOpenLog->StartOpenLog(diskId,
+        rvdLogId,
+        coreLog,
+        NULL,
+        sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    RvdLog::AsyncOpenLogStreamContext::SPtr coreOpenStream;
+
+    status = coreLog->CreateAsyncOpenLogStreamContext(coreOpenStream);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    RvdLogStreamId logStreamId = logStreamGuid;
+    RvdLogStreamId logStreamId1 = logStreamGuid1;
+    RvdLogStream::SPtr coreSharedLogStream;
+
+    coreOpenStream->StartOpenLogStream(logStreamId,
+        coreSharedLogStream,
+        NULL,
+        sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    coreSharedLogStream = nullptr;
+    //
+    // Reopen the streams via the overlay log. This will move records
+    // from shared to dedicated
+    //
+    OverlayStream::SPtr overlayStream;
+    OverlayStream::SPtr overlayStream1;
+    ThrottledKIoBufferAllocator::SPtr throttledAllocator;
+
+    OverlayLog::SPtr overlayLog;
+    
+    KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
+    memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
+
+    status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
+        memoryThrottleLimits,
+        *g_Allocator,
+        KTL_TAG_TEST,
+        throttledAllocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId,
+                                                                     diskId,
+                                                                     nullptr,
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
+
+    VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+    status = overlayStream->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream1 = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId1,
+                                                                     diskId,
+                                                                     nullptr,
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
+
+    VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+    status = overlayStream->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayStream1->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    
+    //
+    // The test scenario is as follows:
+    //
+    //    * Write a little to the stream
+    //    * Block writes to the dedicated log so a backlog builds in
+    //      the shared log. Eventually the shared log should start
+    //      throttling writes.
+    //    * Verify that new writes are getting throttled
+    //    * Perform write to a separate and quiecent log
+    //    * Allow dedicated log writes to complete and verify that
+    //      writes for both logs get unthrottled.
+    //
+
+    //
+    // Replace the shared log stream with shim
+    //
+    RvdLogStream::SPtr sharedCoreStream;
+    RvdLogStream::SPtr sharedStream;
+    WriteStuckRvdLogStream::SPtr sharedShim;
+
+    sharedCoreStream = overlayStream->GetSharedLogStream();
+
+    status = WriteStuckRvdLogStream::Create(sharedShim,
+                                          *g_Allocator,
+                                          KTL_TAG_TEST);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    sharedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                NULL);
+
+    sharedShim->SetRvdLogStream(*sharedCoreStream);
+    sharedStream = up_cast<RvdLogStream>(sharedShim);
+    overlayStream->SetSharedLogStream(*sharedStream);
+
+
+    //
+    // Replace the dedicated log with shim
+    //
+    RvdLogStream::SPtr dedicatedCoreStream;
+    RvdLogStream::SPtr dedicatedStream;
+    WriteStuckRvdLogStream::SPtr dedicatedShim;
+
+    dedicatedCoreStream = overlayStream->GetDedicatedLogStream();
+
+    status = WriteStuckRvdLogStream::Create(dedicatedShim,
+                                            *g_Allocator,
+                                            KTL_TAG_TEST);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                   NULL);
+
+    dedicatedShim->SetRvdLogStream(*dedicatedCoreStream);
+    dedicatedStream = up_cast<RvdLogStream>(dedicatedShim);
+    overlayStream->SetDedicatedLogStream(*dedicatedStream);
+
+    //
+    // First step is to write a record to fill the coalesce buffer
+    //
+    ULONGLONG asn = KtlLogAsn::Min().Get();
+    ULONGLONG version = 0;
+    
+    ULONGLONG asn1 = KtlLogAsn::Min().Get();
+    ULONGLONG version1 = 0;
+
+    ULONG dataSizeWritten;
+    KBuffer::SPtr dataBuffer;
+    PUCHAR dataBufferPtr;
+    status = KBuffer::Create(0xbeef0, dataBuffer, *g_Allocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    dataBufferPtr = (PUCHAR)dataBuffer->GetBuffer();
+
+    KBuffer::SPtr metadataKBuffer;
+    KIoBuffer::SPtr dataIoBuffer;
+
+    overlayStream->QueryLogStreamId(logStreamId);
+    ULONG coreLoggerOffset = coreLog->QueryUserRecordSystemMetadataOverhead();
+    ULONG reservedMetadataSize = sizeof(KtlLogVerify::KtlMetadataHeader);
+
+    OverlayStream::AsyncWriteContextOverlay::SPtr writeContext;
+    CreateAsyncWriteContextOverlay(*overlayStream, writeContext);
+    
+    OverlayStream::AsyncWriteContextOverlay::SPtr writeContext1;
+    CreateAsyncWriteContextOverlay(*overlayStream1, writeContext1);
+
+    //
+    // First write goes to both shared and dedicated
+    //
+    version++;
+    dataSizeWritten = 40;
+    status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    writeContext->Reuse();
+    writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    asn += dataSizeWritten;
+
+
+    KAsyncEvent waitEvent(TRUE, FALSE);   // ManualReset, Initial FALSE
+    struct WriteStuckRvdLogStream::WaitForEventStruct waitForEventStruct;
+    waitForEventStruct.WaitEvent = &waitEvent;
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::WaitForEvent,
+                               &waitForEventStruct);  
+    
+    for (ULONG i = 0; i < 4; i++)
+    {   
+        //
+        // Configure dedicated writes to block
+        //
+        waitEvent.ResetEvent();
+
+        //
+        // Write stuff up until we expect to start throttling
+        //
+        BOOLEAN writing = TRUE;
+        ULONG iterations = 0;
+        while(writing)
+        {
+            iterations++;
+            version++;
+            dataSizeWritten = 40;
+            status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                        dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+            writeContext->Reuse();
+            writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+
+            status = sync.WaitForCompletion(1000);
+            if (status == STATUS_IO_TIMEOUT)
+            {
+                status = sync.WaitForCompletion(30 * 1000);
+                if (status == STATUS_IO_TIMEOUT)
+                {
+                    printf("Write throttled ASN 0x%llx Version %lld Iteration %d\n", asn, version, iterations);
+                    break;
+                } else {
+                    VERIFY_IS_TRUE(NT_SUCCESS(status));
+                }
+            } else {
+                VERIFY_IS_TRUE(NT_SUCCESS(status));
+            }
+
+            asn += dataSizeWritten;
+        }
+
+        //
+        // Write to other OverlayStream and verify that it is also
+        // throttled
+        //
+        version1++;
+        dataSizeWritten = 40;
+        status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId1, version1, asn1,
+                                    dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        KDbgPrintf("Write1 asn %llx, version %d\n", asn1, version1);
+        writeContext1->Reuse();
+        writeContext1->StartWrite(asn1, version1, metadataKBuffer, dataIoBuffer, NULL, sync1);
+
+        status = sync1.WaitForCompletion(1000);
+        if (status == STATUS_IO_TIMEOUT)
+        {
+            status = sync1.WaitForCompletion(30 * 1000);
+            if (status == STATUS_IO_TIMEOUT)
+            {
+                printf("Other Write throttled\n");
+            } else {
+                VERIFY_IS_TRUE(FALSE);
+            }
+        } else {
+            VERIFY_IS_TRUE(FALSE);
+        }
+        asn1 += dataSizeWritten;
+
+        //
+        // Allow dedicated log writes to continue
+        //
+        printf("Allow dedicated Writes\n");
+        waitEvent.SetEvent();
+
+        //
+        // Verify that writes gets unthrottled
+        //
+        status = sync.WaitForCompletion(30 * 1000);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        printf("Original write released\n");
+        
+        status = sync1.WaitForCompletion(30 * 1000);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        printf("Initial write released\n");
+
+        //
+        // Make sure we can still write
+        //
+        version++;
+        dataSizeWritten = 40;
+        status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                    dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        writeContext->Reuse();
+        writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        asn += dataSizeWritten;
+    }
+
+    //
+    // reset dedicated stream back to no delay 
+    //
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                   NULL);
+    
+
+    //
+    // Final Cleanup
+    //
+    overlayStream->GetCoalesceRecords()->FlushAllRecordsForClose(sync);
+    
+    dedicatedStream = nullptr;
+    sharedStream = nullptr;
+
+    sharedShim = nullptr;
+    sharedCoreStream = nullptr;
+    dedicatedShim = nullptr;
+    dedicatedCoreStream = nullptr;
+
+    writeContext = nullptr;
+
+    status = overlayStream->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayStream = nullptr;
+
+    writeContext1 = nullptr;
+
+    status = overlayStream1->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayStream1 = nullptr;
+    
+    coreOpenLog = nullptr;
+    coreOpenStream = nullptr;
+
+    coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
+    coreLogManager->Deactivate();
+    coreLogManager = nullptr;
+    status = activateSync.WaitForCompletion();
+
+    DeleteRvdlogFile(diskId,
+        logContainerGuid);
+    DeleteRvdlogFile(diskId,
+        logStreamGuid);
+
+}
+//***
+
 
 VOID PeriodicTimerCloseRaceTest(
     KGuid& diskId
@@ -9489,10 +10318,13 @@ VOID PeriodicTimerCloseRaceTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -9501,7 +10333,24 @@ VOID PeriodicTimerCloseRaceTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -9631,6 +10480,14 @@ VOID PeriodicTimerCloseRaceTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -9847,10 +10704,13 @@ VOID ReadFromCoalesceBuffersTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -9859,7 +10719,24 @@ VOID ReadFromCoalesceBuffersTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -10332,6 +11209,14 @@ VOID ReadFromCoalesceBuffersTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -10424,10 +11309,13 @@ VOID WriteThrottleUnitTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -10436,7 +11324,24 @@ VOID WriteThrottleUnitTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -10873,6 +11778,14 @@ VOID WriteThrottleUnitTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -10969,10 +11882,13 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -10981,7 +11897,24 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -11124,6 +12057,7 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
     WriteStuckRvdLogStream::WaitForEventAndFailStruct waitForEventAndFail;
     waitForEventAndFail.WaitEvent = &waitEvent;
     waitForEventAndFail.FailStatus = STATUS_UNSUCCESSFUL;
+    waitForEventAndFail.FailedCount = 0;
     dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::WaitForEventAndFail,
                                    &waitForEventAndFail);
 
@@ -11202,6 +12136,41 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
     //
     waitEvent.SetEvent();
 
+    //
+    // Wait for the first set of dedicated write failures to complete
+    // before doing any new writes
+    //
+    ULONG counter = 0;
+    while ((counter < 15) && (waitForEventAndFail.FailedCount == 0))
+    {
+        KNt::Sleep(1000);
+        counter++;
+    }
+    VERIFY_IS_TRUE(waitForEventAndFail.FailedCount > 0);
+
+    //
+    // Future writes should fail
+    //
+    version++;
+    dataSizeWritten = 512*1024;
+
+    status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    metaDataHeader = (KtlLogVerify::KtlMetadataHeader*)(metadataKBuffer->GetBuffer());        
+    KtlLogVerify::ComputeRecordVerification(metaDataHeader->VerificationData,
+                                            asn,
+                                            version,
+                                            0x1000,
+                                            NULL,
+                                            dataIoBuffer);                                  
+    writeContext->Reuse();
+
+    writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(status == STATUS_UNSUCCESSFUL);
+    version--;
+
     
     //
     // Allow time for flush
@@ -11243,7 +12212,8 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
     //
     // Reopen and read the records that had failed write above
     //
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -11311,6 +12281,14 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+        
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -11322,9 +12300,675 @@ VOID VerifySharedTruncateOnDedicatedFailureTest(
 
 }
 
-
-
 //
+VOID VerifyCopyFromSharedToBackupTest(
+    UCHAR driveLetter,
+    KGuid& diskId
+    )
+{
+    NTSTATUS status;
+    KGuid logStreamGuid;
+    KGuid logContainerGuid;
+    RvdLogStreamId logStreamId;
+    RvdLogId logContainerId;
+    KSynchronizer sync;
+    KSynchronizer activateSync;
+    KServiceSynchronizer        serviceSync;
+    ULONG metadataLength = 0x10000;
+    ULONG maxStreamRecordSize = 0x100 * 0x1000; // 1MB
+    ULONG maxContainerRecordSize = maxStreamRecordSize;
+    LONGLONG streamSize = DEFAULT_STREAM_SIZE;
+
+    srand((ULONG)GetTickCount());
+
+    KString::SPtr containerFullPathName;
+    KString::SPtr containerFullPathNameBackup;
+    KString::SPtr streamFullPathName;
+    ContainerCloseSynchronizer closeContainerSync;
+    StreamCloseSynchronizer closeStreamSync;        
+
+    CreateStreamAndContainerPathnames(driveLetter,
+                                      containerFullPathName,
+                                      logContainerId,
+                                      streamFullPathName,
+                                      logStreamId);
+
+    logContainerGuid = logContainerId.Get();
+    logStreamGuid = logStreamId.Get();
+
+    containerFullPathNameBackup = streamFullPathName->Clone();
+    VERIFY_IS_TRUE(containerFullPathNameBackup ? TRUE : FALSE);
+    
+
+    BOOLEAN b;
+    KStringView tempString(L".Backup");
+    b = containerFullPathNameBackup->Concat(tempString);
+    VERIFY_IS_TRUE(b ? TRUE : FALSE);
+    
+    //
+    // Setup the test by create a log container and a stream in it
+    //
+    KtlLogManager::SPtr logManager;
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = logManager->StartOpenLogManager(NULL, // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    //
+    // Create a log container
+    //
+    KtlLogManager::AsyncCreateLogContainer::SPtr createContainerAsync;
+    LONGLONG logSize = (LONGLONG)((LONGLONG)2 * (LONGLONG)1024 * (LONGLONG)0x100000);   // 2GB
+    KtlLogContainer::SPtr logContainer;
+
+    status = logManager->CreateAsyncCreateLogContainerContext(createContainerAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    createContainerAsync->StartCreateLogContainer(*containerFullPathName,
+                                         logContainerId,
+                                         logSize,
+                                         0,            // Max Number Streams
+                                         maxContainerRecordSize,            // Max Record Size
+                                         logContainer,
+                                         NULL,         // ParentAsync
+                                         sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    KtlLogStream::SPtr logStream;
+    KtlLogContainer::AsyncCreateLogStreamContext::SPtr createStreamAsync;
+
+    status = logContainer->CreateAsyncCreateLogStreamContext(createStreamAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    KString::CSPtr streamFullPathNameConst = streamFullPathName.RawPtr();   
+    KBuffer::SPtr securityDescriptor = nullptr;
+    createStreamAsync->StartCreateLogStream(logStreamId,
+                                            KLogicalLogInformation::GetLogicalLogStreamType(),
+                                            nullptr,           // Alias
+                                            streamFullPathNameConst,
+                                            securityDescriptor,
+                                            metadataLength,
+                                            (LONGLONG)1024 * 1024 * 1024,
+                                            maxStreamRecordSize,
+                                            logStream,
+                                            NULL,    // ParentAsync
+                                            sync);
+
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    logStream->StartClose(NULL,
+                     closeStreamSync.CloseCompletionCallback());
+
+    status = closeStreamSync.WaitForCompletion();
+    VERIFY_IS_TRUE(status == STATUS_SUCCESS);
+    logStream = nullptr;
+
+    createStreamAsync = nullptr;
+    logContainer->StartClose(NULL,
+                     closeContainerSync.CloseCompletionCallback());
+
+    status = closeContainerSync.WaitForCompletion();
+    VERIFY_IS_TRUE(status == STATUS_SUCCESS);
+    logContainer = nullptr;
+    createContainerAsync = nullptr;
+
+    status = logManager->StartCloseLogManager(NULL, // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    logManager = nullptr;
+
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));     
+    
+    //
+    // Open up base log manager and container and stream via the core logger
+    //
+    RvdLogManager::SPtr coreLogManager;
+    RvdLogManager::AsyncOpenLog::SPtr coreOpenLog;
+    RvdLog::SPtr coreLog;
+    RvdLogId rvdLogId;
+
+    status = RvdLogManager::Create(ALLOCATION_TAG, *g_Allocator, coreLogManager);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->RegisterVerificationCallback(KLogicalLogInformation::GetLogicalLogStreamType(),
+                                                          &VerifyRecordCallback);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->Activate(NULL,       // parentasync
+                                      activateSync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->CreateAsyncOpenLogContext(coreOpenLog);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    rvdLogId = logContainerGuid;
+    coreOpenLog->Reuse();
+    coreOpenLog->StartOpenLog(KStringView(*containerFullPathName),
+                              coreLog,
+                              NULL,
+                              sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    RvdLog::AsyncOpenLogStreamContext::SPtr coreOpenStream;
+
+    status = coreLog->CreateAsyncOpenLogStreamContext(coreOpenStream);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    logStreamId = logStreamGuid;
+    RvdLogStream::SPtr coreSharedLogStream;
+
+    coreOpenStream->StartOpenLogStream(logStreamId,
+        coreSharedLogStream,
+        NULL,
+        sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    coreSharedLogStream = nullptr;
+    //
+    // Reopen the streams via the overlay log. This will move records
+    // from shared to dedicated
+    //
+    OverlayStream::SPtr overlayStream;
+    ThrottledKIoBufferAllocator::SPtr throttledAllocator;
+
+    OverlayLog::SPtr overlayLog;
+    
+    KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
+    memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+
+    status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
+        memoryThrottleLimits,
+        *g_Allocator,
+        KTL_TAG_TEST,
+        throttledAllocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               containerFullPathName.RawPtr(),        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId,
+                                                                     diskId,
+                                                                     streamFullPathName.RawPtr(),
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
+
+    VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+    status = overlayStream->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    //
+    // Replace the shared log stream with shim that is a pass through
+    //
+    RvdLogStream::SPtr sharedCoreStream;
+    RvdLogStream::SPtr sharedStream;
+    WriteStuckRvdLogStream::SPtr sharedShim;
+
+    sharedCoreStream = overlayStream->GetSharedLogStream();
+    
+    status = WriteStuckRvdLogStream::Create(sharedShim,
+                                          *g_Allocator,
+                                          KTL_TAG_TEST);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    sharedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                NULL);  
+    
+    sharedShim->SetRvdLogStream(*sharedCoreStream);
+    sharedStream = up_cast<RvdLogStream>(sharedShim);
+    overlayStream->SetSharedLogStream(*sharedStream);
+
+
+    //
+    // Replace the dedicated log with shim that fails all writes
+    //
+    RvdLogStream::SPtr dedicatedCoreStream;
+    RvdLogStream::SPtr dedicatedStream;
+    WriteStuckRvdLogStream::SPtr dedicatedShim;
+        
+    dedicatedCoreStream = overlayStream->GetDedicatedLogStream();
+    
+    status = WriteStuckRvdLogStream::Create(dedicatedShim,
+                                            *g_Allocator,
+                                            KTL_TAG_TEST);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                   NULL);
+    
+    dedicatedShim->SetRvdLogStream(*dedicatedCoreStream);
+    dedicatedStream = up_cast<RvdLogStream>(dedicatedShim);
+    overlayStream->SetDedicatedLogStream(*dedicatedStream);
+
+
+    //
+    // First step is to write a record to fill the coalesce buffer
+    //
+    ULONGLONG asn = KtlLogAsn::Min().Get();
+    ULONGLONG version = 0;
+    
+    ULONG dataSizeWritten;
+    KBuffer::SPtr dataBuffer;
+    PUCHAR dataBufferPtr;
+    status = KBuffer::Create(0xbeef0, dataBuffer, *g_Allocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    dataBufferPtr = (PUCHAR)dataBuffer->GetBuffer();
+    
+    
+    KBuffer::SPtr metadataKBuffer;
+    KIoBuffer::SPtr dataIoBuffer;
+    struct KtlLogVerify::KtlMetadataHeader* metaDataHeader;
+    
+    overlayStream->QueryLogStreamId(logStreamId);
+    ULONG coreLoggerOffset = coreLog->QueryUserRecordSystemMetadataOverhead();
+    ULONG reservedMetadataSize = sizeof(KtlLogVerify::KtlMetadataHeader);
+    
+    OverlayStream::AsyncWriteContextOverlay::SPtr writeContext;
+    CreateAsyncWriteContextOverlay(*overlayStream, writeContext);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    
+    ULONGLONG expectedHighAsn, expectedLowAsn, expectedTruncationAsn;
+
+    expectedTruncationAsn = 1;
+    
+    //
+    // First write goes to both shared and dedicated
+    //
+    version++;
+    dataSizeWritten = 40;
+    for (ULONG i = 0; i < dataSizeWritten; i++)
+    {
+        dataBufferPtr[i] = StreamOffsetToExpectedData(asn + i);
+    }
+    status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    metaDataHeader = (KtlLogVerify::KtlMetadataHeader*)(metadataKBuffer->GetBuffer());        
+    KtlLogVerify::ComputeRecordVerification(metaDataHeader->VerificationData,
+                                            asn,
+                                            version,
+                                            0x1000,
+                                            NULL,
+                                            dataIoBuffer);                                  
+    
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    writeContext->Reuse();
+    writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    asn += dataSizeWritten;
+
+    //
+    // Now configure first set of dedicated log to fail all writes
+    // after subsequent writes succeed.
+    //
+    KAsyncEvent waitEvent(TRUE, FALSE);   // ManualReset, Initial FALSE
+    WriteStuckRvdLogStream::WaitForEventAndFailStruct waitForEventAndFail;
+    waitForEventAndFail.WaitEvent = &waitEvent;
+    waitForEventAndFail.FailStatus = STATUS_UNSUCCESSFUL;
+    waitForEventAndFail.FailedCount = 0;
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::WaitForEventAndFail,
+                                   &waitForEventAndFail);
+    
+    {
+        //
+        // Write a 32 MB 
+        //
+        for (ULONG i = 0; i < 64; i++)
+        {
+            version++;
+            dataSizeWritten = 512*1024;
+
+            expectedHighAsn = asn;
+            
+            status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                        dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+            metaDataHeader = (KtlLogVerify::KtlMetadataHeader*)(metadataKBuffer->GetBuffer());        
+            KtlLogVerify::ComputeRecordVerification(metaDataHeader->VerificationData,
+                                                    asn,
+                                                    version,
+                                                    0x1000,
+                                                    NULL,
+                                                    dataIoBuffer);                                  
+            
+            writeContext->Reuse();
+            writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+            status = sync.WaitForCompletion();
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+            asn += dataSizeWritten;
+        }       
+    }
+
+    //
+    // Second set of writes go to shared log successfully
+    //
+    dedicatedShim->SetTestCaseData(WriteStuckRvdLogStream::TestCaseIds::NoAction,
+                                   &waitForEventAndFail);
+
+    {
+        //
+        // Write a 32 MB
+        //
+        for (ULONG i = 0; i < 64; i++)
+        {
+            version++;
+            dataSizeWritten = 512*1024;
+
+            expectedHighAsn = asn;
+            
+            status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                        dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+            metaDataHeader = (KtlLogVerify::KtlMetadataHeader*)(metadataKBuffer->GetBuffer());        
+            KtlLogVerify::ComputeRecordVerification(metaDataHeader->VerificationData,
+                                                    asn,
+                                                    version,
+                                                    0x1000,
+                                                    NULL,
+                                                    dataIoBuffer);                                  
+            writeContext->Reuse();
+            
+            writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+            status = sync.WaitForCompletion();
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+            asn += dataSizeWritten;
+        }       
+    }
+
+    //
+    // Let the first set of dedicated writes complete with failure
+    //
+    waitEvent.SetEvent();
+
+    //
+    // Allow time for destaging write to complete (fail)
+    //
+    KNt::Sleep(5 * 1000);
+	
+    //
+    // Future writes should fail
+    //
+    version++;
+    dataSizeWritten = 512*1024;
+
+    status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer, logStreamId, version, asn,
+                                dataBufferPtr, dataSizeWritten, coreLoggerOffset, reservedMetadataSize, TRUE);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    metaDataHeader = (KtlLogVerify::KtlMetadataHeader*)(metadataKBuffer->GetBuffer());        
+    KtlLogVerify::ComputeRecordVerification(metaDataHeader->VerificationData,
+                                            asn,
+                                            version,
+                                            0x1000,
+                                            NULL,
+                                            dataIoBuffer);                                  
+    writeContext->Reuse();
+
+    writeContext->StartWrite(asn, version, metadataKBuffer, dataIoBuffer, NULL, sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(status == STATUS_UNSUCCESSFUL);
+    version--;
+
+    
+    //
+    // Allow time for flush
+    //
+    KNt::Sleep(15 * 1000);
+
+    
+    expectedLowAsn = 41;
+    expectedTruncationAsn = 1;
+    RvdLogAsn lowAsn, highAsn, truncationAsn;
+    status = sharedStream->QueryRecordRange(&lowAsn, &highAsn, &truncationAsn);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    VERIFY_IS_TRUE(lowAsn.Get() <= expectedLowAsn);
+    VERIFY_IS_TRUE(highAsn.Get() == expectedHighAsn);
+    VERIFY_IS_TRUE(truncationAsn.Get() <= expectedTruncationAsn);
+
+    overlayStream->GetCoalesceRecords()->FlushAllRecordsForClose(sync);
+    status = sync.WaitForCompletion();
+
+    dedicatedShim = nullptr;
+    dedicatedCoreStream = nullptr;
+
+    sharedShim = nullptr;
+    sharedCoreStream = nullptr;
+
+    dedicatedStream = nullptr;
+    sharedStream = nullptr;
+
+    writeContext = nullptr;
+
+    status = overlayStream->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayStream = nullptr;
+
+    coreOpenLog = nullptr;
+    coreOpenStream = nullptr;
+
+    coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+        
+    
+    //
+    // Corrupt the log
+    //
+    {
+        KBlockFile::SPtr blockfile;
+        KWString pathName(*g_Allocator);
+        pathName = *streamFullPathName;
+        VERIFY_IS_TRUE(NT_SUCCESS(pathName.Status()));
+
+        status = KBlockFile::Create(pathName,
+                                    TRUE,
+                                    KBlockFile::eOpenExisting,
+                                    blockfile,
+                                    sync,
+                                    NULL,
+                                    *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        KIoBuffer::SPtr ioBuffer;
+        PVOID p;
+        PUCHAR pc;
+        status = KIoBuffer::CreateSimple(0x1000, ioBuffer, p, *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        pc = (PUCHAR)p;
+        for (ULONG i = 0; i < 0x1000; i++)
+        {
+            pc[i] = 0xFA;
+        }
+
+        status = blockfile->Transfer(KBlockFile::eForeground,
+                                     KBlockFile::eWrite,
+                                     0,
+                                     *ioBuffer,
+                                     sync);
+
+        VERIFY_IS_TRUE(NT_SUCCESS(status));     
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        blockfile->Close();
+    }
+    
+    //
+    // Reopen corrupted log and verify failure
+    //
+    status = coreLogManager->CreateAsyncOpenLogContext(coreOpenLog);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    rvdLogId = logContainerGuid;
+    coreOpenLog->Reuse();
+    coreOpenLog->StartOpenLog(KStringView(*containerFullPathName),
+                              coreLog,
+                              NULL,
+                              sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               containerFullPathName.RawPtr(),        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
+                                                                     *coreLog,
+                                                                     logStreamId,
+                                                                     diskId,
+                                                                     nullptr,
+                                                                     maxStreamRecordSize,
+                                                                     streamSize,
+                                                                     metadataLength,
+                                                                     *throttledAllocator);
+
+    VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+    status = overlayStream->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(status == STATUS_OBJECT_NAME_NOT_FOUND);     
+    overlayStream = nullptr;    
+
+    //
+    // Read from backup log and verify data
+    //
+    rvdLogId = logContainerGuid;
+    coreOpenLog->Reuse();
+    coreOpenLog->StartOpenLog(KStringView(*containerFullPathNameBackup),
+                              coreLog,
+                              NULL,
+                              sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLog->CreateAsyncOpenLogStreamContext(coreOpenStream);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    logStreamId = logStreamGuid;
+    RvdLogStream::SPtr coreBackupLogStream;
+
+    coreOpenStream->StartOpenLogStream(logStreamId,
+        coreBackupLogStream,
+        NULL,
+        sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    RvdLogAsn lowAsnBackup, highAsnBackup, truncationAsnBackup;
+    
+    status = coreBackupLogStream->QueryRecordRange(&lowAsnBackup, &highAsnBackup, &truncationAsnBackup);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    VERIFY_IS_TRUE(lowAsnBackup.Get() <= expectedLowAsn);
+    VERIFY_IS_TRUE(highAsnBackup.Get() == expectedHighAsn);
+    VERIFY_IS_TRUE(truncationAsnBackup.Get() <= expectedTruncationAsn); 
+    
+    coreBackupLogStream = nullptr;
+    coreLog = nullptr;
+
+    
+    //
+    // Final Cleanup
+    //
+    coreOpenLog = nullptr;
+    coreOpenStream = nullptr;
+
+    coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+        
+    coreLogManager->Deactivate();
+    coreLogManager = nullptr;
+    status = activateSync.WaitForCompletion();
+
+    DeleteRvdlogFile(diskId,
+        logContainerGuid);
+    DeleteRvdlogFile(diskId,
+        logStreamGuid);
+
+}
+//
+
+
 WaitEventInterceptor<OverlayStream::CoalesceRecords::AsyncFlushingRecordsContext>::SPtr WaitFlushingRecordsInterceptor;
 VOID FlushAllRecordsForCloseWaitTest(
     KGuid& diskId
@@ -11411,10 +13055,13 @@ VOID FlushAllRecordsForCloseWaitTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -11423,7 +13070,24 @@ VOID FlushAllRecordsForCloseWaitTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -11742,7 +13406,8 @@ VOID FlushAllRecordsForCloseWaitTest(
     //
     // Reopen the stream and verify that held data is in the log
     //
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -11807,6 +13472,14 @@ VOID FlushAllRecordsForCloseWaitTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -12245,10 +13918,13 @@ VOID ReadFromCoalesceBuffersCornerCase1Test(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -12257,7 +13933,24 @@ VOID ReadFromCoalesceBuffersCornerCase1Test(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -12483,6 +14176,14 @@ VOID ReadFromCoalesceBuffersCornerCase1Test(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -12701,10 +14402,13 @@ VOID ReadFromCoalesceBuffersTruncateTailTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -12713,7 +14417,24 @@ VOID ReadFromCoalesceBuffersTruncateTailTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -12989,6 +14710,14 @@ VOID ReadFromCoalesceBuffersTruncateTailTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -13412,10 +15141,13 @@ DWORD __stdcall ReadWriteRaceTestThread(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -13424,7 +15156,24 @@ DWORD __stdcall ReadWriteRaceTestThread(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -13582,6 +15331,14 @@ DWORD __stdcall ReadWriteRaceTestThread(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -13744,10 +15501,13 @@ VOID DeleteTruncatedTailRecordsWorker(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
+    
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -13756,7 +15516,24 @@ VOID DeleteTruncatedTailRecordsWorker(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -13851,6 +15628,13 @@ VOID DeleteTruncatedTailRecordsWorker(
     coreOpenLog = nullptr;
     coreOpenStream = nullptr;
     coreLog = nullptr;
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();    
@@ -13961,10 +15745,12 @@ VOID RetryOnSharedLogFullTest(
     OverlayStream::SPtr overlayStream;
     ThrottledKIoBufferAllocator::SPtr throttledAllocator;
 
+    OverlayLog::SPtr overlayLog;
     KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
     memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
     memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
 
     status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
         memoryThrottleLimits,
@@ -13973,7 +15759,24 @@ VOID RetryOnSharedLogFullTest(
         throttledAllocator);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
-    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*coreLogManager,
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                     *coreLogManager,
                                                                      *coreLog,
                                                                      logStreamId,
                                                                      diskId,
@@ -14279,6 +16082,14 @@ VOID RetryOnSharedLogFullTest(
     coreOpenStream = nullptr;
 
     coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
     coreLogManager->Deactivate();
     coreLogManager = nullptr;
     status = activateSync.WaitForCompletion();
@@ -14291,8 +16102,366 @@ VOID RetryOnSharedLogFullTest(
 }
 
 
+VOID DiscontiguousRecordsRecoveryTest(
+    KGuid& diskId
+    )
+{
+    NTSTATUS status;
+    KGuid logStreamGuid;
+    KGuid logContainerGuid;
+    KSynchronizer sync;
+    KSynchronizer activateSync;
+    KServiceSynchronizer        serviceSync;
+    ULONG metadataLength = 0x10000;
+    ULONG maxRecordSize = DEFAULT_MAX_RECORD_SIZE;
+    LONGLONG streamSize = DEFAULT_STREAM_SIZE;
+
+
+    //
+    // This test is to verify that the stream open detects a situation
+    // where there is a gap between the end of the dedicated log and
+    // the beginning of the shared log.
+    //
+
+
+    
+    logStreamGuid.CreateNew();
+    logContainerGuid.CreateNew();
+
+    CreateInitialKtlLogStream(diskId,
+                              logContainerGuid,
+                              1,
+                              &logStreamGuid,
+                              KLogicalLogInformation::GetLogicalLogStreamType());
+    //
+    // Open up base log manager and container and stream via the core logger
+    //
+    RvdLogManager::SPtr coreLogManager;
+    RvdLogManager::AsyncOpenLog::SPtr coreOpenLog;
+    RvdLog::SPtr coreLog;
+    RvdLogId rvdLogId;
+    RvdLogStreamId logStreamId;
+
+    status = RvdLogManager::Create(ALLOCATION_TAG, *g_Allocator, coreLogManager);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->RegisterVerificationCallback(KLogicalLogInformation::GetLogicalLogStreamType(),
+                                                          &VerifyRecordCallback);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    status = coreLogManager->RegisterVerificationCallback(KtlLogInformation::KtlLogDefaultStreamType(),
+                                                           &VerifyRecordCallback);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    status = coreLogManager->Activate(NULL,       // parentasync
+                                      activateSync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = coreLogManager->CreateAsyncOpenLogContext(coreOpenLog);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    rvdLogId = logContainerGuid;
+    logStreamId = logStreamGuid;
+    coreOpenLog->StartOpenLog(diskId,
+                              rvdLogId,
+                              coreLog,
+                              NULL,
+                              sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    coreOpenLog = nullptr;
+        
+    RvdLog::AsyncOpenLogStreamContext::SPtr coreOpenStream;
+
+    status = coreLog->CreateAsyncOpenLogStreamContext(coreOpenStream);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    RvdLogStream::SPtr coreSharedLogStream;
+    coreOpenStream->StartOpenLogStream(logStreamId,
+                                       coreSharedLogStream,
+                                       NULL,
+                                       sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    coreOpenStream = nullptr;
+
+    
+    //
+    // Open the streams via the overlay log. This will move records
+    // from shared to dedicated
+    //
+    OverlayStream::SPtr overlayStream;
+    OverlayLog::SPtr overlayLog;
+    ThrottledKIoBufferAllocator::SPtr throttledAllocator;
+
+    KtlLogManager::MemoryThrottleLimits memoryThrottleLimits;
+    memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
+    memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+    memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+
+    status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
+        memoryThrottleLimits,
+        *g_Allocator,
+        KTL_TAG_TEST,
+        throttledAllocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    overlayLog = _new(ALLOCATION_TAG, *g_Allocator) OverlayLog(*coreLogManager,
+                                                               diskId,
+                                                               NULL,        // Path
+                                                               rvdLogId,
+                                                               *throttledAllocator);
+    VERIFY_IS_TRUE(overlayLog ? TRUE : FALSE);
+    status = overlayLog->Status();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    status = overlayLog->StartServiceOpen(NULL,      // ParentAsync
+                                             serviceSync.OpenCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    {
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
+                                                                         *coreLog,
+                                                                         logStreamId,
+                                                                         diskId,
+                                                                         nullptr,
+                                                                         maxRecordSize,
+                                                                         streamSize,
+                                                                         metadataLength,
+                                                                         *throttledAllocator);
+
+        VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+        status = overlayStream->Status();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                                 serviceSync.OpenCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+    }
+
+    RvdLogStream::SPtr dedicatedStream;
+
+    dedicatedStream = overlayStream->GetDedicatedLogStream();
+
+
+    KBuffer::SPtr metadataKBuffer;
+    KIoBuffer::SPtr dataIoBuffer;
+    KBuffer::SPtr dataBuffer;
+    PUCHAR dataBufferPtr;
+
+    status = KBuffer::Create(0xbeef0, dataBuffer, *g_Allocator);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    dataBufferPtr = (PUCHAR)dataBuffer->GetBuffer();
+
+
+    ULONG coreLoggerOffset = coreLog->QueryUserRecordSystemMetadataOverhead();
+    ULONG reservedMetadataSize = sizeof(KtlLogVerify::KtlMetadataHeader);
+    
+
+    //
+    // Write a set of records into the dedicated log
+    //
+    ULONGLONG asn = KtlLogAsn::Min().Get();
+    ULONGLONG version = 0;
+
+    for (ULONG i = 0; i < 25; i++)
+    {
+        version++;
+        status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer,
+                                    logStreamId, version, asn,
+                                    dataBufferPtr, 25000,
+                                    coreLoggerOffset, reservedMetadataSize, TRUE, 25000,
+                                    KLogicalLogInformation::FixedMetadataSize - coreLoggerOffset);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = WriteARawRecord(dedicatedStream,
+                                 version, asn, metadataKBuffer, 0, dataIoBuffer);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        asn += 25000;
+    }
+
+
+    overlayStream->GetCoalesceRecords()->FlushAllRecordsForClose(sync);
+
+    dedicatedStream = nullptr;
+    status = overlayStream->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayStream = nullptr;
+    
+
+    
+    //
+    // Test 1: Shared log is empty, stream opens ok
+    //
+    {
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
+                                                                         *coreLog,
+                                                                         logStreamId,
+                                                                         diskId,
+                                                                         nullptr,
+                                                                         maxRecordSize,
+                                                                         streamSize,
+                                                                         metadataLength,
+                                                                         *throttledAllocator);
+
+        VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+        status = overlayStream->Status();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                                 serviceSync.OpenCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+
+        overlayStream->GetCoalesceRecords()->FlushAllRecordsForClose(sync);
+
+        status = overlayStream->StartServiceClose(NULL,      // ParentAsync
+                                                  serviceSync.CloseCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        overlayStream = nullptr;
+        
+    }
+
+    
+    //
+    // Test 2: Shared log has gap detected by checking the IoBufferSize
+    //         in the corelogger metadata. stream opens with error
+    //
+    {
+        ULONGLONG endOfDedicatedRecord = asn + 0x8000;
+
+        status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer,
+            logStreamId, version + 1, endOfDedicatedRecord,
+            dataBufferPtr, 25000,
+            coreLoggerOffset, reservedMetadataSize, TRUE, 25000,
+            KLogicalLogInformation::FixedMetadataSize - coreLoggerOffset);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = WriteARawRecord(coreSharedLogStream,
+            version + 1, endOfDedicatedRecord, metadataKBuffer, 0, dataIoBuffer);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
+                                                                         *coreLog,
+                                                                         logStreamId,
+                                                                         diskId,
+                                                                         nullptr,
+                                                                         maxRecordSize,
+                                                                         streamSize,
+                                                                         metadataLength,
+                                                                         *throttledAllocator);
+
+        VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+        status = overlayStream->Status();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                                 serviceSync.OpenCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == K_STATUS_LOG_STRUCTURE_FAULT);
+
+        overlayStream = nullptr;        
+    }
+    
+    //
+    // Test 3: Shared log has gap detected by checking the record
+    //         length in the logical log stream block header. stream opens with error
+    //
+    // TODO:
+
+    //
+    // Test 4: Shared log record has older version, stream opens ok
+    //
+    {
+        ULONGLONG endOfDedicatedRecord = asn + 500;
+
+        status = SetupToWriteRecord(metadataKBuffer, dataIoBuffer,
+            logStreamId, version -2 , endOfDedicatedRecord,
+            dataBufferPtr, 25000,
+            coreLoggerOffset, reservedMetadataSize, TRUE, 25000,
+            KLogicalLogInformation::FixedMetadataSize - coreLoggerOffset);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = WriteARawRecord(coreSharedLogStream,
+            version -2, endOfDedicatedRecord, metadataKBuffer, 0, dataIoBuffer);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        overlayStream = _new(ALLOCATION_TAG, *g_Allocator) OverlayStream(*overlayLog,
+                                                                         *coreLogManager,
+                                                                         *coreLog,
+                                                                         logStreamId,
+                                                                         diskId,
+                                                                         nullptr,
+                                                                         maxRecordSize,
+                                                                         streamSize,
+                                                                         metadataLength,
+                                                                         *throttledAllocator);
+
+        VERIFY_IS_TRUE(overlayStream ? TRUE : FALSE);
+        status = overlayStream->Status();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = overlayStream->StartServiceOpen(NULL,      // ParentAsync
+                                                 serviceSync.OpenCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        overlayStream->GetCoalesceRecords()->FlushAllRecordsForClose(sync);
+
+        status = overlayStream->StartServiceClose(NULL,      // ParentAsync
+                                                  serviceSync.CloseCompletionCallback());
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = serviceSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        overlayStream = nullptr;        
+    }
+
+
+    
+    //
+    // Final Cleanup
+    //
+
+    coreSharedLogStream = nullptr;
+    coreLog = nullptr;
+
+    status = overlayLog->StartServiceClose(NULL,      // ParentAsync
+                                              serviceSync.CloseCompletionCallback());
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    status = serviceSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    overlayLog = nullptr;
+    
+    coreLogManager->Deactivate();
+    coreLogManager = nullptr;
+    status = activateSync.WaitForCompletion();
+
+    DeleteInitialKtlLogStream(diskId,
+                              logContainerGuid);
+
+}
+
 VOID SetupOverlayLogTests(
     KGuid& DiskId,
+    UCHAR& driveLetter,
     ULONGLONG& StartingAllocs,
     KtlSystem*& System
     )
@@ -14311,7 +16480,7 @@ VOID SetupOverlayLogTests(
     EventRegisterMicrosoft_Windows_KTL();
 
 #if !defined(PLATFORM_UNIX)
-    UCHAR driveLetter = 0;
+    driveLetter = 0;
     status = FindDiskIdForDriveLetter(driveLetter, DiskId);
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 #else
@@ -14336,6 +16505,7 @@ VOID SetupOverlayLogTests(
 
 VOID CleanupOverlayLogTests(
     KGuid&,
+    UCHAR&,
     ULONGLONG&,
     KtlSystem*&
     )

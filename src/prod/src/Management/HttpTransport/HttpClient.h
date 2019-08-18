@@ -22,7 +22,11 @@ namespace HttpClient
             Common::ComponentRoot const &root,
             __out IHttpClientSPtr &httpClient);
 
+        //
         // Default behavior for an HTTP Request is to follow redirects
+        // enableWinauthAutoLogon: This can be used in conjunction with client certificate.
+        // Depending on the server's auth policy, either one or both windows auth and certificate based auth will be used. 
+        //
         Common::ErrorCode CreateHttpRequest(
             std::wstring const &requestUri,
             Common::TimeSpan const &connectTimeout,
@@ -31,7 +35,8 @@ namespace HttpClient
             KAllocator &allocator,
             __out IHttpClientRequestSPtr &clientRequest,
             bool allowRedirects = true,
-            bool enableCookies = true);
+            bool enableCookies = true,
+            bool enableWinauthAutoLogon = false);
 
         Common::ErrorCode CreateHttpRequest(
             std::wstring const &requestUri,
@@ -40,7 +45,8 @@ namespace HttpClient
             Common::TimeSpan const &receiveTimeout,
             __out IHttpClientRequestSPtr &clientRequest,
             bool allowRedirects = true,
-            bool enableCookies = true);
+            bool enableCookies = true,
+            bool enableWinauthAutoLogon = false);
 
     private:
         HttpClientImpl(Common::ComponentRoot const &root)

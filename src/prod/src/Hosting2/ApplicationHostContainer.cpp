@@ -574,7 +574,7 @@ private:
 // {C9CBB47D-E207-430F-A81A-D5FC15AA19E1}
 static const GUID CLSID_GetActivationContextComAsyncOperationContext = 
 { 0xc9cbb47d, 0xe207, 0x430f, { 0xa8, 0x1a, 0xd5, 0xfc, 0x15, 0xaa, 0x19, 0xe1 } };
-  
+
 class ApplicationHostContainer::GetActivationContextComAsyncOperationContext
     : public ComAsyncOperationContext,
     TextTraceComponent<TraceTaskCodes::Hosting>
@@ -663,6 +663,116 @@ private:
     IID iid_;
     TimeSpan timeout_;
     ComPointer<ComCodePackageActivationContext> activationContext_;
+};
+
+// ********************************************************************************************************************
+// ApplicationHostContainer::CreateFabricRuntimeComAsyncOperationContext Implementation
+//
+// {C9CBB47D-E207-430F-A81A-D5FC15AA19E1}
+static const GUID CLSID_GetCodePackageActivatorComAsyncOperationContext =
+{ 0xbdca6bef, 0xc502, 0x4a91, { 0xa2, 0x3a, 0x14, 0xe0, 0x5d, 0xa6, 0xe, 0xa8 } };
+
+class ApplicationHostContainer::GetCodePackageActivatorComAsyncOperationContext
+    : public ComAsyncOperationContext,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+    DENY_COPY(GetCodePackageActivatorComAsyncOperationContext)
+
+        COM_INTERFACE_LIST2(
+            GetCodePackageActivatorComAsyncOperationContext,
+            IID_IFabricAsyncOperationContext,
+            IFabricAsyncOperationContext,
+            CLSID_GetCodePackageActivatorComAsyncOperationContext,
+            GetCodePackageActivatorComAsyncOperationContext)
+
+public:
+    explicit GetCodePackageActivatorComAsyncOperationContext()
+        : ComAsyncOperationContext()
+    {
+    }
+
+    virtual ~GetCodePackageActivatorComAsyncOperationContext()
+    {
+    }
+
+    HRESULT STDMETHODCALLTYPE Initialize(
+        __in REFIID riid,
+        __in DWORD inTimeoutMilliseconds,
+        __in ComponentRootSPtr const & rootSPtr,
+        __in_opt IFabricAsyncOperationCallback * callback)
+    {
+        auto hr = this->ComAsyncOperationContext::Initialize(rootSPtr, callback);
+        if (FAILED(hr)) { return hr; }
+
+        iid_ = riid;
+
+        if (inTimeoutMilliseconds == INFINITE)
+        {
+            timeout_ = TimeSpan::MaxValue;
+        }
+        else if (inTimeoutMilliseconds == 0)
+        {
+            timeout_ = HostingConfig::GetConfig().GetCodePackageActivationContextTimeout;
+        }
+        else
+        {
+            timeout_ = TimeSpan::FromMilliseconds(static_cast<double>(inTimeoutMilliseconds));
+        }
+
+        return S_OK;
+    }
+
+    static HRESULT End(__in IFabricAsyncOperationContext * context, __out void **activator)
+    {
+        ComPointer<GetCodePackageActivatorComAsyncOperationContext> thisOperation(
+            context, CLSID_GetCodePackageActivatorComAsyncOperationContext);
+
+        auto hr = thisOperation->Result;
+        if (FAILED(hr))
+        { 
+            return hr;
+        }
+
+        return thisOperation->activator_->QueryInterface(thisOperation->iid_, activator);
+    }
+
+protected:
+    void OnStart(__in AsyncOperationSPtr const & proxySPtr)
+    {
+        auto & appHostContainer = ApplicationHostContainer::GetApplicationHostContainer();
+
+        auto operation = appHostContainer.BeginGetComCodePackageActivator(
+            timeout_,
+            [this](AsyncOperationSPtr const & operation)
+            { 
+                this->FinishGetComCodePackageActivator(operation, false); 
+            },
+            proxySPtr);
+
+        this->FinishGetComCodePackageActivator(operation, true);
+    }
+
+private:
+    void FinishGetComCodePackageActivator(
+        AsyncOperationSPtr const & operation,
+        bool expectCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectCompletedSynchronously)
+        {
+            return;
+        }
+
+        auto & appHostContainer = ApplicationHostContainer::GetApplicationHostContainer();
+
+        auto error = appHostContainer.EndGetComCodePackageActivator(operation, activator_);
+        
+        this->TryComplete(operation->Parent, error.ToHResult());
+    }
+
+private:
+    IID iid_;
+    TimeSpan timeout_;
+    ComPointer<ComApplicationHostCodePackageActivator> activator_;
 };
 
 // ********************************************************************************************************************
@@ -829,6 +939,174 @@ private:
     CodePackageContext codePackageContext_;
     ApplicationHostSPtr host_;
     CodePackageActivationContextSPtr codePackageActivationContextSPtr_;
+};
+
+// ********************************************************************************************************************
+// ApplicationHostContainer::GetComCodePackageActivatorAsyncOperation Implementation
+//
+class ApplicationHostContainer::GetComCodePackageActivatorAsyncOperation
+    : public AsyncOperation,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+    DENY_COPY(GetComCodePackageActivatorAsyncOperation)
+
+public:
+    GetComCodePackageActivatorAsyncOperation(
+        ApplicationHostContainer & owner,
+        TimeSpan const timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        timeoutHelper_(timeout),
+        hostContext_(),
+        host_(),
+        codePackageActivatorSPtr_()
+    {
+    }
+
+    virtual ~GetComCodePackageActivatorAsyncOperation()
+    {
+    }
+
+    static ErrorCode End(
+        AsyncOperationSPtr const & operation,
+        __out ComPointer<ComApplicationHostCodePackageActivator> & comCodePackageActivatorCPtr)
+    {
+        auto thisPtr = AsyncOperation::End<GetComCodePackageActivatorAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            comCodePackageActivatorCPtr = make_com<ComApplicationHostCodePackageActivator>(
+                thisPtr->codePackageActivatorSPtr_);
+        }
+
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        auto error = this->EnsureValidEnvironment();
+        if (!error.IsSuccess())
+        {
+            TryComplete(thisSPtr, error);
+            return;
+        }
+
+        this->EnsureSingleCodePackageApplicationHost(thisSPtr);
+    }
+
+private:
+    ErrorCode EnsureValidEnvironment()
+    {
+        EnvironmentMap envMap;
+        if (!Environment::GetEnvironmentMap(envMap))
+        {
+            WriteError(
+                TraceType,
+                "GetComCodePackageActivatorAsyncOperation: EnsureValidEnvironment failed to obtain environment block.");
+            return ErrorCode(ErrorCodeValue::OperationFailed);
+        }
+
+        auto error = ApplicationHostContainer::GetApplicationHostContext(envMap, hostContext_);
+        if (!error.IsSuccess())
+        {
+            WriteError(
+                TraceType,
+                "GetComCodePackageActivatorAsyncOperation: GetApplicationHostContext failed because of error {0}.",
+                error);
+            return error;
+        }
+
+        if ((hostContext_.HostType == ApplicationHostType::NonActivated) ||
+            (hostContext_.HostType == ApplicationHostType::Activated_MultiCodePackage))
+        {
+            WriteWarning(
+                TraceType,
+                "GetComCodePackageActivatorAsyncOperation called for invalid HostType {0}",
+                hostContext_.HostType);
+
+            return ErrorCode(ErrorCodeValue::InvalidOperation);
+        }
+
+        CodePackageContext codePackageContext;
+        error = ApplicationHostContainer::GetCodePackageContext(envMap, codePackageContext);
+        if (!error.IsSuccess())
+        {
+            WriteError(
+                TraceType,
+                "GetCodePackageContext failed because of error {0}.",
+                error);
+            return error;
+        }
+
+        if (codePackageContext.CodePackageInstanceId.ServicePackageInstanceId.ApplicationId.IsAdhoc())
+        {
+            WriteWarning(
+                TraceType,
+                "GetComCodePackageActivatorAsyncOperation called for adhoc activated application host: CodePackageId={0}",
+                codePackageContext.CodePackageInstanceId);
+
+            return ErrorCode(ErrorCodeValue::InvalidOperation);
+        }
+
+        return ErrorCode::Success();
+    }
+
+    void EnsureSingleCodePackageApplicationHost(AsyncOperationSPtr const & thisSPtr)
+    {
+        auto timeout = timeoutHelper_.GetRemainingTime();
+
+        WriteNoise(
+            TraceType,
+            "Begin(EnsureApplicationHost): Timeout={0}",
+            timeout);
+
+        auto operation = owner_.BeginEnsureApplicationHost(
+            hostContext_,
+            ComPointer<IFabricCodePackageHost>(),
+            timeout,
+            [this](AsyncOperationSPtr const & operation)
+            { 
+                this->FinishEnsureApplicationHost(operation, false);
+            },
+            thisSPtr);
+
+        this->FinishEnsureApplicationHost(operation, true);
+    }
+
+    void FinishEnsureApplicationHost(
+        AsyncOperationSPtr const & operation,
+        bool expectedCompletedAsynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedAsynchronously)
+        {
+            return;
+        }
+
+        auto error = owner_.EndEnsureApplicationHost(operation, host_);
+        
+        WriteTrace(
+            error.ToLogLevel(),
+            TraceType,
+            "End(EnsureApplicationHost): ErrorCode={0}",
+            error);
+
+        if (error.IsSuccess())
+        {
+            error = host_->GetCodePackageActivator(codePackageActivatorSPtr_);
+        }
+
+        TryComplete(operation->Parent, error);
+        return;
+    }
+
+private:
+    ApplicationHostContainer & owner_;
+    TimeoutHelper timeoutHelper_;
+    ApplicationHostContext hostContext_;
+    ApplicationHostSPtr host_;
+    ApplicationHostCodePackageActivatorSPtr codePackageActivatorSPtr_;
 };
 
 // ********************************************************************************************************************
@@ -1252,6 +1530,25 @@ ErrorCode ApplicationHostContainer::EndGetComCodePackageActivationContext(
     return GetComCodePackageActivationContextAsyncOperation::End(operation, comCodePackageActivationContextCPtr);
 }
 
+AsyncOperationSPtr ApplicationHostContainer::BeginGetComCodePackageActivator(
+    TimeSpan const timeout,
+    AsyncCallback const & callback,
+    AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<GetComCodePackageActivatorAsyncOperation>(
+        *this,
+        timeout,
+        callback,
+        parent);
+}
+
+ErrorCode ApplicationHostContainer::EndGetComCodePackageActivator(
+    AsyncOperationSPtr const & operation,
+    _Out_ ComPointer<ComApplicationHostCodePackageActivator> & comCodePackageActivatorCPtr)
+{
+    return GetComCodePackageActivatorAsyncOperation::End(operation, comCodePackageActivatorCPtr);
+}
+
 AsyncOperationSPtr ApplicationHostContainer::BeginGetFabricNodeContext(
     TimeSpan const timeout,
     AsyncCallback const & callback,
@@ -1372,9 +1669,9 @@ ErrorCode ApplicationHostContainer::GetRuntimeInformationFromEnv(
 
     runtimeServiceAddress = iter->second;
 
-#ifndef PLATFORM_UNIX
     if (useSslService)
     {
+#ifndef PLATFORM_UNIX
         wstring certKey;
         iter = envMap.find(Constants::EnvironmentVariable::RuntimeSslConnectionCertKey);
         if(iter == envMap.end())
@@ -1401,18 +1698,6 @@ ErrorCode ApplicationHostContainer::GetRuntimeInformationFromEnv(
 
         CryptoUtility::Base64StringToBytes(iter->second, certEncodedBytes);
 
-        iter = envMap.find(Constants::EnvironmentVariable::RuntimeSslConnectionCertThumbprint);
-        if(iter == envMap.end())
-        {
-            WriteError(
-                TraceType,
-                "Could not find the RuntimeSslConnectionCertThumbprint in the envMap of activated host.");
-
-            return ErrorCode(ErrorCodeValue::OperationFailed);
-        }
-
-        thumbprint = iter->second;
-
         CertContextUPtr cert;
         error = CryptoUtility::CreateCertFromKey(
             certEncodedBytes,
@@ -1428,29 +1713,55 @@ ErrorCode ApplicationHostContainer::GetRuntimeInformationFromEnv(
                 error);
             return error; 
         }
-    }
-#endif
+#else
+        iter = envMap.find(Constants::EnvironmentVariable::RuntimeSslConnectionCertFilePath);
+        if(iter == envMap.end())
+        {
+            WriteError(
+                TraceType,
+                "Could not find the RuntimeSslConnectionCertFilePath in the envMap of activated host.");
 
+            return ErrorCode(ErrorCodeValue::OperationFailed);
+        }
+
+        auto certFilePath = iter->second;
+        
+        CertContextUPtr cert;
+        CryptoUtility::GetCertificate(certFilePath, cert);        
+        certContextPtr = cert.release();
+#endif
+        iter = envMap.find(Constants::EnvironmentVariable::RuntimeSslConnectionCertThumbprint);
+        if(iter == envMap.end())
+        {
+            WriteError(
+                TraceType,
+                "Could not find the RuntimeSslConnectionCertThumbprint in the envMap of activated host.");
+
+            return ErrorCode(ErrorCodeValue::OperationFailed);
+        }
+
+        thumbprint = iter->second;
+    }
+
+#ifndef PLATFORM_UNIX
     if (hostContext.IsContainerHost)
     {
         ASSERT_IF(runtimeServiceAddress.empty(), "RuntimeServiceAddress should not be empty");
 
-        wstring networkingMode = ContainerEnvironment::GetContainerNetworkingMode();
-        bool isMultiIp = StringUtility::AreEqualCaseInsensitive(networkingMode, NetworkType::EnumToString(NetworkType::Open));
-
-        if (!isMultiIp)
+        if (!NetworkType::IsMultiNetwork(ContainerEnvironment::GetContainerNetworkingMode()))
         {
             map<wstring, vector<wstring>> gatewayAddressPerAdapter;
             error = IpUtility::GetGatewaysPerAdapter(gatewayAddressPerAdapter);
 
             ASSERT_IF(!error.IsSuccess(), "Getting HOST IP failed - {0}", error);
-            ASSERT_IF(gatewayAddressPerAdapter.size() != 1, "Found more than one adapter in container");
+            ASSERT_IF(gatewayAddressPerAdapter.size() > 1, "Found more than one adapter in container");
 
             USHORT port = Transport::TcpTransportUtility::ParsePortString(runtimeServiceAddress);
 
             runtimeServiceAddress = Transport::TcpTransportUtility::ConstructAddressString(gatewayAddressPerAdapter.begin()->second[0], port);
         }
     }
+#endif
 
     return error;
 }
@@ -1473,7 +1784,7 @@ ErrorCode ApplicationHostContainer::CreateApplicationHost(
 
     if (hostContext.IsContainerHost)
     {
-        error = ApplicationHostContainer::StartTraceSession();
+        error = ApplicationHostContainer::StartTraceSessionInsideContainer();
         if (!error.IsSuccess())
         {
             WriteError(TraceType, "Unable to start trace sessions: ErrorCode={0}", error);
@@ -1509,7 +1820,7 @@ ErrorCode ApplicationHostContainer::CreateApplicationHost(
             error = GetCodePackageContext(envMap, codeContext);
             if (!error.IsSuccess())  { return error; }
 
-            error = SingleCodePackageApplicationHost::Create(hostContext.HostId, runtimeServiceAddress, hostContext.IsContainerHost, certContextPtr, thumbprint, codeContext, host);
+            error = SingleCodePackageApplicationHost::Create(hostContext, runtimeServiceAddress, certContextPtr, thumbprint, codeContext, host);
             break;
         }
 
@@ -1602,7 +1913,16 @@ ErrorCode ApplicationHostContainer::GetApplicationHostContext(
     auto error = ApplicationHostContext::FromEnvironmentMap(envMap, hostContext);
     if (error.IsError(ErrorCodeValue::NotFound))
     {
-        hostContext = ApplicationHostContext(Guid::NewGuid().ToString(), ApplicationHostType::NonActivated, false/*Container host not supported for non activated*/);
+        //
+        // This means this is a non-activatied application host.
+        //
+
+        hostContext = ApplicationHostContext(
+            Guid::NewGuid().ToString(), 
+            ApplicationHostType::NonActivated,
+            false /* isContainerHost */,
+            false /* isCodePackageActivatorHost */);
+
         error = ErrorCode(ErrorCodeValue::Success);
     }
 
@@ -1613,6 +1933,7 @@ ErrorCode ApplicationHostContainer::GetApplicationHostContext(
             "GetApplicationHostContext: Failed to obtain valid ApplicationHostContext from environment block. ErrorCode={0}, EnvironmentBlock={1}",
             error,
             Environment::ToString(envMap));
+
         return ErrorCode(ErrorCodeValue::OperationFailed);
     }
 
@@ -1782,6 +2103,74 @@ HRESULT ApplicationHostContainer::FabricGetActivationContext(
     }
 }
 
+HRESULT ApplicationHostContainer::FabricBeginGetCodePackageActivator(
+    /* [in] */ __RPC__in REFIID riid,
+    /* [in] */ DWORD timeoutMilliseconds,
+    /* [in] */ __RPC__in_opt IFabricAsyncOperationCallback *callback,
+    /* [retval][out] */ __RPC__deref_out_opt IFabricAsyncOperationContext **context)
+{
+    auto errorMTA = ComUtility::CheckMTA();
+    if (!errorMTA.IsSuccess())
+    {
+        return ComUtility::OnPublicApiReturn(errorMTA.ToHResult());
+    }
+
+    auto operation = make_com<GetCodePackageActivatorComAsyncOperationContext>();
+
+    auto hr = operation->Initialize(
+        riid,
+        timeoutMilliseconds,
+        ComponentRootSPtr(),
+        callback);
+
+    if (FAILED(hr)) 
+    { 
+        return ComUtility::OnPublicApiReturn(hr); 
+    }
+
+    return ComUtility::OnPublicApiReturn(ComAsyncOperationContext::StartAndDetach(move(operation), context));
+}
+
+HRESULT ApplicationHostContainer::FabricEndGetCodePackageActivator(
+    /* [in] */ __RPC__in_opt IFabricAsyncOperationContext *context,
+    /* [retval][out] */ __RPC__deref_out_opt void **activator)
+{
+    if (context == NULL || activator == NULL)
+    {
+        return ComUtility::OnPublicApiReturn(E_POINTER);
+    }
+
+    return ComUtility::OnPublicApiReturn(GetCodePackageActivatorComAsyncOperationContext::End(context, activator));
+}
+
+HRESULT ApplicationHostContainer::FabricGetCodePackageActivator(
+    /* [in] */ __RPC__in REFIID riid,
+    /* [retval][out] */ __RPC__deref_out_opt void **activator)
+{
+    if (activator == NULL) { return ComUtility::OnPublicApiReturn(E_POINTER); }
+
+    auto waiter = make_shared<ComAsyncOperationWaiter>();
+    ComPointer<IFabricAsyncOperationContext> context;
+
+    auto hr = ApplicationHostContainer::FabricBeginGetCodePackageActivator(
+        riid,
+        0, // load default from configuration
+        waiter->GetAsyncOperationCallback([waiter, &activator](IFabricAsyncOperationContext * context)
+        {
+            auto hr = ApplicationHostContainer::FabricEndGetCodePackageActivator(context, activator);
+            waiter->SetHRESULT(hr);
+            waiter->Set();
+        }),
+        context.InitializationAddress());
+    if (FAILED(hr))
+    {
+        return ComUtility::OnPublicApiReturn(hr);
+    }
+
+    waiter->WaitOne();
+    return ComUtility::OnPublicApiReturn(waiter->GetHRESULT());
+}
+
 HRESULT ApplicationHostContainer::FabricBeginGetNodeContext(
     /* [in] */ DWORD timeoutMilliseconds,
     /* [in] */ __RPC__in_opt IFabricAsyncOperationCallback *callback,
@@ -1918,9 +2307,8 @@ ErrorCode ApplicationHostContainer::GetNodeContext(__out FabricNodeContextResult
     return error;
 }
 
-ErrorCode ApplicationHostContainer::StartTraceSession()
+ErrorCode ApplicationHostContainer::StartTraceSessionInsideContainer()
 {
-#if !defined(PLATFORM_UNIX)
     // Start will update only if necessary
     auto error = Common::TraceSession::Instance()->StartTraceSessions();
     if (!error.IsSuccess())
@@ -1931,11 +2319,9 @@ ErrorCode ApplicationHostContainer::StartTraceSession()
 
     WriteNoise(TraceType, "Trace sessions successfully started");
     return error;
-#else
-    WriteInfo(TraceType, "Trace session start not supported for containers on linux yet");
-    return ErrorCode();
-#endif
 }
+
+
 HRESULT ApplicationHostContainer::FabricCreateBackupRestoreAgent(
     /* [in] */ __RPC__in REFIID riid,
     /* [retval][out] */ __RPC__deref_out_opt void **backupRestoreAgent)

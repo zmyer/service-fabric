@@ -61,14 +61,13 @@ namespace Common
 {
     class RWLockBase
     {
-        DENY_COPY(RWLockBase);
-
+        DENY_COPY_ASSIGNMENT(RWLockBase)
     public:
         typedef AcquireSharedTraits<RWLockBase>        AcquireSharedTraitsT;
         typedef AcquireExclusiveTraits<RWLockBase>     AcquireExclusiveTraitsT;
 
 #ifdef DBG
-        RWLockBase() : owners_()
+        RWLockBase() : owners_(), dtor_(false)
 #else
         RWLockBase()
 #endif
@@ -79,6 +78,21 @@ namespace Common
 #endif
         }
 
+        // SRWLOCK can not be moved or copied.
+        // We initialize it in copy and move constructor so that
+        // we can allow "default" copy and move constructor for classes using RWLockBase.
+        // This class(RWLockBase) should not be explictly copied or moved.
+        RWLockBase(RWLockBase const &) : RWLockBase() {}
+
+        RWLockBase(RWLockBase &&) : RWLockBase() {}
+
+#ifdef DBG
+        virtual ~RWLockBase()
+        {
+            dtor_ = true;
+        }
+
+#endif
         _Acquires_exclusive_lock_(lock_)
         LOCKAPI AcquireExclusive(); 
 
@@ -100,20 +114,17 @@ namespace Common
     private:
 
 #ifdef DBG
-
         void CheckOwners();
         void AddOwner();
         void RemoveOwner();
 
         std::set<int> owners_;
         SRWLOCK ownerSetLock_;
-
+        bool dtor_;
 #else
-
     #define CheckOwners()
     #define AddOwner()
     #define RemoveOwner()
-
 #endif
     };
 

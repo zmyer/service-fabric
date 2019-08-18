@@ -40,6 +40,8 @@ namespace Data
             static BarrierLogRecord::SPtr CreateOneBarrierRecord(
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in KAllocator & allocator);
+
+            virtual std::wstring ToString() const override;
             
             // 
             // Stable Lsn represents the sequence number upto which there is write quorum at the point of replicating this record
@@ -74,7 +76,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
             //
             // Read LogRecord.h base member for more info

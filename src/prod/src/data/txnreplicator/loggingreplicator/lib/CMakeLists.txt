@@ -10,7 +10,7 @@ set( LINUX_SOURCES
   ../CopyStream.cpp
   ../DrainingStream.cpp
   ../EventSource.cpp
-  ../FaultyFileLogicalLog.cpp
+  ../FaultyFileLog.cpp
   ../FileLogManager.cpp
   ../FlushedRecordInfo.cpp
   ../IncrementalBackupLogRecordsAsyncEnumerator.cpp
@@ -24,9 +24,14 @@ set( LINUX_SOURCES
   ../LogRecordsDispatcher.cpp
   ../LogRecordsMap.cpp
   ../LogTruncationManager.cpp
+  ../MemoryLog.cpp
+  ../MemoryLogManager.cpp
+  ../MemoryLogReadStream.cpp
   ../NotificationKey.cpp
   ../NotificationKeyComparer.cpp
   ../OperationProcessor.cpp
+  ../PeriodicCheckpointTruncationState.cpp
+  ../ParallelLogRecordsDispatcher.cpp
   ../PhysicalLogWriter.cpp
   ../PhysicalLogWriterCallbackManager.cpp
   ../RecoveredOrCopiedCheckpointState.cpp
@@ -35,6 +40,7 @@ set( LINUX_SOURCES
   ../ReplicatorBackup.cpp
   ../RoleContextDrainState.cpp
   ../SecondaryDrainManager.cpp
+  ../SerialLogRecordsDispatcher.cpp
   ../StateProvider.cpp
   ../TransactionManager.cpp
   ../TransactionMap.cpp
@@ -58,7 +64,6 @@ target_link_libraries(${lib_LoggingReplicator}
     ${lib_data_utilities}
     ${lib_LogicalLog}
     ${lib_TestHooks}
-    ${lib_KtlLoggerShimUPassthrough}
     ${KtlLoggerUser}
     ${Ktlfull}
     )

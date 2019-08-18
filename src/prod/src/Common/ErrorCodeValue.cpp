@@ -349,7 +349,7 @@ namespace Common
             case (int)FABRIC_E_CANNOT_CONNECT: w << "FABRIC_E_CANNOT_CONNECT"; return;
 
             case(int)FABRIC_E_MESSAGE_TOO_LARGE: w << "FABRIC_E_MESSAGE_TOO_LARGE"; return;
-          
+
             case(int)FABRIC_E_ENDPOINT_NOT_FOUND: w << "FABRIC_E_ENDPOINT_NOT_FOUND"; return;
 
             case(int)FABRIC_E_DELETE_BACKUP_FILE_FAILED: w << "FABRIC_E_DELETE_BACKUP_FILE_FAILED"; return;
@@ -357,7 +357,7 @@ namespace Common
             case(int)FABRIC_E_INVALID_TEST_COMMAND_STATE: w << "FABRIC_E_INVALID_TEST_COMMAND_STATE"; return;
 
             case(int)FABRIC_E_TEST_COMMAND_OPERATION_ID_ALREADY_EXISTS: w << "FABRIC_E_TEST_COMMAND_OPERATION_ID_ALREADY_EXISTS"; return;
- 
+
             case(int)FABRIC_E_CM_OPERATION_FAILED: w << "FABRIC_E_CM_OPERATION_FAILED"; return;
 
             case (int)FABRIC_E_IMAGEBUILDER_RESERVED_DIRECTORY_ERROR: w << "FABRIC_E_IMAGEBUILDER_RESERVED_DIRECTORY_ERROR"; return;
@@ -400,6 +400,8 @@ namespace Common
 
             case (int)FABRIC_E_COMPOSE_DEPLOYMENT_NOT_FOUND: w << "FABRIC_E_COMPOSE_DEPLOYMENT_NOT_FOUND"; return;
 
+            case (int)FABRIC_E_COMPOSE_DEPLOYMENT_NOT_UPGRADING: w << "FABRIC_E_COMPOSE_DEPLOYMENT_NOT_UPGRADING"; return;
+
             case (int)FABRIC_E_INVALID_FOR_STATEFUL_SERVICES: w << "FABRIC_E_INVALID_FOR_STATEFUL_SERVICES"; return;
 
             case (int)FABRIC_E_INVALID_FOR_STATELESS_SERVICES: w << "FABRIC_E_INVALID_FOR_STATELESS_SERVICES"; return;
@@ -409,20 +411,28 @@ namespace Common
             case (int)FABRIC_E_INVALID_UPLOAD_SESSION_ID: w << "FABRIC_E_INVALID_UPLOAD_SESSION_ID"; return;
 
             case (int)FABRIC_E_BACKUP_NOT_ENABLED: w << "FABRIC_E_BACKUP_NOT_ENABLED"; return;
-            
-            case (int)FABRIC_E_BACKUP_IS_ENABLED : w << "FABRIC_E_BACKUP_IS_ENABLED"; return; 
-            
+
+            case (int)FABRIC_E_BACKUP_IS_ENABLED : w << "FABRIC_E_BACKUP_IS_ENABLED"; return;
+
             case (int)FABRIC_E_BACKUP_POLICY_DOES_NOT_EXIST : w << "FABRIC_E_BACKUP_POLICY_DOES_NOT_EXIST"; return;
-            
+
             case (int)FABRIC_E_BACKUP_POLICY_ALREADY_EXISTS : w << "FABRIC_E_BACKUP_POLICY_ALREADY_EXISTS"; return;
-            
+
             case (int)FABRIC_E_RESTORE_IN_PROGRESS : w << "FABRIC_E_RESTORE_IN_PROGRESS"; return;
-            
+
             case (int)FABRIC_E_RESTORE_SOURCE_TARGET_PARTITION_MISMATCH : w << "FABRIC_E_RESTORE_SOURCE_TARGET_PARTITION_MISMATCH"; return;
-            
+
             case (int)FABRIC_E_FAULT_ANALYSIS_SERVICE_NOT_ENABLED : w << "FABRIC_E_FAULT_ANALYSIS_SERVICE_NOT_ENABLED"; return;
             
             case (int)FABRIC_E_CONTAINER_NOT_FOUND: w << "FABRIC_E_CONTAINER_NOT_FOUND"; return;
+
+            case (int)FABRIC_E_CENTRAL_SECRET_SERVICE_GENERIC: w << "FABRIC_E_CENTRAL_SECRET_SERVICE_GENERIC"; return;
+
+            case (int)FABRIC_E_SECRET_INVALID: w << "FABRIC_E_SECRET_INVALID"; return;
+
+            case (int)FABRIC_E_SECRET_TYPE_CANNOT_BE_CHANGED: w << "FABRIC_E_SECRET_TYPE_CANNOT_BE_CHANGED"; return;
+
+            case (int)FABRIC_E_SECRET_VERSION_ALREADY_EXISTS: w << "FABRIC_E_SECRET_VERSION_ALREADY_EXISTS"; return;
 
             case (int)FABRIC_E_BACKUPCOPIER_UNEXPECTED_ERROR: w << "FABRIC_E_BACKUPCOPIER_UNEXPECTED_ERROR"; return;
 
@@ -430,7 +440,30 @@ namespace Common
 
             case (int)FABRIC_E_BACKUPCOPIER_ACCESS_DENIED: w << "FABRIC_E_BACKUPCOPIER_ACCESS_DENIED"; return;
 
+            case (int)FABRIC_E_SINGLE_INSTANCE_APPLICATION_ALREADY_EXISTS: w << "FABRIC_E_SINGLE_INSTANCE_APPLICATION_ALREADY_EXISTS"; return;
+
+            case (int)FABRIC_E_SINGLE_INSTANCE_APPLICATION_NOT_FOUND: w << "FABRIC_E_SINGLE_INSTANCE_APPLICATION_NOT_FOUND"; return;
+
+            case (int)FABRIC_E_SINGLE_INSTANCE_APPLICATION_UPGRADE_IN_PROGRESS: w << "FABRIC_E_SINGLE_INSTANCE_APPLICATION_UPGRADE_IN_PROGRESS"; return;
+
+            case (int)FABRIC_E_VOLUME_ALREADY_EXISTS: w << "FABRIC_E_VOLUME_ALREADY_EXISTS"; return;
+
+            case (int)FABRIC_E_VOLUME_NOT_FOUND: w << "FABRIC_E_VOLUME_NOT_FOUND"; return;
+
+            case (int)FABRIC_E_INVALID_SERVICE_SCALING_POLICY: w << "FABRIC_E_INVALID_SERVICE_SCALING_POLICY"; return;
+            
+            case (int)FABRIC_E_NETWORK_NOT_FOUND: w << "FABRIC_E_NETWORK_NOT_FOUND"; return;
+
+            case (int)FABRIC_E_NETWORK_IN_USE: w << "FABRIC_E_NETWORK_IN_USE"; return;
+
+            case (int)FABRIC_E_ENDPOINT_NOT_REFERENCED: w << "FABRIC_E_ENDPOINT_NOT_REFERENCED"; return;
+
+            case (int)FABRIC_E_DATABASE_MIGRATION_IN_PROGRESS: w << "FABRIC_E_DATABASE_MIGRATION_IN_PROGRESS"; return;
+
+            case (int)FABRIC_E_OPERATION_NOT_SUPPORTED: w << "FABRIC_E_OPERATION_NOT_SUPPORTED"; return;
+
             // *** internal error codes
+            case FSSPrimaryInDatalossRecovery: w << "FSSPrimaryInDatalossRecovery"; return;
             case BackupCopierAborted: w << "BackupCopierAborted"; return;
             case BackupCopierDisabled: w << "BackupCopierDisabled"; return;
             case BackupCopierRetryableError: w << "BackupCopierRetryableError"; return;
@@ -608,6 +641,8 @@ namespace Common
             case ContainerFailedToCreateDnsChain: w << "ContainerFailedToCreateDnsChain"; return;
             case ApplicationPrincipalAbortableError: w << "ApplicationPrincipalAbortableError"; return;
             case ApplicationHostCrash: w << "ApplicationHostCrash"; return;
+            case ApplicationDeploymentInProgress: w << "ApplicationDeploymentInProgress"; return;
+            case UpdateContextFailed: w << "UpdateContextFailed"; return;
 
                 // FileStoreService
             case StagingFileNotFound: w << "StagingFileNotFound"; return;
@@ -650,6 +685,12 @@ namespace Common
 
             case IPAddressProviderAddressRangeExhausted: w << "IPAddressProviderAddressRangeExhausted"; return;
 
+            case NatIpAddressProviderAddressRangeExhausted: w << "NatIpAddressProviderAddressRangeExhausted"; return;
+
+            case ServiceHostTerminationInProgress: w << "ServiceHostTerminationInProgress"; return;
+
+            case OverlayNetworkResourceProviderAddressRangeExhausted: w << "OverlayNetworkResourceProviderAddressRangeExhausted"; return;
+
             case FabricRemoveConfigurationValueNotFound: w << "FabricRemoveConfigurationValueNotFound"; return;
 
             case ReplicatorInternalError: w << "ReplicatorInternalError"; return;
@@ -662,6 +703,8 @@ namespace Common
 
             case DnsServerIPAddressNotFound: w << "DnsServerIPAddressNotFound"; return;
 
+            case IsolatedNetworkInterfaceNameNotFound: w << "IsolatedNetworkInterfaceNameNotFound"; return;
+
             case LocalResourceManagerCPUCapacityMismatch: w << "LocalResourceManagerCPUCapacityMismatch"; return;
 
             case LocalResourceManagerMemoryCapacityMismatch: w << "LocalResourceManagerMemoryCapacityMismatch"; return;
@@ -671,6 +714,10 @@ namespace Common
             case NotEnoughMemoryForServicePackage: w << "NotEnoughMemoryForServicePackage"; return;
 
             case ServicePackageAlreadyRegisteredWithLRM: w << L"ServicePackageAlreadyRegisteredWithLRM"; return;
+
+            case FabricHostServicePathNotFound: w << L"FabricHostServicePathNotFound"; return;
+
+            case UpdaterServicePathNotFound: w << L"UpdaterServicePathNotFound"; return;
             }
 
             w.Write("0x{0:x}", static_cast<uint>(e));

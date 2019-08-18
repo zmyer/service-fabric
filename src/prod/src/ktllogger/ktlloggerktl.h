@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "ktllogger.h"
+#include "./sys/inc/ktllogger.h"
 #include "KtlLoggerNode.h"
 
 namespace KtlLogger
@@ -25,7 +25,9 @@ namespace KtlLogger
 
             VOID
             StartInitializeKtlLogger(
+                __in BOOLEAN UseInprocLogger,
                 __in KtlLogManager::MemoryThrottleLimits& MemoryLimits,
+                __in KtlLogManager::AcceleratedFlushLimits& AccelerateFlushLimits,
                 __in KtlLogManager::SharedLogContainerSettings& SharedLogSettings,
                 __in LPCWSTR NodeWorkDirectory,
                 __in_opt KAsyncContextBase* const ParentAsyncContext,
@@ -67,7 +69,8 @@ namespace KtlLogger
         private:
             enum { Initial,
                    OpenLogManagerX,
-                   ConfigureThrottleSettings2, ConfigureThrottleSettings, ConfigureSharedLog,
+                   ConfigureThrottleSettings3, ConfigureThrottleSettings2, ConfigureThrottleSettings, ConfigureSharedLog,
+                   ConfigureAccelerateFlushSettings,
                    OpenSharedLog, CloseSharedLog,
                    CloseLogManagerX,
                    Completed } _State;
@@ -87,8 +90,10 @@ namespace KtlLogger
             //
             // Parameters to api
             //
+            BOOLEAN _UseInprocLogger;
             KtlLogManager::MemoryThrottleLimits _MemoryLimits;
             KtlLogManager::SharedLogContainerSettings _SharedLogSettings;
+            KtlLogManager::AcceleratedFlushLimits _AccelerateFlushLimits;
             WCHAR _NodeWorkDirectory[MAX_PATH];
 
             //

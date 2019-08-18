@@ -15,10 +15,6 @@ add_executable(${exe_Hosting2Test}
   ../NonActivatedApplicationHost.Test.cpp
   ../CodePackageAcivationContext.Test.cpp
   ../DownloadManager.Test.cpp
-  ../IPAddressProvider.Test.cpp
-  ../ReservationManager.Test.cpp
-  ../FlatIPConfiguration.Test.cpp
-  ../IPAM.Test.cpp
   ../DownloadManagerFSSSetup.Test.cpp
   ../ServiceTypeStateManager.Test.cpp
   ../FabricNodeHost.Test.cpp
@@ -26,8 +22,10 @@ add_executable(${exe_Hosting2Test}
   ../WorkingFolder.Test.cpp
   ../ApplicationUpgrade.Test.cpp
   ../LocalResourceManager.Test.cpp
+  ../LocalSecretServiceManager.Test.cpp
   ../GuestServiceTypeHostManager.Test.cpp
   ../EnvironmentManager.Test.cpp
+  ../ContainerRuntimeHandler.Test.cpp
   )
 
 add_precompiled_header(${exe_Hosting2Test} ../stdafx.h)
@@ -53,7 +51,7 @@ target_link_libraries(${exe_Hosting2Test}
   ${lib_TestHooks}
   ${lib_TStore}
   ${lib_Communication}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_Client}
   ${lib_EntreeService}
   ${lib_StoreService}
@@ -67,8 +65,10 @@ target_link_libraries(${exe_Hosting2Test}
   ${lib_ClientServerTransport}
   ${lib_Transport}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_LoadBalancing}
   ${lib_FailoverCommon}
+  ${lib_NetworkInventoryManager}
   ${lib_Replication}
   ${lib_HealthManager}
   ${lib_ImageStore}
@@ -95,9 +95,10 @@ target_link_libraries(${exe_Hosting2Test}
   ${lib_FabricUUID}
   ${lib_InternalFabricUUID}
   ${lib_DnsServiceConfig}
+  ${lib_GatewayResourceManager}
   ${KtlUser}
   ${KtlLoggerUser}
-  ${lib_KtlLoggerShimUPassthrough}
+  ${lib_KtlLoggerShimUnify}
   ${KtlLoggerUser}
   ${Ktlfull}
   ${BoostTest2}
@@ -106,6 +107,14 @@ target_link_libraries(${exe_Hosting2Test}
   ${lib_FabricCommon}
   ${lib_FabricResources}
   ssh2
+  grpcxx
+  grpc
+  grpcxx_reflection
+  protobuf
+  gpr
+  ares
+  ssl
+  crypto
   minizip
   z
   m
@@ -115,8 +124,6 @@ target_link_libraries(${exe_Hosting2Test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(
@@ -128,6 +135,24 @@ install(
     FILES ./RunHosting2Tests.sh
     PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
     DESTINATION ${TEST_OUTPUT_DIR}
+)
+
+# CRI-O executables and confs
+install(
+    FILES ../crio.cc.sh
+          ../crio.kata.sh
+          ${EXTERNAL_LIB_PATH}/cri-o/crio
+          ${EXTERNAL_LIB_PATH}/cri-o/conmon
+          ${EXTERNAL_LIB_PATH}/cri-o/pause
+          ${EXTERNAL_LIB_PATH}/cri-o/crictl
+    DESTINATION ${TEST_OUTPUT_DIR}
+    PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+install(
+    FILES ${EXTERNAL_LIB_PATH}/cri-o/crio.conf
+          ${EXTERNAL_LIB_PATH}/cri-o/seccomp.json
+    DESTINATION ${TEST_OUTPUT_DIR}
+    PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ
 )
 
 # Following are copying data from source directory

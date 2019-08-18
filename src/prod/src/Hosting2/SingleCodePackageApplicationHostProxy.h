@@ -33,6 +33,12 @@ namespace Hosting2
         __declspec(property(get = get_CodePackageInstanceIdentifier)) CodePackageInstanceIdentifier const & CodePackageInstanceId;
         inline CodePackageInstanceIdentifier const & get_CodePackageInstanceIdentifier() const { return codePackageInstance_->CodePackageInstanceId; }
 
+        __declspec(property(get = get_ServicePackageInstanceId)) ServicePackageInstanceIdentifier const & ServicePackageInstanceId;
+        inline ServicePackageInstanceIdentifier const & get_ServicePackageInstanceId() const 
+        { 
+            return codePackageInstance_->CodePackageInstanceId.ServicePackageInstanceId; 
+        }
+
         virtual Common::AsyncOperationSPtr BeginActivateCodePackage(
             CodePackageInstanceSPtr const & codePackage,
             Common::TimeSpan const timeout,
@@ -64,6 +70,17 @@ namespace Hosting2
         virtual Common::ErrorCode EndGetContainerInfo(
             Common::AsyncOperationSPtr const & operation,
             __out wstring & containerInfo) override;
+
+        virtual Common::AsyncOperationSPtr BeginApplicationHostCodePackageOperation(
+            ApplicationHostCodePackageOperationRequest const & requestBody,
+            Common::AsyncCallback const & callback,
+            Common::AsyncOperationSPtr const & parent) override;
+
+        virtual Common::ErrorCode EndApplicationHostCodePackageOperation(
+            Common::AsyncOperationSPtr const & operation) override;
+
+        virtual void SendDependentCodePackageEvent(
+            CodePackageEventDescription const & eventDescription) override;
         
         virtual bool HasHostedCodePackages() override;
 
@@ -77,6 +94,8 @@ namespace Hosting2
             CodePackageActivationId const & activationId) override;
 
         std::wstring GetUniqueContainerName();
+
+        virtual bool GetLinuxContainerIsolation() override;
 
     protected:
         virtual Common::AsyncOperationSPtr OnBeginOpen(
@@ -97,30 +116,63 @@ namespace Hosting2
 
     private:
         Common::ErrorCode GetProcessDescription(__out ProcessDescriptionUPtr & processDescription);
-        Common::ErrorCode GetAssignedIPAddress(__out wstring & assignedIP);
+
+        Common::ErrorCode GetContainerNetworkConfigDescription(
+            __out ContainerNetworkConfigDescription & networkConfig,
+            __out wstring & assignedIpAddresses);
+
+        Common::ErrorCode GetAssignedNetworkResources(
+            __out wstring & openNetworkAssignedIpAddress,
+            __out std::map<std::wstring, std::wstring> & overlayNetworkResources,
+            __out wstring & assignedIpAddresses);
+
+        Common::ErrorCode GetContainerDnsServerConfiguration(
+            ContainerNetworkConfigDescription const & networkConfig,
+            __out vector<wstring> & dnsServers);
+
+        std::wstring GetUniqueName();
         void NotifyTermination();
         std::wstring GetContainerGroupId();
         std::wstring GetServiceName();
-    
+        void EmitDiagnosticTrace();
+        bool ShouldNotify();
+
     private:
+        class GetProcessAndContainerDescriptionAsyncOperation;
+
         class OpenAsyncOperation;
         friend class OpenAsyncOperation;
 
         class CloseAsyncOperation;
         friend class CloseAsyncOperation;
-        
+
+        class ApplicationHostCodePackageOperation;
         class GetContainerInfoAsyncOperation;
+        class SendDependentCodePackageEventAsyncOperation;
 
     private:
         CodePackageActivationId const codePackageActivationId_;
         CodePackageInstanceSPtr const codePackageInstance_;
         CodePackageRuntimeInformationSPtr codePackageRuntimeInformation_;
+        ContainerNetworkConfigDescription networkConfig_;
+
+        //
+        // This flag is set to true after codePackageInstance_ has been
+        // notified of termination. We can set the codePackageInstance_ to 
+        // nullptr but this class has certain properties which may get
+        // accessed after termination. As a conveinence we use this
+        // flag for notification purposes and let the properties be accessed
+        // without taking locks.
+        //
+        bool shouldNotify_;
+
+        Common::atomic_bool activationFailed_;
+        Common::ErrorCode activationFailedError_;
 
         Common::RwLock notificationLock_;
         Common::atomic_bool terminatedExternally_;
         Common::atomic_bool isCodePackageActive_;
         Common::atomic_uint64 exitCode_;
-        Common::ProcessWaitSPtr apphostMonitor_;
         Common::HandleUPtr procHandle_;
     };
 }

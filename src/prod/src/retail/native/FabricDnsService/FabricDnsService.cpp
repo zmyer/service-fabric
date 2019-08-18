@@ -52,6 +52,7 @@ FabricDnsService::FabricDnsService(
 
 FabricDnsService::~FabricDnsService()
 {
+    _tracer.Trace(DnsTraceLevel_Info, "Destructing FabricDnsService.");
 }
 
 HRESULT FabricDnsService::BeginOpen(
@@ -62,9 +63,10 @@ HRESULT FabricDnsService::BeginOpen(
 {
     UNREFERENCED_PARAMETER(partition);
 
-    _tracer.Trace(DnsTraceLevel_Noise, "FabricDnsService BeginOpen called");
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService BeginOpen called");
 
     LoadConfig(/*out*/_params);
+
     HRESULT hr = partition->QueryInterface(IID_IFabricStatelessServicePartition2, _spFabricHealth.VoidInitializationAddress());
     if (S_OK != hr)
     {
@@ -143,7 +145,7 @@ HRESULT FabricDnsService::EndOpen(
     __out IFabricStringResult** serviceAddress
 )
 {
-    _tracer.Trace(DnsTraceLevel_Noise, "FabricDnsService EndOpen called");
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService EndOpen called");
 
     UNREFERENCED_PARAMETER(context);
 
@@ -176,17 +178,28 @@ HRESULT FabricDnsService::BeginClose(
     __out IFabricAsyncOperationContext** context
 )
 {
-    _tracer.Trace(DnsTraceLevel_Noise, "FabricDnsService BeginClose called");
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService BeginClose called");
+
+    FabricAsyncOperationContext::Create(/*out*/_spCloseOperationContext, GetThisAllocator(), callback);
+    FabricAsyncOperationContext::SPtr spOut = _spCloseOperationContext;
+    *context = spOut.Detach();
 
     UnegisterServiceNotifications();
 
     _spService->CloseAsync();
     _spServiceManagementClient = nullptr;
 
-    FabricAsyncOperationContext::Create(/*out*/_spCloseOperationContext, GetThisAllocator(), callback);
-
-    FabricAsyncOperationContext::SPtr spOut = _spCloseOperationContext;
-    *context = spOut.Detach();
+    // If the close time out config has been enabled, waiting for the event to be signaled
+    // or shutdown the process after the configured timeout.
+    if (_params.EnableOnCloseTimeout)
+    {
+        const ULONG timeoutInMs = _params.OnCloseTimeoutInSeconds * 1000;
+        if (!_closeCompletedEvent.WaitUntilSet(timeoutInMs))
+        {
+            _tracer.Trace(DnsTraceLevel_Error, "FabricDnsService BeginClose failed to complete after {0} ms, killing the process", timeoutInMs);
+            KInvariant(false);
+        }
+    }
 
     return S_OK;
 }
@@ -195,7 +208,7 @@ HRESULT FabricDnsService::EndClose(
     __in IFabricAsyncOperationContext* context
 )
 {
-    _tracer.Trace(DnsTraceLevel_Noise, "FabricDnsService EndClose called");
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService EndClose called");
 
     UNREFERENCED_PARAMETER(context);
 
@@ -204,7 +217,7 @@ HRESULT FabricDnsService::EndClose(
 
 void FabricDnsService::Abort(void)
 {
-    _tracer.Trace(DnsTraceLevel_Noise, "FabricDnsService Abort called");
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService Abort called");
 
     UnegisterServiceNotifications();
 
@@ -243,6 +256,10 @@ void FabricDnsService::OnCloseCompleted(
 {
     UNREFERENCED_PARAMETER(status);
 
+    _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService OnCloseCompleted called");
+
+    _closeCompletedEvent.SetEvent();
+
     if (_spCloseOperationContext != nullptr)
     {
         ComPointer<IFabricAsyncOperationCallback> spCallback;
@@ -251,11 +268,11 @@ void FabricDnsService::OnCloseCompleted(
             KInvariant(false);
         }
 
+        _tracer.Trace(DnsTraceLevel_Info, "FabricDnsService OnCloseCompleted invoking close completed callback.");
+
         _spCloseOperationContext->SetCompleted(TRUE);
         spCallback->Invoke(_spCloseOperationContext.RawPtr());
     }
-
-    _closeCompletedEvent.SetEvent();
 }
 
 void FabricDnsService::LoadConfig(
@@ -272,6 +289,19 @@ void FabricDnsService::LoadConfig(
     params.FabricQueryTimeoutInSeconds = (ULONG)DnsServiceConfig::GetConfig().FabricQueryTimeout.TotalSeconds();
     params.RecursiveQueryTimeoutInSeconds = (ULONG)DnsServiceConfig::GetConfig().RecursiveQueryTimeout.TotalSeconds();
     params.TimeToLiveInSeconds = max((ULONG)1, (ULONG)DnsServiceConfig::GetConfig().TimeToLive.TotalSeconds());
+    params.AllowMultipleListeners = DnsServiceConfig::GetConfig().AllowMultipleListeners;
+    params.EnablePartitionedQuery = DnsServiceConfig::GetConfig().EnablePartitionedQuery;
+    params.EnableOnCloseTimeout = DnsServiceConfig::GetConfig().EnableOnCloseTimeout;
+    params.OnCloseTimeoutInSeconds = (ULONG)DnsServiceConfig::GetConfig().OnCloseTimeoutInSeconds.TotalSeconds();
+
+    if (!DnsServiceConfig::GetConfig().PartitionPrefix.empty())
+    {
+        params.PartitionPrefix = KString::Create(DnsServiceConfig::GetConfig().PartitionPrefix.c_str(), GetThisAllocator());
+    }
+    if (!DnsServiceConfig::GetConfig().PartitionSuffix.empty())
+    {
+        params.PartitionSuffix = KString::Create(DnsServiceConfig::GetConfig().PartitionSuffix.c_str(), GetThisAllocator());
+    }
 }
 
 bool FabricDnsService::RegisterServiceNotifications()

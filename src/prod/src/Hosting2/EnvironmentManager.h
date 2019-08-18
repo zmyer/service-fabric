@@ -59,6 +59,7 @@ namespace Hosting2
 
         Common::AsyncOperationSPtr BeginSetupServicePackageInstanceEnvironment(
             ApplicationEnvironmentContextSPtr const & appEnvironmentContext,
+            wstring const & applicationName,
             ServicePackageInstanceIdentifier const & servicePackageInstanceId,
             int64 instanceId,
             ServiceModel::ServicePackageDescription const & servicePackageDescription,
@@ -68,7 +69,7 @@ namespace Hosting2
 
         Common::ErrorCode EndSetupServicePackageInstanceEnvironment(
             Common::AsyncOperationSPtr const & asyncOperation,
-            __out ServicePackageInstanceEnvironmentContextSPtr & packageEnvironmentContext);
+            _Out_ ServicePackageInstanceEnvironmentContextSPtr & packageEnvironmentContext);
 
         Common::AsyncOperationSPtr BeginCleanupServicePackageInstanceEnvironment(
             ServicePackageInstanceEnvironmentContextSPtr const & packageEnvironmentContext,
@@ -92,19 +93,21 @@ namespace Hosting2
         // ****************************************************
         virtual Common::AsyncOperationSPtr OnBeginOpen(
             Common::TimeSpan timeout,
-            Common::AsyncCallback const & callback, 
+            Common::AsyncCallback const & callback,
             Common::AsyncOperationSPtr const & parent);
         virtual Common::ErrorCode OnEndOpen(
             Common::AsyncOperationSPtr const & operation);
 
         virtual Common::AsyncOperationSPtr OnBeginClose(
             Common::TimeSpan timeout,
-            Common::AsyncCallback const & callback, 
+            Common::AsyncCallback const & callback,
             Common::AsyncOperationSPtr const & parent);
         virtual Common::ErrorCode OnEndClose(
             Common::AsyncOperationSPtr const & operation);
 
         virtual void OnAbort();
+
+        Common::ErrorCode GetIsolatedNicIpAddress(std::wstring & ipAddress);
 
     private:
         Common::ErrorCode CleanupServicePackageInstanceEnvironment(

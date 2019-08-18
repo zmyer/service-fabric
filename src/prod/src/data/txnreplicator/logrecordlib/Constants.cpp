@@ -13,6 +13,7 @@ ULONG const Constants::InvalidRecordLength = MAXULONG;
 ULONG64 const Constants::InvalidRecordPosition = MAXULONG64;
 ULONG64 const Constants::InvalidPhysicalRecordOffset = MAXULONG64;
 ULONG64 const Constants::InvalidLogicalRecordOffset = MAXULONG64;
+ULONG64 const Constants::NumberLogRecordTypes = 14;
 LONG64 const Constants::InvalidLsn = -1;
 LONG64 const Constants::MaxLsn = MAXLONG64;
 LONG64 const Constants::InvalidPsn = -1;
@@ -23,6 +24,14 @@ LONG64 const Constants::UniversalReplicaId = 0;
 LONG64 const Constants::NullOperationDataCode = -1;
 LONG64 const Constants::PhysicalLogWriterSlowFlushDurationInMs = 3000;
 LONG64 const Constants::ProgressVectorMaxStringSizeInKb = 60;
+
+wstring const Constants::StartingJSON = L"{\n";
+wstring const Constants::Quote = L"\"";
+wstring const Constants::DivisionJSON = L"\" : \"";
+wstring const Constants::DivisionBoolJSON = L"\" : ";
+wstring const Constants::EndlJSON = L"\",\n\"";
+wstring const Constants::CompEndlJSON = L",\n\"";
+wstring const Constants::CloseJSON = L"\n}";
 
 ULONG const Constants::KGuid_KString_Length = 40;
 
@@ -37,6 +46,7 @@ LPCWSTR const Constants::LogPathPrefix = L"";
 
 std::wstring const Constants::Test_Ktl_LoggingEngine(L"ktl");
 std::wstring const Constants::Test_File_LoggingEngine(L"file");
+std::wstring const Constants::SerialDispatchingMode(L"serial");
 
 ULONG const Constants::PhysicalLogWriterMovingAverageHistory = 10;
 

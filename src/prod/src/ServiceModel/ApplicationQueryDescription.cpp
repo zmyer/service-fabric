@@ -65,6 +65,14 @@ ErrorCode ApplicationQueryDescription::FromPublicApi(FABRIC_APPLICATION_QUERY_DE
                 {
                     auto applicationQueryDescriptionEx4 = reinterpret_cast<FABRIC_APPLICATION_QUERY_DESCRIPTION_EX4 *>(applicationQueryDescriptionEx3->Reserved);
                     auto maxResults = applicationQueryDescriptionEx4->MaxResults;
+
+                    if (maxResults < 0)
+                    {
+                        return ErrorCode(
+                            ErrorCodeValue::InvalidArgument,
+                            wformatString(GET_COMMON_RC(Invalid_Max_Results), maxResults));
+                    }
+
                     pagingDescription.MaxResults = maxResults;
                 }
             }

@@ -34,6 +34,7 @@ add_executable(${exe_statemanager_test}
   ../StateManagerLockContext.Test.cpp
   ../StateManagerTestBase.cpp
   ../StateManagerTransactionContext.Test.cpp
+  ../TestCheckpointFileReadWrite.cpp
   ../TestHelper.cpp
   ../TestOperation.cpp
   ../TestLockContext.cpp
@@ -46,6 +47,7 @@ add_executable(${exe_statemanager_test}
   ../TestStateProviderProperties.cpp
   ../TestTransaction.cpp
   ../TestTransactionManager.cpp
+  ../Volatile.Test.cpp
 )
 
 #add_precompiled_header(${exe_statemanager_test} ../stdafx.h)
@@ -81,8 +83,6 @@ target_link_libraries(${exe_statemanager_test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(

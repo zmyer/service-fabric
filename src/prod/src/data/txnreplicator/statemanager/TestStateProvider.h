@@ -139,7 +139,7 @@ namespace StateManagerTests
 
         TxnReplicator::OperationDataStream::SPtr GetCurrentState() override;
 
-        void BeginSettingCurrentState() override;
+        ktl::Awaitable<void> BeginSettingCurrentStateAsync() override;
 
         ktl::Awaitable<void> SetCurrentStateAsync(
             __in LONG64 stateRecordNumber,
@@ -254,6 +254,8 @@ namespace StateManagerTests
 
         // #10485130: Temperory config used to disable the WriteAsync call in PerformCheckpointAsync for perf tests
         bool checkpointing_ = true;
+
+        bool hasPersistedState_ = true;
 
     private:
         KString::CSPtr workFolder_;

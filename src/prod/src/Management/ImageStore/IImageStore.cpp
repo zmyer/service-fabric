@@ -10,16 +10,15 @@ using namespace Common;
 using namespace Management;
 using namespace ImageModel;
 using namespace ImageStore;
+using namespace ImageCache;
 using namespace FileStoreService;
 
-StringLiteral const ImageStoreLiteral("ImageStore");
+StringLiteral const ImageStoreLiteral("IImageStore");
 
 double const IImageStore::CacheLockAcquireTimeoutInSeconds = 20;
 double const IImageStore::CopyOperationLockAcquireTimeoutInSeconds = 2;
 wstring const IImageStore::CacheTempDirectory(L"tmp");
 wstring const IImageStore::CacheStagingExtension(L".staging");
-
-GlobalWString IImageStore::ArchiveMarkerFileName = make_global<wstring>(L"_.zip");
 
 IImageStore::IImageStore(
     wstring const& localRoot, 
@@ -123,6 +122,14 @@ ErrorCode IImageStore::DownloadToCache(
     __out std::wstring & cacheObject,
     __out bool & alreadyInCache)
 {
+    Trace.WriteInfo(
+        ImageStoreLiteral,
+        "DownloadToCache invoked with remoteObject:{0}, shouldOverwrite:{1}, checkForArchive:{2}, isStaging:{3}",
+        remoteObject,
+        shouldOverwrite,
+        checkForArchive,
+        isStaging);
+
     TimeoutHelper timeoutHelper(timeout);
     cacheObject = GetCacheFileName(remoteObject);
     auto path = Path::GetDirectoryName(cacheObject);
@@ -142,7 +149,8 @@ ErrorCode IImageStore::DownloadToCache(
                 "Directory::Create2 failed for path {0} with {1}",
                 path,
                 error);
-            return error;
+            return ErrorCode(error.ReadValue(),
+                wformatString(L"Failed to create path '{0}' in ImageCache for file '{1}'. Error: '{2}'.", path, cacheObject, error.ErrorCodeValueToString()));
         }
     }
 
@@ -151,14 +159,15 @@ ErrorCode IImageStore::DownloadToCache(
         ExclusiveFile file(cacheObject + L".CacheLock");
         error = file.Acquire(TimeSpan::FromSeconds(CacheLockAcquireTimeoutInSeconds));
 
-        if (!error.IsSuccess() )
+        if (!error.IsSuccess())
         {
             //IImageStore returns Timeout irrespective of the error. To preserve original functionality we return Timeout.
             if (!error.IsError(ErrorCodeValue::SharingAccessLockViolation))
             {
-                return ErrorCodeValue::Timeout;
+                error = ErrorCodeValue::Timeout;
             }
-            return error;
+            return ErrorCode(error.ReadValue(),
+                wformatString(L"Failed to acquire write access to '{0}'. Error: '{1}'.", cacheObject, error.ErrorCodeValueToString()));
         }
 
         bool cachedObjectExists = false;
@@ -178,10 +187,23 @@ ErrorCode IImageStore::DownloadToCache(
             }
             else if(error.IsError(ErrorCodeValue::CorruptedImageStoreObjectFound))
             {
+                Trace.WriteInfo(
+                    ImageStoreLiteral,
+                    "Invoking RemoveCorruptedContent for cacheobject:{0}",
+                    cacheObject);
+
                 // If there is an abandoned writer lock, we delete both lock and 
                 // the content associated with the lock
                 error = RemoveCorruptedContent(cacheObject, timeoutHelper);
-                if (!error.IsSuccess()) { return error; }
+                if (!error.IsSuccess())
+                {
+                    Trace.WriteWarning(
+                        ImageStoreLiteral,
+                        "Invoking RemoveCorruptedContent for cacheobject:{0} failed with:{1}",
+                        cacheObject,
+                        error);
+                    return error;
+                }
             }
             else
             {
@@ -191,10 +213,11 @@ ErrorCode IImageStore::DownloadToCache(
 
         if (shouldOverwrite || !cachedObjectExists)
         {
-            WriteNoise(
+            WriteInfo(
                 ImageStoreLiteral,
-                "Cache object '{0}' does not exist so downloading",
-                cacheObject);
+                "Cache object '{0}' does not exist so downloading. shouldOverwrite {1}",
+                cacheObject,
+                shouldOverwrite);
 
             vector<wstring> storeTagsToDownload;
             vector<wstring> cacheTagsToUpdate;
@@ -235,9 +258,11 @@ ErrorCode IImageStore::DownloadToCache(
             {
                 WriteWarning(
                     ImageStoreLiteral,
-                    "OnDownloadFromStore for cached objects failed with error {0}",
-                    error);
-                return error;
+                    "OnDownloadFromStore failed with error {0}, for remote object: {1}.",
+                    error,
+                    remoteObject);
+                return ErrorCode(error.ReadValue(),
+                    wformatString(StringResource::Get(IDS_HOSTING_DownloadFromStoreFailed), remoteObject, error.ErrorCodeValueToString(), remoteObject));
             }
         }
     }
@@ -279,7 +304,7 @@ Common::ErrorCode IImageStore::DownloadContent(
     bool copyToLocalStoreLayoutOnly,
     bool checkForArchive)
 {
-    Trace.WriteNoise(
+    Trace.WriteInfo(
         ImageStoreLiteral,
         "DownloadContent called. RemoteObject={0}, LocalObject={1}, RemoteChecksumObject={2}, ExpectedChecksumValue={3}",
         remoteObject,
@@ -317,6 +342,11 @@ Common::ErrorCode IImageStore::DownloadContent(
             auto error = DoesArchiveExistInStore(remoteArchive, timeoutHelper.GetRemainingTime(), archiveExists);
             if (!error.IsSuccess())
             {
+                Trace.WriteError(
+                    ImageStoreLiteral,
+                    "DoesArchiveExistInStore for remoteArchive:{0} failed with error:{1}",
+                    remoteArchive,
+                    error);
                 return error;
             }
 
@@ -329,14 +359,31 @@ Common::ErrorCode IImageStore::DownloadContent(
             }
         }
 
-        auto error = OnDownloadFromStore(remoteObjects, localObjects, flags, timeoutHelper.GetRemainingTime());
+        Trace.WriteInfo(
+            ImageStoreLiteral,
+            "Invoking OnDownloadFromStore for remoteObjects:{0} localObjects:{1} flags:{2}",
+            remoteObjects,
+            localObjects,
+            flags);
 
-        if (checkForArchive && error.IsSuccess())
-        { 
+        auto error = OnDownloadFromStore(remoteObjects, localObjects, flags, timeoutHelper.GetRemainingTime());
+        if (!error.IsSuccess())
+        {
+            WriteError(
+                ImageStoreLiteral,
+                "OnDownloadFromStore failed from {0} to {1}. Error: {2}.",
+                remoteObjects,
+                localObjects,
+                error);
+            error = ErrorCode(error.ReadValue(),
+                wformatString(StringResource::Get(IDS_HOSTING_DownloadFromStoreFailed), remoteObject, error.ErrorCodeValueToString(), remoteObject));
+        }
+        else if (checkForArchive)
+        {
             auto downloadedObject = *localObjects.begin();
             if (ImageModelUtility::IsArchiveFile(downloadedObject))
             {
-                error = ExtractArchive(downloadedObject, localObject, false); // overwrite
+                error = ExtractArchive(downloadedObject, localObject);
 
                 if (error.IsSuccess())
                 {
@@ -374,6 +421,11 @@ Common::ErrorCode IImageStore::DownloadContent(
                 // The checksum file is not there in the cache, but is present in the store.
                 // In this case, overwrite the cache object with the store object
                 shouldOverwriteCache = true;
+                Trace.WriteInfo(
+                    ImageStoreLiteral,
+                    "The checksum file is not there in the cache. Overwrite the cache object with the store object. ShouldOverwriteCache: {0}, remoteObject: {1}",
+                    shouldOverwriteCache,
+                    remoteObject);
             }
             else
             {
@@ -387,6 +439,12 @@ Common::ErrorCode IImageStore::DownloadContent(
                 // The checksum present in the cache does not match the expected checksum value.
                 // This indicates that the object in the cache might be stale. Overwriting the checksum
                 // file in the cache with the checksum file in the store
+                Trace.WriteInfo(
+                    ImageStoreLiteral,
+                    "The checksum present in the cache does not match the expected checksum value. Overwriting the checksum file in the cache with the checksum file in the store. CacheChecksum:{0}, ExpectedChecksum: {1}",
+                    actualCheckSumValue,
+                    expectedChecksumValue);
+
                 cacheChecksumObject.clear();
                 error = DownloadToCache(
                     remoteChecksumObject,
@@ -438,6 +496,13 @@ Common::ErrorCode IImageStore::DownloadContent(
         }
     }
 
+    Trace.WriteInfo(
+        ImageStoreLiteral,
+        "ShouldOverwriteCache: {0}, RefreshCache: {1}, remoteObject: {2}",
+        shouldOverwriteCache,
+        refreshCache,
+        remoteObject);
+
     if (!shouldOverwriteCache) { shouldOverwriteCache = refreshCache; }
 
     if (timeoutHelper.GetRemainingTime() <= Common::TimeSpan::Zero) { return ErrorCodeValue::Timeout; }
@@ -474,6 +539,15 @@ Common::ErrorCode IImageStore::DownloadContent(
                 cacheObject,
                 deleteError);
         }
+
+        Trace.WriteTrace(
+            error.ToLogLevel(),
+            ImageStoreLiteral,
+            "DownloadToCache failed with Error:{0}, CacheObject={1}, ShouldOverwriteCache={2}, RefreshCache={3}",
+            error,
+            cacheObject,
+            shouldOverwriteCache,
+            refreshCache);
 
         return error;
     }
@@ -523,21 +597,37 @@ Common::ErrorCode IImageStore::DownloadContent(
 
     if (checkForArchive && ImageModelUtility::IsArchiveFile(cacheObject))
     {
-        error = ExtractArchive(cacheObject, localObject, shouldOverwriteCache);
+        error = ExtractArchive(
+            cacheObject, 
+            localObject, 
+            shouldOverwriteCache, 
+            expectedChecksumValue,
+            cacheChecksumObject);
     }
     else
     {
         vector<wstring> cacheObjects;
         cacheObjects.push_back(cacheObject);
 
+        Trace.WriteInfo(
+            ImageStoreLiteral,
+            "Invoking CopyObjects from cache to local target. cacheObjects:{0}, localObjects:{1}, flags:{2}",
+            cacheObjects,
+            localObjects,
+            flags);
+
         // Copy objects from cache to local target
         error = CopyObjects(cacheObjects, localObjects, skipFiles, flags, checkMarkFiles, timeoutHelper.GetRemainingTime());
         if (!error.IsSuccess())
         {
-            WriteWarning(
+            Trace.WriteError(
                 ImageStoreLiteral,
-                "CopyObjects from cache to local target failed with error {0}",
-                error);
+                "CopyObjects from cache to local target failed with error:{0}, cacheObjects:{1}, localObjects:{2}",
+                error,
+                cacheObjects,
+                localObjects);
+            error = ErrorCode(error.ReadValue(),
+                wformatString(L"Failed to copy '{0}' from ImageCache to '{1}'. Error: '{2}'.", cacheObject, localObject, error.ErrorCodeValueToString()));
         }
     }
 
@@ -889,7 +979,8 @@ ErrorCode IImageStore::ReadChecksumFile(std::wstring const & fileName, __inout s
         if (!error.IsSuccess())
         {
             Trace.WriteError("IImageStore.ReadChecksumFile", fileName, "Failed to open '{0}': error={1}", fileName, error);
-            return ErrorCodeValue::FileNotFound;
+            return ErrorCode(ErrorCodeValue::FileNotFound,
+                wformatString(L"Failed to open checksum file '{0}'. Error: {1}", fileName, error.ErrorCodeValueToString()));
         }
 
         int64 fileSize = fileReader.size();
@@ -907,7 +998,8 @@ ErrorCode IImageStore::ReadChecksumFile(std::wstring const & fileName, __inout s
     catch (std::exception const& e)
     {
         Trace.WriteError("IImageStore.ReadChecksumFile", fileName, "Failed with error {0}", e.what());
-        return ErrorCodeValue::InvalidOperation;
+        return ErrorCode(ErrorCodeValue::InvalidOperation,
+            wformatString(L"Failed to read checksum file '{0}'. Error: {1}", fileName, e.what()));
     }
 
     return ErrorCodeValue::Success;
@@ -927,7 +1019,8 @@ ErrorCode IImageStore::GetStoreChecksumValue(wstring const & remoteChecksumFile,
                 "Directory::Create2 failed for path {0} with {1}",
                 tempDir,
                 error);
-            return error;
+            return ErrorCode(error.ReadValue(),
+                wformatString(L"Failed to create directory '{0}'. Error: {1}.", tempDir, error.ErrorCodeValueToString()));
         }
     }
     wstring tempChecksumFile = Path::Combine(IImageStore::CacheTempDirectory, wformatString("{0}.{1}", Guid::NewGuid().ToString(), L"chksm"));
@@ -940,23 +1033,32 @@ ErrorCode IImageStore::GetStoreChecksumValue(wstring const & remoteChecksumFile,
     copyFlags.push_back(CopyFlag::Overwrite);
 
     error = OnDownloadFromStore(remoteObjects, localObjects, copyFlags, ImageStoreServiceConfig::GetConfig().ClientDownloadTimeout);
-    WriteTrace(
-        error.ToLogLevel(),
-        ImageStoreLiteral,
-        "Failed to read dowload file from location {0} to location {1}, error {2}",
-        remoteChecksumFile,
-        tempChecksumFile,
-        error);
-    if (error.IsSuccess())
+    if (!error.IsSuccess())
     {
-        error = ReadChecksumFile(Path::Combine(cacheRoot_, tempChecksumFile), checksum);
-        WriteTrace(
-            error.ToLogLevel(),
+        WriteError(
             ImageStoreLiteral,
-            "Failed to read checksum file at location {0}, error {1}",
+            "OnDownloadFromStore failed from {0} to {1}. Error: {2}.",
+            remoteChecksumFile,
             tempChecksumFile,
             error);
+        error = ErrorCode(error.ReadValue(),
+            wformatString(StringResource::Get(IDS_HOSTING_DownloadFromStoreFailed), remoteChecksumFile, error.ErrorCodeValueToString(), remoteChecksumFile));
     }
+    else
+    {
+        error = ReadChecksumFile(Path::Combine(cacheRoot_, tempChecksumFile), checksum);
+        if (!error.IsSuccess())
+        {
+            WriteError(
+                ImageStoreLiteral,
+                "Failed to read checksum file at location {0}. Error: {1}",
+                tempChecksumFile,
+                error);
+            error = ErrorCode(error.ReadValue(),
+                wformatString(L"Failed to read checksum file '{0}'. Error: '{1}'.", tempChecksumFile, error.ErrorCodeValueToString()));
+        }
+    }
+
     if (File::Exists(tempChecksumFile))
     {
         auto err = File::Delete2(tempChecksumFile);
@@ -992,12 +1094,13 @@ ErrorCode IImageStore::DoesArchiveExistInStore(wstring const & archive, TimeSpan
     auto error = OnDoesContentExistInStore(remoteArchives, timeout, results);
     if (!error.IsSuccess())
     {
-        WriteWarning(
+        WriteError(
             ImageStoreLiteral,
             "DoesArchiveExistInStore for {0} failed with error {1}",
             archive,
             error);
-        return error;
+        return ErrorCode(error.ReadValue(),
+            wformatString(L"Failed to verify archive '{0}' exists in ImageStore. Error: '{1}'.", archive, error.ErrorCodeValueToString()));
     }
 
     result = !results.empty() && results.begin()->second;
@@ -1005,7 +1108,12 @@ ErrorCode IImageStore::DoesArchiveExistInStore(wstring const & archive, TimeSpan
     return error;
 }
 
-ErrorCode IImageStore::ExtractArchive(wstring const & src, wstring const & dest, bool overwrite)
+ErrorCode IImageStore::ExtractArchive(
+    wstring const & src, 
+    wstring const & dest, 
+    bool overwrite,
+    wstring const & expectedChecksumValue,
+    wstring const & cacheChecksumObject)
 {
     auto root = Path::GetDirectoryName(dest);
     if (!Directory::Exists(root))
@@ -1013,8 +1121,9 @@ ErrorCode IImageStore::ExtractArchive(wstring const & src, wstring const & dest,
         auto error = Directory::Create2(root);
         if (!error.IsSuccess()) 
         { 
-            WriteInfo(ImageStoreLiteral, "ExtractArchive: failed to initialize root directory {0} error={1}", root, error);
-            return error; 
+            WriteError(ImageStoreLiteral, "ExtractArchive: failed to initialize root directory {0} error={1}", root, error);
+            return ErrorCode(error.ReadValue(),
+                wformatString(StringResource::Get(IDS_HOSTING_ExtractArchiveFailed), src, dest, error.ErrorCodeValueToString(), L"creating destination directory"));
         }
     }
 
@@ -1023,34 +1132,97 @@ ErrorCode IImageStore::ExtractArchive(wstring const & src, wstring const & dest,
     auto error = destLock.Acquire(TimeSpan::FromSeconds(CacheLockAcquireTimeoutInSeconds));
     if (!error.IsSuccess()) 
     { 
-        WriteInfo(ImageStoreLiteral, "ExtractArchive: failed to acquire file lock {0} error={1}", dest, error);
-        return error; 
+        WriteError(ImageStoreLiteral, "ExtractArchive: failed to acquire file lock {0} error={1}", dest, error);
+        return ErrorCode(error.ReadValue(),
+            wformatString(StringResource::Get(IDS_HOSTING_ExtractArchiveFailed), src, dest, error.ErrorCodeValueToString(), L"acquiring write access to destination directory"));
     }
 
-    auto markerFile = Path::Combine(dest, *ArchiveMarkerFileName);
+    auto markerFile = Path::Combine(dest, *ImageCache::Constants::ArchiveMarkerFileName);
+
     if (Directory::Exists(dest))
     {
-        if (File::Exists(markerFile) && !overwrite)
+        if (File::Exists(markerFile))
         {
-            return ErrorCodeValue::Success;
-        }
+            if (!overwrite)
+            {
+                WriteInfo(ImageStoreLiteral, "ExtractArchive: MarkerFile:{0} exists and overwrite:{1}", markerFile, overwrite);
+                return ErrorCodeValue::Success;
+            }
 
-        WriteInfo(ImageStoreLiteral, "ExtractArchive: delete {0}", dest);
+            // Hosting does not serialize checksum download and checking, so there can be multiple
+            // threads attempting to refresh the cache and setting the "overwrite" flag concurrently.
+            //
+            // The latest checksum value will be placed inside the marker file so that we can skip
+            // extracting to the destination if the checksum is already up-to-date. Otherwise, we
+            // may attempt to re-extract (which includes deleting the old directory) after the
+            // destination has started being used (such as when the destination is a shared code
+            // package directory).
+            //
+            if (!expectedChecksumValue.empty())
+            {
+                wstring destinationChecksumValue;
+                error = ReadChecksumFile(markerFile, destinationChecksumValue);
+
+                if (!error.IsSuccess())
+                {
+                    WriteError(ImageStoreLiteral, "ExtractArchive: failed to read checksum from marker file {0}: {1}", markerFile, error);
+                    return ErrorCode(error.ReadValue(),
+                        wformatString(StringResource::Get(IDS_HOSTING_ExtractArchiveFailed), src, dest, error.ErrorCodeValueToString(), L"reading checksum file in destination directory"));
+                }
+
+                if (expectedChecksumValue == destinationChecksumValue)
+                {
+                    WriteInfo(ImageStoreLiteral, "ExtractArchive: checksum matched - skip overwrite: checksum='{0}'", destinationChecksumValue);
+                    return ErrorCodeValue::Success;
+                }
+                else
+                {
+                    WriteInfo(ImageStoreLiteral, "ExtractArchive: checksum mismatch - overwriting destination: expected='{0}' destination='{1}'", expectedChecksumValue, destinationChecksumValue);
+                }
+            }
+        } // end marker file exists
+
+        WriteInfo(ImageStoreLiteral, "ExtractArchive: deleting {0}", dest);
 
         error = Directory::Delete(dest, true); // recursive
+
         if (!error.IsSuccess())
         {
-            return error;
+            WriteError(ImageStoreLiteral, "ExtractArchive: delete of {0} failed: {1}", dest, error);
+            return ErrorCode(error.ReadValue(),
+                wformatString(StringResource::Get(IDS_HOSTING_ExtractArchiveFailed), src, dest, error.ErrorCodeValueToString(), L"deleting old contents of destination directory before extraction"));
         }
     }
 
-    WriteInfo(ImageStoreLiteral, "ExtractArchive: {0} to {1} overwrite={2}", src, dest, overwrite);
+    WriteInfo(
+        ImageStoreLiteral, 
+        "ExtractArchive: {0} to {1}: overwrite={2} checksum={3} ({4})", 
+        src, 
+        dest, 
+        overwrite, 
+        cacheChecksumObject,
+        expectedChecksumValue);
 
     error = Directory::ExtractArchive(src, dest);
 
     if (error.IsSuccess())
     {
-        error = File::Touch(Path::Combine(dest, *ArchiveMarkerFileName));
+        WriteInfo(ImageStoreLiteral, "ExtractArchive: extraction completed for src {0} destination {1}", src, dest);
+
+        if (!cacheChecksumObject.empty())
+        {
+            error = File::Copy(cacheChecksumObject, markerFile);
+        }
+        else
+        {
+            error = File::Touch(markerFile);
+        }
+    }
+    else
+    {
+        WriteError(ImageStoreLiteral, "ExtractArchive: extraction failed: {0}", error);
+        error = ErrorCode(error.ReadValue(),
+            wformatString(StringResource::Get(IDS_HOSTING_ExtractArchiveFailed), src, dest, error.ErrorCodeValueToString(), L"extracting archive"));
     }
 
     return error;

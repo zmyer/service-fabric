@@ -22,7 +22,7 @@ namespace Hosting2
             __in HostingSubsystem & hosting);
         virtual ~ApplicationHostManager();
 
-       Common::ErrorCode IsRegistered(std::wstring const & hostId, __out bool & isRegistered);
+        Common::ErrorCode IsRegistered(std::wstring const & hostId, __out bool & isRegistered);
 
        __declspec (property(get=Test_get_ApplicationHostRegistrationTable)) ApplicationHostRegistrationTableUPtr const & Test_ApplicationHostRegistrationTable;
         ApplicationHostRegistrationTableUPtr const & Test_get_ApplicationHostRegistrationTable() const { return registrationTable_; }
@@ -34,7 +34,7 @@ namespace Hosting2
         IFabricActivatorClientSPtr const & get_FabricActivator() const { return hosting_.FabricActivatorClientObj; }
 
         Common::AsyncOperationSPtr BeginActivateCodePackage(
-            CodePackageInstanceSPtr const & codePackageInstance,                        
+            CodePackageInstanceSPtr const & codePackageInstance,
             Common::TimeSpan const timeout,
             Common::AsyncCallback const & callback,
             Common::AsyncOperationSPtr const & parent);
@@ -72,12 +72,17 @@ namespace Hosting2
         Common::ErrorCode EndGetContainerInfo(
             Common::AsyncOperationSPtr const & operation,
             __out wstring & containerInfo);
-        
+
+        void SendDependentCodePackageEvent(
+            CodePackageEventDescription const & eventDescription,
+            CodePackageActivationId const & codePackageActivationId);
+
         void TerminateCodePackage(CodePackageActivationId const & activationId);
 
         Common::ErrorCode TerminateCodePackageExternally(CodePackageActivationId const & activationId);
 
         void OnApplicationHostTerminated(
+            Common::ActivityDescription const & activityDescription,
             std::wstring const & hostId,
             DWORD exitCode);
 
@@ -87,6 +92,16 @@ namespace Hosting2
             Common::AsyncOperationSPtr const & parent);
         Common::ErrorCode EndTerminateServiceHost(
             Common::AsyncOperationSPtr const & operation);
+
+        Common::AsyncOperationSPtr BeginApplicationHostCodePackageOperation(
+            ApplicationHostCodePackageOperationRequest const & request,
+            Common::AsyncCallback const & callback,
+            Common::AsyncOperationSPtr const & parent);
+
+        Common::ErrorCode EndApplicationHostCodePackageOperation(
+            Common::AsyncOperationSPtr const & operation);
+
+        Common::ErrorCode FindApplicationHost(std::wstring const & codePackageInstanceId, __out ApplicationHostProxySPtr & hostProxy);
 
     protected:
          virtual Common::AsyncOperationSPtr OnBeginOpen(
@@ -111,6 +126,14 @@ namespace Hosting2
             __in Transport::Message & message, 
             __in Transport::IpcReceiverContextUPtr & context);
 
+        void ProcessApplicationHostCodePackageOperationRequest(
+            __in Transport::Message & message,
+            __in Transport::IpcReceiverContextUPtr && context);
+
+        void SendApplicationHostCodePackageOperationReply(
+            ErrorCode error,
+            __in Transport::IpcReceiverContextUPtr && context);
+
         void ProcessGetFabricProcessSidRequest(
             __in Transport::Message & message,
             __in Transport::IpcReceiverContextUPtr & context);
@@ -118,15 +141,16 @@ namespace Hosting2
         void ProcessStartRegisterApplicationHostRequest(
             __in Transport::Message & message, 
             __in Transport::IpcReceiverContextUPtr & context);
+
         void SendStartRegisterApplicationHostReply(
             StartRegisterApplicationHostRequest const & requestBody,
             Common::ErrorCode const error,
             __in Transport::IpcReceiverContextUPtr & context);
 
-
         void ProcessFinishRegisterApplicationHostRequest(
             __in Transport::Message & message, 
             __in Transport::IpcReceiverContextUPtr & context);
+
         void SendFinishRegisterApplicationHostReply(
             FinishRegisterApplicationHostRequest const & requestBody,
             Common::ErrorCode const error,
@@ -140,6 +164,7 @@ namespace Hosting2
         void ProcessUnregisterApplicationHostRequest(
             __in Transport::Message & message,
             __in Transport::IpcReceiverContextUPtr & context);
+
         void SendUnregisterApplicationHostReply(
             UnregisterApplicationHostRequest const & requestBody,
             Common::ErrorCode const error,
@@ -148,6 +173,7 @@ namespace Hosting2
         void ProcessCodePackageTerminationNotification(
             __in Transport::Message & message,
             __in Transport::IpcReceiverContextUPtr & context);
+
         void SendCodePackageTerminationNotificationReply(
             CodePackageTerminationNotificationRequest const & requestBody,
             __in Transport::IpcReceiverContextUPtr & context);
@@ -155,6 +181,7 @@ namespace Hosting2
         void ProcessRegisterResourceMonitorService(
             __in Transport::Message & message,
             __in Transport::IpcReceiverContextUPtr & context);
+
         void SendRegisterResourceMonitorServiceReply(
             __in Transport::IpcReceiverContextUPtr & context);
 
@@ -163,11 +190,15 @@ namespace Hosting2
 
         // this method is called when a registered application host is unregistered either by 
         // sending unregister request or as part of handling its termination
-        void OnApplicationHostUnregistered(std::wstring const & hostId);
+        void OnApplicationHostUnregistered(Common::ActivityDescription const & activityDescription, std::wstring const & hostId);
        
         void OnActivatedApplicationHostTerminated(Common::EventArgs const & eventArgs);
+
         // this method is called when a registered application host process terminates
-        void OnRegisteredApplicationHostTerminated(std::wstring const & hostId, Common::ErrorCode const & waitResult);
+        void OnRegisteredApplicationHostTerminated(
+            Common::ActivityDescription const & activityDescription, 
+            std::wstring const & hostId, 
+            Common::ErrorCode const & waitResult);
 
         // this method is called when user is reporting health via IPC channel
         void ReportHealthReportMessageHandler(Transport::Message & message, Transport::IpcReceiverContextUPtr && context);
@@ -182,6 +213,7 @@ namespace Hosting2
         class UpdateCodePackageContextAsyncOperation;
         class TerminateServiceHostAsyncOperation;
         class GetContainerInfoAsyncOperation;
+        class ApplicationHostCodePackageAsyncOperation;
 
         friend class ApplicationHostProxy;
 
@@ -189,6 +221,7 @@ namespace Hosting2
         HostingSubsystem & hosting_;
         ApplicationHostRegistrationTableUPtr registrationTable_;
         ApplicationHostActivationTableUPtr activationTable_;
+        Common::RwLock updateContextlock_;
 
         DWORD processId_;
         std::wstring processSid_;

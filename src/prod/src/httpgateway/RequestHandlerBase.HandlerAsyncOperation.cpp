@@ -17,8 +17,22 @@ void RequestHandlerBase::HandlerAsyncOperation::OnStart(AsyncOperationSPtr const
     wstring urlSuffix = MessageContext.GetSuffix();
     wstring rawUrl = MessageContext.GetUrl();
     wstring const& verb = MessageContext.GetVerb();
+    ErrorCode error = ErrorCodeValue::Success;
 
-    if (!GatewayUri::TryParse(owner_.validHandlerUris, verb, rawUrl, urlSuffix, uri_))
+    auto hstsHeaderValue = HttpGatewayConfig::GetConfig().HttpStrictTransportSecurityHeader;
+    if (!hstsHeaderValue.empty())
+    {
+        error = MessageContext.SetResponseHeader(Constants::HSTSHeader, hstsHeaderValue);
+        if (!error.IsSuccess())
+        {
+            WriteInfo(TraceType, "SetHSTSResponseHeader failed with error- {0}", error);
+
+            OnError(thisSPtr, HttpCommon::HttpStatusCode::InternalServerError, L"Set Strict-Transport-Security header failed");
+            return;
+        }
+    }
+
+    if (!GatewayUri::TryParse(owner_.validHandlerUris, verb, rawUrl, urlSuffix, uri_, owner_.allowHierarchicalEntityKeys))
     {
         WriteInfo(TraceType, "Invalid URL - {0}", rawUrl);
 
@@ -31,7 +45,7 @@ void RequestHandlerBase::HandlerAsyncOperation::OnStart(AsyncOperationSPtr const
     //admin client is not forwarded by a rogue cluster to target cluster that it is not
     //intented for
     wstring clusterId;
-    auto error = MessageContext.GetRequestHeader(Constants::ClusterIdHeader, clusterId);
+    error = MessageContext.GetRequestHeader(Constants::ClusterIdHeader, clusterId);
     if (error.IsSuccess())
     {
         auto expectedId = PaasConfig::GetConfig().ClusterId;
@@ -75,9 +89,22 @@ void RequestHandlerBase::HandlerAsyncOperation::OnAccessCheckComplete(__in Async
     auto error = owner_.server_.EndCheckAccess(operation, statusCode, authHeaderName, authHeaderValue, role);
     if (!error.IsSuccess())
     {
+        wstring remoteAddress;
+        MessageContext.GetRemoteAddress(remoteAddress);
+
+        WriteInfo(
+            TraceType,
+            "CheckAccess failed for URL: {0}, from {1}, operation: {2}, responding with ErrorCode: {3} authheader: {4}:{5}, ClientRequestId: {6}",
+            MessageContext.GetUrl(),
+            remoteAddress,
+            Uri.Verb,
+            statusCode,
+            authHeaderName,
+            authHeaderValue,
+            MessageContext.GetClientRequestId());
+
         if (error.IsError(ErrorCodeValue::InvalidCredentials))
         {
-            WriteInfo(TraceType, "CheckAccess failed, responding with ErrorCode - {0} authheader -{1}:{2}", statusCode, authHeaderName, authHeaderValue);
             if (!authHeaderName.empty())
             {
                 MessageContext.SetResponseHeader(authHeaderName, authHeaderValue);

@@ -34,6 +34,8 @@ namespace Data
                 __in PhysicalLogRecord & invalidPhysicalLogRecord,
                 __in KAllocator & allocator);
 
+            virtual std::wstring ToString() const override;
+
         protected:
 
             void Read(
@@ -43,7 +45,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite, 
+                __in bool forceRecomputeOffsets) override;
 
         private:
 

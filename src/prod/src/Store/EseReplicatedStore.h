@@ -77,6 +77,9 @@ namespace Store
 
         virtual ~EseReplicatedStore();
 
+        static std::wstring CreateLocalStoreRootDirectory(std::wstring const & path, Common::Guid const & partitionId);
+        static std::wstring CreateLocalStoreDatabaseDirectory(std::wstring const & root, FABRIC_REPLICA_ID);
+
         std::wstring GetLocalStoreRootDirectory() override;
         std::wstring GetFileStreamFullCopyRootDirectory() override;
 

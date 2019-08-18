@@ -51,8 +51,11 @@ namespace Query
         {
         public:
             static Common::GlobalWString DeploymentName;
+            static Common::GlobalWString InstanceName;
             static Common::GlobalWString ApplicationDefinitionKindFilter;
             static Common::GlobalWString ApplicationTypeDefinitionKindFilter;
+            static Common::GlobalWString DeploymentTypeFilter;
+            static Common::GlobalWString InstanceIdFilter;
         };
 
         class Service
@@ -66,6 +69,7 @@ namespace Query
             static Common::GlobalWString Correlations;
             static Common::GlobalWString Metrics;
             static Common::GlobalWString ServiceTypeId;
+            static Common::GlobalWString ServiceNames;
         };
 
         class ServiceType
@@ -183,12 +187,33 @@ namespace Query
             static Common::GlobalWString StateFilter;
             static Common::GlobalWString TypeFilter;
         };
-        
+
         class ContainerInfo
         {
         public:
             static Common::GlobalWString InfoTypeFilter;
             static Common::GlobalWString InfoArgsFilter;
+            static Common::GlobalWString ContainerName;
+        };
+
+	class VolumeResource
+        {
+        public:
+            static Common::GlobalWString VolumeName;
+        };
+
+        class Network
+        {
+        public:
+            static Common::GlobalWString NetworkName;
+            static Common::GlobalWString NetworkType;
+            static Common::GlobalWString NetworkStatusFilter;
+        };
+
+        class GatewayResource
+        {
+        public:
+            static Common::GlobalWString GatewayName;
         };
     }
 }

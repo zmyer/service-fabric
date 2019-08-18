@@ -22,7 +22,10 @@ ServicePackageDescription::ServicePackageDescription()
     Diagnostics(),
     ManifestChecksum(),
     ContentChecksum(),
-    ResourceGovernanceDescription()
+    ResourceGovernanceDescription(),
+    SFRuntimeAccessDescription(),
+    ContainerPolicyDescription(),
+    NetworkPolicies()
 {
 }
 
@@ -39,7 +42,10 @@ ServicePackageDescription::ServicePackageDescription(ServicePackageDescription c
     Diagnostics(other.Diagnostics),
     ManifestChecksum(other.ManifestChecksum),
     ContentChecksum(other.ContentChecksum),
-    ResourceGovernanceDescription(other.ResourceGovernanceDescription)
+    ResourceGovernanceDescription(other.ResourceGovernanceDescription),
+    SFRuntimeAccessDescription(other.SFRuntimeAccessDescription),
+    ContainerPolicyDescription(other.ContainerPolicyDescription),
+    NetworkPolicies(other.NetworkPolicies)
 {
 }
 
@@ -56,7 +62,10 @@ ServicePackageDescription::ServicePackageDescription(ServicePackageDescription &
     Diagnostics(move(other.Diagnostics)),
     ManifestChecksum(move(other.ManifestChecksum)),
     ContentChecksum(move(other.ContentChecksum)),
-    ResourceGovernanceDescription(move(other.ResourceGovernanceDescription))
+    ResourceGovernanceDescription(move(other.ResourceGovernanceDescription)),
+    SFRuntimeAccessDescription(move(other.SFRuntimeAccessDescription)),
+    ContainerPolicyDescription(move(other.ContainerPolicyDescription)),
+    NetworkPolicies(move(other.NetworkPolicies))
 {
 }
 
@@ -77,6 +86,9 @@ ServicePackageDescription const & ServicePackageDescription::operator = (Service
         this->ManifestChecksum = other.ManifestChecksum;
         this->ContentChecksum = other.ContentChecksum;
         this->ResourceGovernanceDescription = other.ResourceGovernanceDescription;
+        this->SFRuntimeAccessDescription = other.SFRuntimeAccessDescription;
+        this->ContainerPolicyDescription = other.ContainerPolicyDescription;
+        this->NetworkPolicies = other.NetworkPolicies;
     }
 
     return *this;
@@ -99,6 +111,9 @@ ServicePackageDescription const & ServicePackageDescription::operator = (Service
         this->ManifestChecksum = move(other.ManifestChecksum);
         this->ContentChecksum = move(other.ContentChecksum);
         this->ResourceGovernanceDescription = move(other.ResourceGovernanceDescription);
+        this->SFRuntimeAccessDescription = move(other.SFRuntimeAccessDescription);
+        this->ContainerPolicyDescription = move(other.ContainerPolicyDescription);
+        this->NetworkPolicies = move(other.NetworkPolicies);
     }
 
     return *this;
@@ -114,6 +129,10 @@ void ServicePackageDescription::WriteTo(TextWriter & w, FormatOptions const &) c
     
     w.Write("ResourceGovernanceDescription { ");
     w.Write("{0}", ResourceGovernanceDescription);
+    w.Write("}, ");
+
+    w.Write("ContainerPolicyDescription { ");
+    w.Write("{0}", ContainerPolicyDescription);
     w.Write("}, ");
 
     w.Write("DigestedServiceTypes = {");
@@ -147,6 +166,14 @@ void ServicePackageDescription::WriteTo(TextWriter & w, FormatOptions const &) c
 
     w.Write("Diagnostics = {");
     w.Write("{0}", this->Diagnostics);
+    w.Write("}, ");
+    
+    w.Write("SFRuntimeAccessDescription = {");
+    w.Write("{0}", this->SFRuntimeAccessDescription);
+    w.Write("}, ");
+
+    w.Write("NetworkPolicies = {");
+    w.Write("{0}", this->NetworkPolicies);
     w.Write("}, ");
 
     w.Write("ManifestChecksum = {0}", ManifestChecksum);
@@ -197,6 +224,10 @@ void ServicePackageDescription::ReadFromXml(
 
     ParseResourceGovernanceDescription(xmlReader);
 
+    ParseContainerPolicyDescription(xmlReader);
+
+    ParseServiceFabricRuntimeAccessDescription(xmlReader);
+
     ParseDigestedServiceTypes(xmlReader);
 
     ParseDigestedCodePackages(xmlReader);
@@ -207,12 +238,25 @@ void ServicePackageDescription::ReadFromXml(
 
     ParseDigestedResources(xmlReader);
 
+    ParseNetworkPolicies(xmlReader);
+
     ParseDiagnostics(xmlReader);
 
     xmlReader->ReadEndElement();
 
     // Change RG settings: if user did not provide limits calculated them from DigestedCodePackages
     ResourceGovernanceDescription.SetMemoryInMB(DigestedCodePackages);
+}
+
+void ServicePackageDescription::ParseServiceFabricRuntimeAccessDescription(
+    XmlReaderUPtr const& xmlReader)
+{
+    if (xmlReader->IsStartElement(
+        *SchemaNames::Element_ServiceFabricRuntimeAccessPolicy,
+        *SchemaNames::Namespace))
+    {
+        this->SFRuntimeAccessDescription.ReadFromXml(xmlReader);
+    }
 }
 
 void ServicePackageDescription::ParseResourceGovernanceDescription(
@@ -223,6 +267,17 @@ void ServicePackageDescription::ParseResourceGovernanceDescription(
         *SchemaNames::Namespace))
     {
         this->ResourceGovernanceDescription.ReadFromXml(xmlReader);
+    }
+}
+
+void ServicePackageDescription::ParseContainerPolicyDescription(
+        XmlReaderUPtr const& xmlReader)
+{
+    if (xmlReader->IsStartElement(
+            *SchemaNames::Element_ServicePackageContainerPolicy,
+            *SchemaNames::Namespace))
+    {
+        this->ContainerPolicyDescription.ReadFromXml(xmlReader);
     }
 }
 
@@ -305,6 +360,16 @@ void ServicePackageDescription::ParseDigestedResources(
     this->DigestedResources.ReadFromXml(xmlReader);
 }
 
+void ServicePackageDescription::ParseNetworkPolicies(Common::XmlReaderUPtr const & xmlReader)
+{
+    if (xmlReader->IsStartElement(
+        *SchemaNames::Element_NetworkPolicies,
+        *SchemaNames::Namespace))
+    {
+        this->NetworkPolicies.ReadFromXml(xmlReader);
+    }
+}
+
 void ServicePackageDescription::ParseDiagnostics(
     XmlReaderUPtr const & xmlReader)
 {
@@ -318,97 +383,171 @@ void ServicePackageDescription::ParseDiagnostics(
 
 ErrorCode ServicePackageDescription::WriteToXml(XmlWriterUPtr const & xmlWriter)
 {	//ServicePackage
-	ErrorCode er = xmlWriter->WriteStartElement(*SchemaNames::Element_ServicePackage, L"", *SchemaNames::Namespace);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	xmlWriter->Flush();
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_RolloutVersion, this->RolloutVersionValue.ToString());
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Name, this->PackageName);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ManifestVersion, this->ManifestVersion);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ManifestChecksum, this->ManifestChecksum);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ContentChecksum, this->ContentChecksum);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
+    ErrorCode er = xmlWriter->WriteStartElement(*SchemaNames::Element_ServicePackage, L"", *SchemaNames::Namespace);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_RolloutVersion, this->RolloutVersionValue.ToString());
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_Name, this->PackageName);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ManifestVersion, this->ManifestVersion);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ManifestChecksum, this->ManifestChecksum);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    er = xmlWriter->WriteAttribute(*SchemaNames::Attribute_ContentChecksum, this->ContentChecksum);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
 
-	xmlWriter->Flush();
+    xmlWriter->Flush();
     er = ResourceGovernanceDescription.WriteToXml(xmlWriter);
     if (!er.IsSuccess())
     {
         return er;
     }
     xmlWriter->Flush();
-	er = DigestedServiceTypes.WriteToXml(xmlWriter);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	xmlWriter->Flush();
-	for (size_t i = 0; i < DigestedCodePackages.size(); ++i)
-	{
-		er = DigestedCodePackages[i].WriteToXml(xmlWriter);
-		if (!er.IsSuccess())
-		{
-			return er;
-		}
-	}
-	xmlWriter->Flush();
-	for (size_t j = 0; j < DigestedConfigPackages.size(); ++j)
-	{
-		er = DigestedConfigPackages[j].WriteToXml(xmlWriter);
-		if (!er.IsSuccess())
-		{
-			return er;
-		}
-	}
-	xmlWriter->Flush();
-	for (size_t k = 0; k < DigestedDataPackages.size(); k++)
-	{
-		er = DigestedDataPackages[k].WriteToXml(xmlWriter);
-		if (!er.IsSuccess())
-		{
-			return er;
-		}
-	}
+    er = ContainerPolicyDescription.WriteToXml(xmlWriter);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    er = DigestedServiceTypes.WriteToXml(xmlWriter);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    for (size_t i = 0; i < DigestedCodePackages.size(); ++i)
+    {
+        er = DigestedCodePackages[i].WriteToXml(xmlWriter);
+        if (!er.IsSuccess())
+        {
+            return er;
+        }
+    }
+    xmlWriter->Flush();
+    for (size_t j = 0; j < DigestedConfigPackages.size(); ++j)
+    {
+        er = DigestedConfigPackages[j].WriteToXml(xmlWriter);
+        if (!er.IsSuccess())
+        {
+            return er;
+        }
+    }
+    xmlWriter->Flush();
+    for (size_t k = 0; k < DigestedDataPackages.size(); k++)
+    {
+        er = DigestedDataPackages[k].WriteToXml(xmlWriter);
+        if (!er.IsSuccess())
+        {
+            return er;
+        }
+    }
 
-	xmlWriter->Flush();
-	er = DigestedResources.WriteToXml(xmlWriter);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	xmlWriter->Flush();
-	er = Diagnostics.WriteToXml(xmlWriter);
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	xmlWriter->Flush();
-	//</ServicePackage>
-	er =  xmlWriter->WriteEndElement();
+    xmlWriter->Flush();
+    er = DigestedResources.WriteToXml(xmlWriter);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    er = NetworkPolicies.WriteToXml(xmlWriter);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    er = Diagnostics.WriteToXml(xmlWriter);
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    xmlWriter->Flush();
+    //</ServicePackage>
+    er =  xmlWriter->WriteEndElement();
 
-	if (!er.IsSuccess())
-	{
-		return er;
-	}
-	return xmlWriter->Flush();
+    if (!er.IsSuccess())
+    {
+        return er;
+    }
+    return xmlWriter->Flush();
+}
+
+std::map<std::wstring, std::wstring> ServicePackageDescription::GetEndpointNetworkMap(wstring const & networkTypeStr) const
+{
+    std::map<std::wstring, std::wstring> endpointNetworkMap;
+
+    // Create a map of endpoints and network, for the network type passed in.
+    for (auto & cnp : NetworkPolicies.ContainerNetworkPolicies)
+    {
+        if (this->MatchNetworkTypeRef(networkTypeStr, cnp.NetworkRef))
+        {
+            for (auto & endpoint : cnp.EndpointBindings)
+            {
+                auto iter = endpointNetworkMap.find(endpoint.EndpointRef);
+                if (iter == endpointNetworkMap.end())
+                {
+                    endpointNetworkMap.insert(make_pair(endpoint.EndpointRef, cnp.NetworkRef));
+                }
+            }
+        }
+    }
+
+    return endpointNetworkMap;
+}
+
+std::vector<std::wstring> ServicePackageDescription::GetNetworks(wstring const & networkTypeStr) const
+{
+    std::vector<std::wstring> networks;
+
+    for (auto & cnp : NetworkPolicies.ContainerNetworkPolicies)
+    {
+        if (this->MatchNetworkTypeRef(networkTypeStr, cnp.NetworkRef))
+        {
+            networks.push_back(cnp.NetworkRef);
+        }
+    }
+
+    return networks;
+}
+
+bool ServicePackageDescription::MatchNetworkTypeRef(std::wstring const & networkTypeStr, std::wstring const & networkRef) const
+{
+    if (StringUtility::CompareCaseInsensitive(networkTypeStr, NetworkType::IsolatedStr) == 0)
+    {
+        if (StringUtility::CompareCaseInsensitive(networkRef, NetworkType::OpenStr) != 0 &&
+            StringUtility::CompareCaseInsensitive(networkRef, NetworkType::OtherStr) != 0)
+        {
+            return true;
+        }
+    }
+    else if (StringUtility::CompareCaseInsensitive(networkTypeStr, NetworkType::OpenStr) == 0 &&
+        StringUtility::CompareCaseInsensitive(networkRef, NetworkType::OpenStr) == 0)
+    {
+        return true;
+    }
+    else if (StringUtility::CompareCaseInsensitive(networkTypeStr, NetworkType::OtherStr) == 0 &&
+        StringUtility::CompareCaseInsensitive(networkRef, NetworkType::OtherStr) == 0)
+    {
+        return true;
+    }
+
+    return false;
 }

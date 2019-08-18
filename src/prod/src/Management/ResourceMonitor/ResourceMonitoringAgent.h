@@ -21,7 +21,7 @@ namespace ResourceMonitor
         DENY_COPY(ResourceMonitoringAgent)
     public:
 
-        ResourceMonitoringAgent(IFabricRuntime * & pRuntime);
+        ResourceMonitoringAgent(Hosting2::ComFabricRuntime * pRuntime, Transport::IpcClient & ipcClient);
         virtual ~ResourceMonitoringAgent();
 
     public:
@@ -61,6 +61,7 @@ namespace ResourceMonitor
     private:
 
         std::map<std::wstring, ResourceDescription> hostsToMonitor_;
+        std::map<Common::Guid, ResourceDescription> partitionsToMonitor_;
         // Used to send resource measure requests to fabric host
         std::unique_ptr<Transport::IpcClient> fabricHostClient_;
         // ID of application host where this service is running.
@@ -81,7 +82,7 @@ namespace ResourceMonitor
         class OpenAsyncOperation;
         class CloseAsyncOperation;
 
-        IFabricRuntime * pRuntime_;
+        Hosting2::ComFabricRuntime * pRuntime_;
 
         Common::RwLock lock_;
 

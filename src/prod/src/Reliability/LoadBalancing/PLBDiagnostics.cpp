@@ -497,7 +497,8 @@ bool PLBDiagnostics::TrackUnfixableConstraint(ConstraintViolation const & constr
         }
     }
 
-
+    // fixAttempts will be 1 if config ConstraintViolationHealthReportLimit is 0
+    // As below we check % ConstraintViolationHealthReportLimit => it can lead to division by 0 error
     TESTASSERT_IF(fixAttempts == 1, "Coding Error: Number of Cached Constraint Fix Attempts is inconsistent.");
 
     if ((healthClient_) && (cachedConstraintDiagnosticsTableSPtr_->at(sName).count(cHash) ? (cachedConstraintDiagnosticsTableSPtr_->at(sName).at(cHash).first > PLBConfig::GetConfig().ConstraintViolationHealthReportLimit) : false))
@@ -547,7 +548,8 @@ bool PLBDiagnostics::UpdateConstraintFixFailureLedger(PlacementReplica const* it
 
     auto rHash = itReplica->ReplicaHash(true) + StringUtility::ToWString(it->Type);
 
-    size_t offset = 0;
+    // Change the offset in test mode so that we can enable running diagnostics
+    size_t offset = PLBConfig::GetConfig().IsTestMode ? 1 : 0;
 
     if (constraintDiagnosticsTableSPtr_->count(itReplica->Partition->Service->Name))
     {
@@ -731,7 +733,19 @@ void PLBDiagnostics::ReportServiceHealth(
     {
         attributeList.AddAttribute(*ServiceModel::HealthAttributeNames::ApplicationName, move(serviceDescription.ApplicationName));
     }
-    attributeList.AddAttribute(*ServiceModel::HealthAttributeNames::ServiceTypeName, move(serviceDescription.ServiceTypeName));
+
+    // Obtaining service type name from qualified service type name
+    ServiceModel::ServiceTypeIdentifier serviceTypeIdentifier;
+    auto parseError = ServiceModel::ServiceTypeIdentifier::FromString(serviceDescription.ServiceTypeName, serviceTypeIdentifier);
+    if (parseError.IsSuccess())
+    {
+        attributeList.AddAttribute(*ServiceModel::HealthAttributeNames::ServiceTypeName, serviceTypeIdentifier.ServiceTypeName);
+    }
+    else
+    {
+        Trace.HealthReportingFailure(parseError);
+        return;
+    }
 
     ServiceModel::HealthReport serviceHealthReport = HealthReport::CreateSystemHealthReport(
         reportCode,
@@ -1099,6 +1113,9 @@ std::wstring PLBDiagnostics::ShortFriendlyConstraintName(IConstraint::Enum type)
         case IConstraint::ApplicationCapacity:
             return wformatString("ApplicationCapacity");
             break;
+        case IConstraint::Throttling:
+            return L"Throttling";
+            break;
         default:
             return wformatString("Unknown Constraint Type");
     }
@@ -1149,6 +1166,9 @@ std::wstring PLBDiagnostics::FriendlyConstraintName(IConstraint::Enum type, Plac
             break;
         case IConstraint::ApplicationCapacity:
             return wformatString("ApplicationCapacity -- Nodes with sufficient remaining Application-Specific Capacities");
+            break;
+        case IConstraint::Throttling:
+            return L"Throttling";
             break;
         default:
             return wformatString("Unknown Constraint Type");
@@ -1361,6 +1381,8 @@ std::wstring PLBDiagnostics::ConstraintDetails(IConstraint::Enum type, Placement
     case IConstraint::ApplicationCapacity:
         return wformatString("ApplicationCapacity");
         break;
+    case IConstraint::Throttling:
+        return wformatString("Throttling");
     default:
         return wformatString("Unknown Constraint Type");
     }
@@ -1369,7 +1391,7 @@ std::wstring PLBDiagnostics::ConstraintDetails(IConstraint::Enum type, Placement
 std::wstring PLBDiagnostics::ReplicaDetailString(PlacementReplica const* r)
 {
     return L" " + Environment::NewLine
-        + (L"TargetReplicaSetSize: " + StringUtility::ToWString(r->Partition->Service->TargetReplicaSetSize) + Environment::NewLine)
+        + (L"TargetReplicaSetSize: " + StringUtility::ToWString(r->Partition->TargetReplicaSetSize) + Environment::NewLine)
         + ((!(r->Partition->Service->DiagnosticsData.placementConstraints_.empty())) ? (L"Placement Constraint: " + r->Partition->Service->DiagnosticsData.placementConstraints_ + Environment::NewLine) : L"Placement Constraint: N/A" + Environment::NewLine)
         + ((r->Partition->Service->DependedService) ? (L"Parent Service: " + r->Partition->Service->DependedService->Name + Environment::NewLine + Environment::NewLine) : L"Parent Service: N/A" + Environment::NewLine + Environment::NewLine)
         + L"Constraint Elimination Sequence:" + Environment::NewLine;
@@ -1378,7 +1400,7 @@ std::wstring PLBDiagnostics::ReplicaDetailString(PlacementReplica const* r)
 std::wstring PLBDiagnostics::PartitionDetailString(PartitionEntry const* p)
 {
     return L" " + Environment::NewLine
-        + (L"TargetReplicaSetSize: " + StringUtility::ToWString(p->Service->TargetReplicaSetSize) + Environment::NewLine)
+        + (L"TargetReplicaSetSize: " + StringUtility::ToWString(p->TargetReplicaSetSize) + Environment::NewLine)
         + ((!(p->Service->DiagnosticsData.placementConstraints_.empty())) ? (L"Placement Constraint: " + p->Service->DiagnosticsData.placementConstraints_ + Environment::NewLine) : L"Placement Constraint: N/A" + Environment::NewLine)
         + ((p->Service->DependedService) ? (L"Parent Service: " + p->Service->DependedService->Name + Environment::NewLine + Environment::NewLine) : L"Parent Service: N/A" + Environment::NewLine + Environment::NewLine)
         + L"Constraint Elimination Sequence:" + Environment::NewLine;

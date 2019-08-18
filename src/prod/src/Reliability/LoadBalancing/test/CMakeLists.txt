@@ -7,6 +7,7 @@ add_definitions(-DNO_INLINE_EVENTDESCCREATE)
 
 add_executable(${exe_LoadBalancing.Test}
   # test code
+  ../PLBAutoscaling.Test.cpp
   ../PLBAuxiliaryStructures.Test.cpp
   ../PLBConstraintCheck.Test.cpp
   ../PLBScheduler.Test.cpp
@@ -25,6 +26,7 @@ add_executable(${exe_LoadBalancing.Test}
   ../PLBResourceGovernance.Test.cpp
   ../FailoverUnit.Test.cpp
   ../btest.cpp
+  ../PLBThrottling.Test.cpp
 )
 
 add_precompiled_header(${exe_LoadBalancing.Test} ../stdafx.h)
@@ -60,8 +62,6 @@ target_link_libraries(${exe_LoadBalancing.Test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(

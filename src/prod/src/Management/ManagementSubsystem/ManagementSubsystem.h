@@ -16,9 +16,14 @@
 #include "Management/FaultAnalysisService/Constants.h"
 #include "Management/UpgradeOrchestrationService/UpgradeOrchestrationServiceConfig.h"
 #include "Management/UpgradeOrchestrationService/Constants.h"
+#include "Management/CentralSecretService/CentralSecretServiceConfig.h"
+#include "Management/LocalSecretService/LocalSecretServiceConfig.h"
+#include "Management/CentralSecretService/Constants.h"
 #include "Management/DnsService/include/DnsEventSource.h"
 #include "Management/DnsService/config/DnsServiceConfig.h"
 #include "Management/ResourceMonitor/config/ResourceMonitorServiceConfig.h"
+#include "Management/GatewayResourceManager/GatewayResourceManagerConfig.h"
+#include "Management/GatewayResourceManager/Constants.h"
 
 namespace Management
 {
@@ -83,9 +88,20 @@ namespace Management
         __declspec(property(get = get_IsUpgradeOrchestrationServiceEnabled)) bool IsUpgradeOrchestrationServiceEnabled;
         bool get_IsUpgradeOrchestrationServiceEnabled() const;
 
+        __declspec(property(get = get_IsCentralSecretServiceEnabled)) bool IsCentralSecretServiceEnabled;
+        bool get_IsCentralSecretServiceEnabled() const;
+
+        __declspec(property(get = get_IsLocalSecretServiceEnabled)) bool IsLocalSecretServiceEnabled;
+        bool get_IsLocalSecretServiceEnabled() const;
+
         __declspec(property(get = get_IsDnsServiceEnabled)) bool IsDnsServiceEnabled;
         bool get_IsDnsServiceEnabled() const;
 
+        __declspec(property(get = get_IsEventStoreServiceEnabled)) bool IsEventStoreServiceEnabled;
+        bool get_IsEventStoreServiceEnabled() const;
+
+        __declspec(property(get = get_IsGatewayResourceManagerEnabled)) bool IsGatewayResourceManagerEnabled;
+        bool get_IsGatewayResourceManagerEnabled() const;
         //
         // Cluster Manager Service
         //
@@ -131,7 +147,7 @@ namespace Management
         static Reliability::ServiceDescription CreateImageStoreServiceDescription();
 
         //
-        // Infrastructure Service, Upgrade Service, Token Validation Service
+        // Infrastructure Service, Upgrade Service, Token Validation, EventStore Service
         //
 
         Common::AsyncOperationSPtr BeginInitializeSystemServices(
@@ -146,13 +162,21 @@ namespace Management
         static Reliability::ServiceDescription CreateUpgradeOrchestrationServiceDescription();
         static Reliability::ServiceDescription CreateUpgradeServiceDescription(std::wstring const & serviceName);
         static Reliability::ServiceDescription CreateBackupRestoreServiceDescription();
+        static Reliability::ServiceDescription CreateCentralSecretServiceDescription();
         static Reliability::ServiceDescription CreateFaultAnalysisServiceDescription();
+        static Reliability::ServiceDescription CreateEventStoreServiceDescription();
 
         Common::AsyncOperationSPtr BeginCreateUpgradeOrchestrationService(
             Common::TimeSpan const,
             Common::AsyncCallback const &,
             Common::AsyncOperationSPtr const &);
         Common::ErrorCode EndCreateUpgradeOrchestrationService(Common::AsyncOperationSPtr const &);
+
+        Common::AsyncOperationSPtr BeginCreateCentralSecretService(
+            Common::TimeSpan const,
+            Common::AsyncCallback const &,
+            Common::AsyncOperationSPtr const &);
+        Common::ErrorCode EndCreateCentralSecretService(Common::AsyncOperationSPtr const &);
 
         Common::AsyncOperationSPtr BeginCreateFaultAnalysisService(
                Common::TimeSpan const,
@@ -165,6 +189,12 @@ namespace Management
             Common::AsyncCallback const &,
             Common::AsyncOperationSPtr const &);
         Common::ErrorCode EndCreateBackupRestoreService(Common::AsyncOperationSPtr const &);
+
+        Common::AsyncOperationSPtr BeginCreateEventStoreService(
+            Common::TimeSpan const,
+            Common::AsyncCallback const &,
+            Common::AsyncOperationSPtr const &);
+        Common::ErrorCode EndCreateEventStoreService(Common::AsyncOperationSPtr const &);
 
         Common::ErrorCode SetClusterSecurity(Transport::SecuritySettings const & value);
         Common::ErrorCode SetKeepAlive(ULONG keepAliveIntervalInSeconds);
@@ -182,11 +212,14 @@ namespace Management
         class CreateSystemServiceAsyncOperation;
         class DeleteSystemServiceAsyncOperation;
         class InitializeSystemServiceAsyncOperation;
+        class EventStoreServiceConfig;
 
         static void AddInfrastructureServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
         static void AddTokenValidationServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
         static void AddDnsServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
         static void AddResourceMonitorServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
+        static void AddLocalSecretServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
+        static void AddGatewayResourceManagerServiceDescription(std::wstring const & serviceName, __in std::vector<Reliability::ServiceDescription> &);
 
         std::unique_ptr<Impl> impl_;
     };

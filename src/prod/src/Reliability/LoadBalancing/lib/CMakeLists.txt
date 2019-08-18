@@ -13,6 +13,8 @@ set( LINUX_SOURCES
   ../ApplicationReservedLoads.cpp
   ../ApplicationPlacement.cpp
   ../ApplicationTotalLoad.cpp
+  ../AutoScaleStatistics.cpp
+  ../AutoScaler.cpp
   ../BalanceChecker.cpp
   ../BalanceCheckerCreator.cpp
   ../BoundedSet.cpp
@@ -57,6 +59,7 @@ set( LINUX_SOURCES
   ../PLBScheduler.cpp
   ../PLBSchedulerActionType.cpp
   ../PLBSchedulerAction.cpp
+  ../PLBStatistics.cpp
   ../PreferredLocationConstraint.cpp
   ../RandomDistribution.cpp
   ../ReplicaExclusionConstraint.cpp
@@ -90,6 +93,9 @@ set( LINUX_SOURCES
   ../ServicePackageDescription.cpp
   ../ServicePackage.cpp
   ../RGStatistics.cpp
+  ../DefragStatistics.cpp
+  ../InBuildCountPerNode.cpp
+  ../ThrottlingConstraint.cpp
 )
 
 include_directories("..")

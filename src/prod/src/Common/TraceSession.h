@@ -7,7 +7,8 @@
 
 namespace Common
 {
-    static const int ProvidersPerSession = 10;
+#ifndef PLATFORM_UNIX
+    static const int ProvidersPerSession = 11;
 
     namespace TraceSessionKind
     {
@@ -18,9 +19,11 @@ namespace Common
             Lease       = 2,
             AppInfo     = 3,
             Query       = 4,
-            Operational = 5
+            Operational = 5,
+            SFBDMiniport = 6
         };
     }
+#endif
 
     class TraceSession :
         public Common::TextTraceComponent<Common::TraceTaskCodes::Common>
@@ -34,12 +37,19 @@ namespace Common
 
         Common::ErrorCode StartTraceSessions();
         Common::ErrorCode StopTraceSessions();
-
+#ifndef PLATFORM_UNIX
         Common::ErrorCode StartTraceSession(TraceSessionKind::Enum traceSessionKind);
         Common::ErrorCode StopTraceSession(TraceSessionKind::Enum traceSessionKind);
-
+#endif
     private:
 
+        TraceSession();
+
+        HRESULT TraceResult(
+            std::wstring const & method,
+            HRESULT exitCode);
+
+#ifndef PLATFORM_UNIX
         struct DataCollectorSetInfo
         {
             TraceSessionKind::Enum TraceSessionKind;
@@ -55,16 +65,11 @@ namespace Common
             ULONG FlushIntervalInSeconds;
         };
 
-        TraceSession();
 
         unique_ptr<EVENT_TRACE_PROPERTIES, decltype(free)*> GetSessionProperties(DataCollectorSetInfo const & info, uint additionalBytes);
 
         HRESULT StartTraceSession(DataCollectorSetInfo const & info);
         HRESULT StopTraceSession(DataCollectorSetInfo const & info);
-
-        HRESULT TraceResult(
-            std::wstring const & method,
-            HRESULT exitCode);
 
         HRESULT TraceSession::Prepare(DataCollectorSetInfo const & info, BOOLEAN *runningLatestStatus);
 
@@ -75,8 +80,11 @@ namespace Common
         wstring TraceSession::GetTraceFolder(DataCollectorSetInfo const & info);
 
         int TraceSession::TraceSessionFilePathCompare(std::wstring const & a, std::wstring const & b);
-
+#else
+        HRESULT StartLinuxTraceSessions(int linuxTraceDiskBufferSizeInMB, bool keepExistingSFSession);
+#endif
     private:
+#ifndef PLATFORM_UNIX
         static const ULONG DefaultTraceBufferSizeInKB = 128;
         static const ULONG DefaultTraceFileSizeInMB = 64;
         static const ULONG DefaultTraceFlushIntervalInSeconds = 60;
@@ -87,6 +95,7 @@ namespace Common
 
         // Trace Provider GUIDS
         static Common::Global<Common::Guid> LeaseDriverGuid;
+        static Common::Global<Common::Guid> SFBDMiniportDriverGuid;
         static Common::Global<Common::Guid> KTLGuid;
         static Common::Global<Common::Guid> FabricGuid;
         static Common::Global<Common::Guid> MSFIGuid;
@@ -98,8 +107,10 @@ namespace Common
         static Common::Global<Common::Guid> SFPOSNodeAgentSFUtilityGuid;
         static Common::Global<Common::Guid> ProgrammingModel_ServicesGuid;
         static Common::Global<Common::Guid> ReliableCollectionGuid;
+        static Common::Global<Common::Guid> AzureFilesVolumeDriverGuid;
 
         static Common::GlobalWString FabricTraceFileName;
+        static Common::GlobalWString SFBDMiniportTraceFileName;
         static Common::GlobalWString LeaseTraceFileName;
         static Common::GlobalWString AppInfoTraceFileName;
         static Common::GlobalWString AppInfoTraceFolderName;
@@ -110,6 +121,7 @@ namespace Common
 
         static Common::GlobalWString FabricTraceSessionName;
         static Common::GlobalWString LeaseTraceSessionName;
+        static Common::GlobalWString SFBDMiniportTraceSessionName;
         static Common::GlobalWString AppInfoTraceSessionName;
         static Common::GlobalWString QueryTraceSessionName;
         static Common::GlobalWString FabricCountersSessionName;
@@ -123,5 +135,6 @@ namespace Common
         std::wstring testKeyword_;
         std::wstring tracePath_;
         BOOLEAN enableCircularTraceSession_;
+#endif
     };
 }

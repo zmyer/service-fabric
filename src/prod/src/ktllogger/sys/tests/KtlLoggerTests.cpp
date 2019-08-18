@@ -1719,6 +1719,93 @@ SetConfigurationTest(
         memoryThrottleLimits->WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_DefaultWriteBufferMemoryPoolMax;
     }
 
+
+    //
+    // Test 8.5a: SharedLogThrottleLimit above 100
+    //
+    {
+        configureContext->Reuse();
+        memoryThrottleLimits->SharedLogThrottleLimit = 101;
+
+        configureContext->StartConfigure(KtlLogManager::ConfigureMemoryThrottleLimits3,
+                                         inBuffer.RawPtr(),
+                                         result,
+                                         outBuffer,
+                                         NULL,
+                                         sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == STATUS_INVALID_PARAMETER);
+
+        //
+        // reset to defaults
+        //
+        memoryThrottleLimits->SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+    }
+
+    //
+    // Test 8.5b: SharedLogThrottleLimit zero
+    //
+    {
+        configureContext->Reuse();
+        memoryThrottleLimits->SharedLogThrottleLimit = 0;
+
+        configureContext->StartConfigure(KtlLogManager::ConfigureMemoryThrottleLimits3,
+                                         inBuffer.RawPtr(),
+                                         result,
+                                         outBuffer,
+                                         NULL,
+                                         sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == STATUS_INVALID_PARAMETER);
+
+        //
+        // reset to defaults
+        //
+        memoryThrottleLimits->SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+    }
+
+    {
+        configureContext->Reuse();
+        memoryThrottleLimits->SharedLogThrottleLimit = (ULONG)-32;
+
+        configureContext->StartConfigure(KtlLogManager::ConfigureMemoryThrottleLimits3,
+                                         inBuffer.RawPtr(),
+                                         result,
+                                         outBuffer,
+                                         NULL,
+                                         sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == STATUS_INVALID_PARAMETER);
+
+        //
+        // reset to defaults
+        //
+        memoryThrottleLimits->SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+    }
+    
+    
+    //
+    // Test 8.5c: SharedLogThrottleLimit 90%
+    //
+    {
+        configureContext->Reuse();
+        memoryThrottleLimits->SharedLogThrottleLimit = 90;
+
+        configureContext->StartConfigure(KtlLogManager::ConfigureMemoryThrottleLimits3,
+                                         inBuffer.RawPtr(),
+                                         result,
+                                         outBuffer,
+                                         NULL,
+                                         sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        //
+        // reset to defaults
+        //
+        memoryThrottleLimits->SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_DefaultSharedLogThrottleLimit;
+    }
+    
     //
     // Test 9: WriteBufferMemoryPoolMin is no limit but WriteBufferMemoryPoolMax is
     //         limited
@@ -11501,6 +11588,7 @@ ThrottledLockedMemoryTest(
         params.LogSpaceAllowed = AllowedLogSpace;
         params.HighestAsn = MaxWriteAsn;
         params.UseFixedRecordSize = FALSE;
+        params.WaitTimerInMs = 0;
         writeStress[i]->StartIt(&params,
                                 NULL,
                                 writeSyncs[i]);
@@ -11601,6 +11689,43 @@ ThrottledLockedMemoryTest(
     status = closeContainerSync.WaitForCompletion();
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
+
+
+    //
+    // Restore defaults
+    //
+    {
+        KtlLogManager::MemoryThrottleLimits* memoryThrottleLimits;
+        KtlLogManager::AsyncConfigureContext::SPtr configureContext2;
+        KBuffer::SPtr inBuffer;
+
+        status = logManager->CreateAsyncConfigureContext(configureContext2);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = KBuffer::Create(sizeof(KtlLogManager::MemoryThrottleLimits),
+                                 inBuffer,
+                                 *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        memoryThrottleLimits = (KtlLogManager::MemoryThrottleLimits*)inBuffer->GetBuffer();
+        memoryThrottleLimits->WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_DefaultWriteBufferMemoryPoolMax;
+        memoryThrottleLimits->WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_DefaultWriteBufferMemoryPoolMin;
+        memoryThrottleLimits->WriteBufferMemoryPoolPerStream = KtlLogManager::MemoryThrottleLimits::_DefaultWriteBufferMemoryPoolPerStream;
+        memoryThrottleLimits->PinnedMemoryLimit = KtlLogManager::MemoryThrottleLimits::_DefaultPinnedMemoryLimit;
+        memoryThrottleLimits->PeriodicFlushTimeInSec = KtlLogManager::MemoryThrottleLimits::_DefaultPeriodicFlushTimeInSec;
+        memoryThrottleLimits->PeriodicTimerIntervalInSec = KtlLogManager::MemoryThrottleLimits::_DefaultPeriodicTimerIntervalInSec;
+        memoryThrottleLimits->AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_DefaultAllocationTimeoutInMs;        
+
+        configureContext2->StartConfigure(KtlLogManager::ConfigureMemoryThrottleLimits,
+                                         inBuffer.RawPtr(),
+                                         result,
+                                         outBuffer,
+                                         NULL,
+                                         sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+    }
+    
     KtlLogManager::AsyncDeleteLogContainer::SPtr deleteContainerAsync;
 
     status = logManager->CreateAsyncDeleteLogContainerContext(deleteContainerAsync);
@@ -12947,7 +13072,7 @@ CloseTest(
                     {
                         break;
                     }
-                    KNt::YieldExecution();
+                    KNt::Sleep(0);
                 }
                 VERIFY_IS_TRUE(completionCounter.GetCount() == numberOperations*2);
 #endif
@@ -13257,7 +13382,7 @@ Close2Test(
             {
                 break;
             }
-            KNt::YieldExecution();
+            KNt::Sleep(0);
         }
         VERIFY_IS_TRUE(completionCounter.GetCount() == numberOperations*3);
 #endif
@@ -19520,7 +19645,11 @@ VOID DeleteAllContainersOnDisk(
     KServiceSynchronizer        sync;
     KtlLogManager::SPtr logManager;
 
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -19959,6 +20088,7 @@ DeletedDedicatedLogTest(
         VERIFY_IS_TRUE(status == STATUS_NOT_FOUND);
     }
 
+
     //
     // 6. Verify that after deleting the bad log can be recreated
     //
@@ -20051,6 +20181,50 @@ DeletedDedicatedLogTest(
         status = closeStreamSync.WaitForCompletion();
         VERIFY_IS_TRUE(NT_SUCCESS(status));
     }
+
+    //
+    // 9. Delete the dedicated log again and then reopen just the
+    //    stream and verify it is cleaned up correctly.
+    //
+    status = KVolumeNamespace::DeleteFileOrDirectory(rootPath, *g_Allocator, sync);
+    VERIFY_IS_TRUE((K_ASYNC_SUCCESS(status)));
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    {
+        KtlLogContainer::AsyncOpenLogStreamContext::SPtr openStreamAsync;
+        ULONG metadataLengthA;
+
+        status = logContainer->CreateAsyncOpenLogStreamContext(openStreamAsync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        openStreamAsync->StartOpenLogStream(logStreamId2,
+                                                &metadataLengthA,
+                                                logStream2,
+                                                NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+
+    //
+    // 10. Verify that the bad log stream fails open with correct error code
+    //
+    {
+        KtlLogContainer::AsyncOpenLogStreamContext::SPtr openStreamAsync;
+        ULONG metadataLengthA;
+
+        status = logContainer->CreateAsyncOpenLogStreamContext(openStreamAsync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        openStreamAsync->StartOpenLogStream(logStreamId2,
+                                                &metadataLengthA,
+                                                logStream2,
+                                                NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == STATUS_OBJECT_NAME_NOT_FOUND);
+    }   
 
     //
     // Delete the log container
@@ -20739,7 +20913,12 @@ VOID SetupTests(
         //
         // Access the log manager
         //
-        status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, LogManagers[i]);
+#ifdef UPASSTHROUGH
+        status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, LogManagers[i]);
+#else
+        status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, LogManagers[i]);
+#endif
+        
         VERIFY_IS_TRUE(NT_SUCCESS(status));
 
         status = LogManagers[i]->StartOpenLogManager(NULL, // ParentAsync
@@ -20896,9 +21075,11 @@ protected:
             case Initial:
             {
 Initial:
-                Status = KtlLogManager::Create(KTL_TAG_TEST,
-                                               *g_Allocator,
-                                               _LogManager);
+#ifdef UPASSTHROUGH
+                Status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, _LogManager);
+#else
+                Status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, _LogManager);
+#endif
                 VERIFY_IS_TRUE(NT_SUCCESS(Status));
                 
                 _State = OpenLogManager;
@@ -21021,7 +21202,12 @@ VOID ReuseLogManagerTest(
     // Test 1: Start a new log manager, create a container, stop log
     //         manager, restart log manager then open container
     //
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
+    
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -21073,7 +21259,11 @@ VOID ReuseLogManagerTest(
     //
     // Reopen container on a new log manager
     //
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -21122,7 +21312,11 @@ VOID ReuseLogManagerTest(
 
         for (ULONG i = 0; i < LogManagerCount; i++)
         {
-            status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManagers[i]);
+#ifdef UPASSTHROUGH
+            status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManagers[i]);
+#else
+            status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManagers[i]);
+#endif
             VERIFY_IS_TRUE(NT_SUCCESS(status));
 
             status = logManagers[i]->StartOpenLogManager(NULL, // ParentAsync
@@ -21258,7 +21452,311 @@ VOID ReuseLogManagerTest(
     // TODO: verify no files in c:\rvdlog
 }
 
+VOID
+OneBitLogCorruptionTest(
+    UCHAR driveLetter,
+    KtlLogManager::SPtr logManager
+    )
+{
+    NTSTATUS status;
+    StreamCloseSynchronizer closeStreamSync;
+    ContainerCloseSynchronizer closeContainerSync;
 
+    //
+    // Create container and a stream within it
+    //
+    KtlLogManager::AsyncCreateLogContainer::SPtr createContainerAsync;
+    KtlLogContainer::SPtr logContainer;
+    KSynchronizer sync;
+    
+    KString::SPtr containerName;
+    KString::SPtr streamName;
+    KtlLogContainerId logContainerId;
+    KtlLogStreamId logStreamId;
+    CreateStreamAndContainerPathnames(driveLetter,
+                                      containerName,
+                                      logContainerId,
+                                      streamName,
+                                      logStreamId
+                                      );
+
+    
+    status = logManager->CreateAsyncCreateLogContainerContext(createContainerAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    createContainerAsync->StartCreateLogContainer(*containerName,
+        logContainerId,
+        256 * 1024 * 1024,
+        0,            // Max Number Streams
+        1024 * 1024,            // Max Record Size
+        0,
+        logContainer,
+        NULL,         // ParentAsync
+        sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    {
+        KtlLogContainer::AsyncCreateLogStreamContext::SPtr createStreamAsync;
+        KtlLogStream::SPtr logStream;
+        ULONG metadataLength = 0x10000;
+
+        status = logContainer->CreateAsyncCreateLogStreamContext(createStreamAsync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        KBuffer::SPtr securityDescriptor = nullptr;
+        KtlLogStreamType logStreamType = KLogicalLogInformation::GetLogicalLogStreamType();
+
+        createStreamAsync->StartCreateLogStream(logStreamId,
+                                                logStreamType,
+                                                nullptr,           // Alias
+                                                 KString::CSPtr(streamName.RawPtr()),
+                                                securityDescriptor,
+                                                metadataLength,
+                                                DEFAULT_STREAM_SIZE,
+                                                DEFAULT_MAX_RECORD_SIZE,
+                                                0,
+                                                logStream,
+                                                NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        logStream->StartClose(NULL,
+                         closeStreamSync.CloseCompletionCallback());
+
+        status = closeStreamSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        logStream = nullptr;
+    }
+
+    KtlLogContainer::AsyncOpenLogStreamContext::SPtr openStreamAsync;
+    ULONG metadataLength;
+
+    ULONGLONG asn = KtlLogAsn::Min().Get();
+    ULONGLONG version = 0;
+    KIoBuffer::SPtr iodata;
+    PVOID iodataBuffer;
+    KIoBuffer::SPtr metadata;
+    PVOID metadataBuffer;
+    KBuffer::SPtr workKBuffer;
+    PUCHAR workBuffer;
+
+    PUCHAR dataWritten;
+    ULONG dataSizeWritten;
+
+    ULONG offsetToStreamBlockHeaderM;
+
+    //
+    // Open the stream and write a bunch of stuff
+    //
+    {
+        KtlLogStream::SPtr logStream;
+
+        status = logContainer->CreateAsyncOpenLogStreamContext(openStreamAsync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        openStreamAsync->StartOpenLogStream(logStreamId,
+                                                &metadataLength,
+                                                logStream,
+                                                NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        offsetToStreamBlockHeaderM = logStream->QueryReservedMetadataSize() + sizeof(KLogicalLogInformation::MetadataBlockHeader);
+
+        //
+        // Verify that log stream id is set correctly
+        //
+        KtlLogStreamId queriedLogStreamId;
+        logStream->QueryLogStreamId(queriedLogStreamId);
+
+        VERIFY_IS_TRUE(queriedLogStreamId.Get() == logStreamId.Get() ? true : false);
+
+        status = KIoBuffer::CreateSimple(16*0x1000,
+                                         iodata,
+                                         iodataBuffer,
+                                         *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = KIoBuffer::CreateSimple(KLogicalLogInformation::FixedMetadataSize,
+                                         metadata,
+                                         metadataBuffer,
+                                         *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        status = KBuffer::Create(16*0x1000,
+                                 workKBuffer,
+                                 *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        workBuffer = (PUCHAR)workKBuffer->GetBuffer();
+        dataWritten = workBuffer;
+        dataSizeWritten = 16*0x1000;
+
+        for (ULONG j = 0; j < 4096; j++)
+        {
+            for (ULONG i = 0; i < dataSizeWritten; i++)
+            {
+                dataWritten[i] = (UCHAR)(0x10 + j);
+            }
+
+            version++;
+            status = SetupAndWriteRecord(logStream,
+                                         metadata,
+                                         iodata,
+                                         version,
+                                         asn,
+                                         dataWritten,
+                                         dataSizeWritten,
+                                         offsetToStreamBlockHeaderM);
+            asn += dataSizeWritten;
+
+            VERIFY_IS_TRUE(NT_SUCCESS(status));
+        }
+
+        logStream->StartClose(NULL,
+                              closeStreamSync.CloseCompletionCallback());
+        status = closeStreamSync.WaitForCompletion();
+        logStream = nullptr;                
+    }
+
+    //
+    // Corrupt record data within the stream
+    //
+    {
+        KBlockFile::SPtr file;
+        KWString path(*g_Allocator, (PWCHAR)*streamName);
+
+        status = KBlockFile::Create(path,
+                                    TRUE,
+                                    KBlockFile::eOpenExisting,
+                                    file,
+                                    sync,
+                                    NULL,
+                                    *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        ULONGLONG magicOffset = 4 * 0x1000;
+        KIoBuffer::SPtr corruptBuffer;
+        PVOID p;
+        PUCHAR pp;
+
+        status = KIoBuffer::CreateSimple(0x1000, corruptBuffer, p, *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        status = file->Transfer(KBlockFile::IoPriority::eForeground,
+                                KBlockFile::TransferType::eRead,
+                                magicOffset,
+                                *corruptBuffer,
+                                sync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        pp = (PUCHAR)p;
+
+        pp[765]++;            // one bit corruption !!!
+
+        
+        status = file->Transfer(KBlockFile::IoPriority::eForeground,
+                                KBlockFile::TransferType::eWrite,
+                                magicOffset,
+                                *corruptBuffer,
+                                sync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        file->Close();
+    }
+
+    //
+    // Reopen the stream and read it while verifying the data
+    //
+    {
+        KtlLogStream::SPtr logStream;
+
+        status = logContainer->CreateAsyncOpenLogStreamContext(openStreamAsync);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        openStreamAsync->StartOpenLogStream(logStreamId,
+                                                &metadataLength,
+                                                logStream,
+                                                NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        offsetToStreamBlockHeaderM = logStream->QueryReservedMetadataSize() + sizeof(KLogicalLogInformation::MetadataBlockHeader);
+
+
+
+        //
+        // Do multirecord reads
+        //
+        KtlLogStream::AsyncMultiRecordReadContext::SPtr multiRecordRead;
+        KIoBuffer::SPtr readMetadata;
+        PVOID readMetadataPtr;
+        KIoBuffer::SPtr iodata1;
+        PVOID iodata1Ptr;
+        KtlLogAsn asn1 = 1;
+
+        status = KIoBuffer::CreateSimple(KLogicalLogInformation::FixedMetadataSize,
+                                         readMetadata,
+                                         readMetadataPtr,
+                                         *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+        status = KIoBuffer::CreateSimple(8*0x1000,
+                                            iodata1,
+                                            iodata1Ptr,
+                                            *g_Allocator);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        
+        
+        status = logStream->CreateAsyncMultiRecordReadContext(multiRecordRead);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        multiRecordRead->StartRead(asn1,
+                                   *readMetadata,
+                                   *iodata1,
+                                   NULL,
+                                   sync);
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(status == K_STATUS_LOG_STRUCTURE_FAULT);       
+
+        multiRecordRead = nullptr;
+
+        
+
+        logStream->StartClose(NULL,
+                              closeStreamSync.CloseCompletionCallback());
+        status = closeStreamSync.WaitForCompletion();
+        logStream = nullptr;                
+        
+    }
+
+    logContainer->StartClose(NULL,
+                     closeContainerSync.CloseCompletionCallback());
+
+    status = closeContainerSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    KtlLogManager::AsyncDeleteLogContainer::SPtr deleteContainerAsync;
+
+    status = logManager->CreateAsyncDeleteLogContainerContext(deleteContainerAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    deleteContainerAsync->StartDeleteLogContainer(*containerName,
+                                         logContainerId,
+                                         NULL,         // ParentAsync
+                                         sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+}
+   
 
 VOID CreateLogContainerWithBadPathTest(
     UCHAR driveLetter
@@ -21279,7 +21777,11 @@ VOID CreateLogContainerWithBadPathTest(
     // Create a log manager and then try to create a container with a
     // bad pathname. Verify that the log manager will close properly.
     //
-    status = KtlLogManager::Create(ALLOCATION_TAG, *g_Allocator, logManager);
+#ifdef UPASSTHROUGH
+    status = KtlLogManager::CreateInproc(ALLOCATION_TAG, *g_Allocator, logManager);
+#else
+    status = KtlLogManager::CreateDriver(ALLOCATION_TAG, *g_Allocator, logManager);
+#endif
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 
     status = logManager->StartOpenLogManager(NULL, // ParentAsync
@@ -21555,6 +22057,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = numberAllocs * ioBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = numberAllocs * ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = 5 * 60 * 1000;   // 5 minutes
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21613,6 +22116,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = numberAllocs * ioBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = numberAllocs * ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_UseDefaultAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21672,6 +22176,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = KtlLogManager::MemoryThrottleLimits::_NoLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21717,6 +22222,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = numberAllocs * ioBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = numberAllocs * ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21783,6 +22289,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = numberAllocs * ioBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = numberAllocs * ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21890,6 +22397,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = numberAllocs * ioBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = numberAllocs * ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -21965,6 +22473,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = allocatorLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = allocatorLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -22027,6 +22536,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = allocatorLimit;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = allocatorLimit;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -22099,6 +22609,7 @@ VOID ThrottledAllocatorTest(
         memoryThrottleLimits.WriteBufferMemoryPoolMax = largeIoBufferSize;
         memoryThrottleLimits.WriteBufferMemoryPoolMin = ioBufferSize;
         memoryThrottleLimits.AllocationTimeoutInMs = KtlLogManager::MemoryThrottleLimits::_NoAllocationTimeoutInMs;
+        memoryThrottleLimits.SharedLogThrottleLimit = KtlLogManager::MemoryThrottleLimits::_NoSharedLogThrottleLimit;
 
         status = ThrottledKIoBufferAllocator::CreateThrottledKIoBufferAllocator(
             memoryThrottleLimits,
@@ -23179,6 +23690,460 @@ CloseOpenRaceTest(
     status = sync.WaitForCompletion();
     VERIFY_IS_TRUE(NT_SUCCESS(status));
 }
+
+
+////
+//
+// Async will write small records infrequently but more frequently that
+// the periodic flush time to force the scenario where accelerated
+// flushing needs to be invoked.
+//
+class AccelerateFlushAsync : public WorkerAsync
+{
+    K_FORCE_SHARED(AccelerateFlushAsync);
+
+public:
+    static NTSTATUS
+        Create(
+        __in KAllocator& Allocator,
+        __in ULONG AllocationTag,
+        __out AccelerateFlushAsync::SPtr& Context
+        )
+    {
+        NTSTATUS status;
+        AccelerateFlushAsync::SPtr context;
+
+        context = _new(AllocationTag, Allocator) AccelerateFlushAsync();
+        if (context == nullptr)
+        {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            return(status);
+        }
+
+        status = context->Status();
+        if (!NT_SUCCESS(status))
+        {
+            return(status);
+        }
+
+        Context = context.RawPtr();
+
+        return(STATUS_SUCCESS);
+    }
+
+private:
+    //
+    // Parameters
+    //
+    KtlLogStream::SPtr _LogStream;
+    KBuffer::SPtr _Data;
+    ULONG _WriteDelay;
+    BOOLEAN* _AllDone;
+
+public:
+    struct StartParameters
+    {
+        KtlLogStream::SPtr LogStream;
+        KBuffer::SPtr Data;
+        ULONG WriteDelay;
+        BOOLEAN* AllDone;
+    };
+
+
+    VOID StartIt(
+        __in PVOID Parameters,
+        __in_opt KAsyncContextBase* const ParentAsyncContext,
+        __in_opt KAsyncContextBase::CompletionCallback CallbackPtr) override
+    {
+        StartParameters* startParameters = (StartParameters*)Parameters;
+
+        _State = Initial;
+
+        _LogStream = startParameters->LogStream;
+        _Data = startParameters->Data;
+        _WriteDelay = startParameters->WriteDelay;
+        _AllDone = startParameters->AllDone;
+
+        Start(ParentAsyncContext, CallbackPtr);
+    }
+
+
+private:
+    enum  FSMState { Initial = 0, PerformWrite = 1, PerformDelay = 2, Completed = 3 };
+    FSMState _State;
+    
+protected:
+    VOID FSMContinue(
+        __in NTSTATUS Status
+        ) override
+    {
+        switch (_State)
+        {
+            case Initial:
+            {
+                _OffsetToStreamBlockHeaderM = _LogStream->QueryReservedMetadataSize() + sizeof(KLogicalLogInformation::MetadataBlockHeader);
+                _Asn = KtlLogAsn::Min().Get();
+                _Version = 0;
+
+                
+                Status = KTimer::Create(_Timer, GetThisAllocator(), GetThisAllocationTag());
+                if (!NT_SUCCESS(Status))
+                {
+                    KTraceFailedAsyncRequest(Status, this, _State, 0);
+                    VERIFY_IS_TRUE(FALSE);
+                    Complete(Status);
+                    return;
+                }
+                
+                Status = _LogStream->CreateAsyncWriteContext(_WriteContext);
+                if (!NT_SUCCESS(Status))
+                {
+                    KTraceFailedAsyncRequest(Status, this, _State, 0);
+                    VERIFY_IS_TRUE(FALSE);
+                    Complete(Status);
+                    return;
+                }
+                
+                // fall through
+            }
+
+            case PerformWrite:
+            {
+                if (*_AllDone)
+                {
+                    Complete(STATUS_SUCCESS);
+                    return;
+                }
+
+                _State = PerformDelay;
+                _WriteContext->Reuse();
+
+                PVOID metadataBuffer;
+                KIoBuffer::SPtr metadata;
+                KIoBuffer::SPtr emptyIoBuffer;
+                ULONG dataSizeWritten = _Data->QuerySize();
+                PUCHAR dataWritten = (PUCHAR)_Data->GetBuffer();
+                Status = KIoBuffer::CreateSimple(KLogicalLogInformation::FixedMetadataSize,
+                                                 metadata,
+                                                 metadataBuffer,
+                                                 GetThisAllocator());
+                if (!NT_SUCCESS(Status))
+                {
+                    KTraceFailedAsyncRequest(Status, this, _State, 0);
+                    VERIFY_IS_TRUE(FALSE);
+                    Complete(Status);
+                    return;
+                }
+
+                Status = KIoBuffer::CreateEmpty(emptyIoBuffer, GetThisAllocator());
+                if (!NT_SUCCESS(Status))
+                {
+                    KTraceFailedAsyncRequest(Status, this, _State, 0);
+                    VERIFY_IS_TRUE(FALSE);
+                    Complete(Status);
+                    return;
+                }
+
+                _Version++;
+                Status = SetupRecord(_LogStream,
+                                             metadata,
+                                             emptyIoBuffer,
+                                             _Version,
+                                             _Asn,
+                                             dataWritten,
+                                             dataSizeWritten,
+                                             _OffsetToStreamBlockHeaderM,
+                                             TRUE,
+                                             NULL,
+                                             [](KLogicalLogInformation::StreamBlockHeader* streamBlockHeader){ UNREFERENCED_PARAMETER(streamBlockHeader);});
+
+                VERIFY_IS_TRUE(NT_SUCCESS(Status));
+
+                ULONG metadataIoSize = KLogicalLogInformation::FixedMetadataSize;
+                _WriteContext->Reuse();
+                _WriteContext->StartWrite(_Asn,
+                                         _Version,
+                                         metadataIoSize,
+                                         metadata,
+                                         emptyIoBuffer,
+                                         0,    // Reservation
+                                         this,    // ParentAsync
+                                         _Completion);
+
+                _Asn = _Asn + dataSizeWritten;
+
+                
+                break;
+            }
+
+            case PerformDelay:
+            {
+                if (! NT_SUCCESS(Status))
+                {
+                    KTraceFailedAsyncRequest(Status, this, _State, 0);
+                    VERIFY_IS_TRUE(FALSE);
+                    Complete(Status);
+                    return;
+                }
+                
+                if (*_AllDone)
+                {
+                    Complete(STATUS_SUCCESS);
+                    return;
+                }
+
+                _State = PerformWrite;
+                _Timer->Reuse();
+                _Timer->StartTimer(_WriteDelay, this, _Completion);
+                
+                break;
+            }
+
+            default:
+            {
+               Status = STATUS_UNSUCCESSFUL;
+               KTraceFailedAsyncRequest(Status, this, _State, 0);
+               VERIFY_IS_TRUE(FALSE);
+               Complete(Status);
+               return;
+            }
+        }
+
+        return;
+    }
+
+    VOID OnReuse() override
+    {
+    }
+
+    VOID OnCompleted() override
+    {
+        _LogStream = nullptr;
+        _WriteContext = nullptr;
+        _Timer = nullptr;
+        _Data = nullptr;
+    }   
+    
+private:
+    //
+    // Internal
+    //
+    KtlLogStream::AsyncWriteContext::SPtr _WriteContext;
+    KTimer::SPtr _Timer;
+    ULONG _OffsetToStreamBlockHeaderM;
+    ULONGLONG _Asn;
+    ULONGLONG _Version;
+};
+
+AccelerateFlushAsync::AccelerateFlushAsync()
+{
+}
+
+AccelerateFlushAsync::~AccelerateFlushAsync()
+{
+}
+
+
+VOID
+AccelerateFlushTest(
+    KGuid diskId,
+    KtlLogManager::SPtr logManager
+    )
+{
+    //
+    // Configuration Parameters
+    LONGLONG logSize = 64 * 1024 * 1024;
+    ULONG writeSize = 64;
+    ULONG writeDelay = 1 * 1000;
+    static const ULONG streamsCount = 256;
+    ULONG runTime = 300;
+
+    
+    NTSTATUS status;
+    KGuid logContainerGuid;
+    KtlLogContainerId logContainerId;
+    StreamCloseSynchronizer closeStreamWaitSync;
+    ContainerCloseSynchronizer closeContainerSync;
+
+    logContainerGuid.CreateNew();
+    logContainerId = static_cast<KtlLogContainerId>(logContainerGuid);
+
+    //
+    // Create container and a stream within it
+    //
+    KtlLogManager::AsyncCreateLogContainer::SPtr createContainerAsync;
+    KtlLogContainer::SPtr logContainer;
+    KSynchronizer sync;
+
+    status = logManager->CreateAsyncCreateLogContainerContext(createContainerAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    createContainerAsync->StartCreateLogContainer(diskId,
+                                         logContainerId,
+                                         logSize,
+                                         0,            // Max Number Streams
+                                         4 * 1024 * 1024,            // Max Record Size
+                                         0,
+                                         logContainer,
+                                         NULL,         // ParentAsync
+                                         sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+
+    KtlLogStream::SPtr streams[streamsCount];
+
+    KtlLogStreamType logStreamType = KLogicalLogInformation::GetLogicalLogStreamType();
+    KtlLogContainer::AsyncCreateLogStreamContext::SPtr createStreamAsync;
+
+    status = logContainer->CreateAsyncCreateLogStreamContext(createStreamAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+    for (ULONG i = 0; i < streamsCount; i++)
+    {
+        ULONG metadataLength = 0x10000;
+        KGuid logStreamGuid;
+        KtlLogStreamId logStreamId;
+        logStreamGuid.CreateNew();
+        logStreamId = static_cast<KtlLogStreamId>(logStreamGuid);
+        KBuffer::SPtr securityDescriptor = nullptr;
+
+        createStreamAsync->Reuse();
+        createStreamAsync->StartCreateLogStream(logStreamId,
+                                                    logStreamType,
+                                                    nullptr,           // Alias
+                                                    nullptr,
+                                                    securityDescriptor,
+                                                    metadataLength,
+                                                    DEFAULT_STREAM_SIZE,
+                                                    DEFAULT_MAX_RECORD_SIZE,
+                                                    KtlLogManager::FlagSparseFile,
+                                                    streams[i],
+                                                    NULL,    // ParentAsync
+                                                sync);
+
+        status = sync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+    }
+    
+    KBuffer::SPtr data;
+    BOOLEAN allDone = FALSE;
+    KSynchronizer syncs[streamsCount];
+    AccelerateFlushAsync::SPtr doWritesAsync[streamsCount];
+    struct AccelerateFlushAsync::StartParameters parameters;
+    
+    status = KBuffer::Create(writeSize, data, *g_Allocator, KTL_TAG_TEST);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    
+    parameters.AllDone = &allDone;
+    parameters.Data = data;
+    parameters.WriteDelay = writeDelay;
+    
+    for (ULONG i = 0; i < streamsCount; i++)
+    {
+        parameters.LogStream = streams[i];
+
+        status = AccelerateFlushAsync::Create(*g_Allocator, KTL_TAG_TEST, doWritesAsync[i]);
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+        doWritesAsync[i]->StartIt(&parameters, NULL, syncs[i]);
+    }
+
+    //
+    // Poll for accelerated flush active/passive modes
+    //
+
+    KtlLogStream::AsyncIoctlContext::SPtr ioctl;
+
+    status = streams[0]->CreateAsyncIoctlContext(ioctl);
+    VERIFY_IS_TRUE(NT_SUCCESS(status) ? true : false);
+    
+    
+    ULONG activeCount = 0;
+    ULONG passiveCount = 0;
+    BOOLEAN isActiveMode = FALSE;
+    struct KLogicalLogInformation::AcceleratedFlushMode* flushMode;
+    KBuffer::SPtr inBuffer, outBuffer;
+    ULONG result;
+        
+    inBuffer = nullptr;
+    for (ULONG i = 0; i < runTime; i++)
+    {
+        KNt::Sleep(1000);
+        ioctl->Reuse();
+        ioctl->StartIoctl(KLogicalLogInformation::QueryAcceleratedFlushMode, inBuffer.RawPtr(), result, outBuffer, NULL, sync);
+        status = sync.WaitForCompletion();
+
+        VERIFY_IS_TRUE(NT_SUCCESS(status) ? true : false);
+
+        flushMode = (KLogicalLogInformation::AcceleratedFlushMode*)outBuffer->GetBuffer();
+
+        if (flushMode->IsAccelerateInActiveMode)
+        {
+            if (! isActiveMode)
+            {
+                isActiveMode = TRUE;
+                activeCount++;
+                printf("Enter active mode %d active %d passive\n", activeCount, passiveCount);
+            }
+        } else {
+            if (isActiveMode)
+            {
+                isActiveMode = FALSE;
+                passiveCount++;
+                printf("Enter passive mode %d active %d passive\n", activeCount, passiveCount);
+            }
+        }    
+    }
+    ioctl = nullptr;
+
+    VERIFY_IS_TRUE(activeCount > 0);
+    VERIFY_IS_TRUE(passiveCount > 0);
+    
+    printf("Shutting down\n");
+    allDone = TRUE;
+    
+    for (ULONG i = 0; i < streamsCount; i++)
+    {
+        status = syncs[i].WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+    }
+    
+    //
+    // Cleanup
+    //
+    for (ULONG i = 0; i < streamsCount; i++)
+    {
+        streams[i]->StartClose(NULL,
+                         closeStreamWaitSync.CloseCompletionCallback());
+
+        status = closeStreamWaitSync.WaitForCompletion();
+        VERIFY_IS_TRUE(NT_SUCCESS(status));
+        streams[i] = nullptr;
+    }
+    
+    //
+    // Cleanup the log
+    //
+    logContainer->StartClose(NULL,
+                     closeContainerSync.CloseCompletionCallback());
+
+    status = closeContainerSync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    logContainer = nullptr;
+
+    KtlLogManager::AsyncDeleteLogContainer::SPtr deleteContainerAsync;
+
+    status = logManager->CreateAsyncDeleteLogContainerContext(deleteContainerAsync);
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+    deleteContainerAsync->StartDeleteLogContainer(diskId,
+                                         logContainerId,
+                                         NULL,         // ParentAsync
+                                         sync);
+    status = sync.WaitForCompletion();
+    VERIFY_IS_TRUE(NT_SUCCESS(status));
+
+}
+////
 
 
 VOID SetupRawKtlLoggerTests(

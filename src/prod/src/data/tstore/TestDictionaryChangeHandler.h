@@ -50,8 +50,11 @@ namespace TStoreTests
             __in TxnReplicator::TransactionBase const& replicatorTransaction,
             __in TKey key,
             __in TValue value,
-            __in LONG64 sequenceNumber) noexcept override
+            __in LONG64 sequenceNumber,
+            __in bool isPrimary) noexcept override
         {
+            UNREFERENCED_PARAMETER(isPrimary);
+
             Notification n;
             n.Operation = StoreModificationType::Add;
             n.Key = key;
@@ -66,8 +69,11 @@ namespace TStoreTests
             __in TxnReplicator::TransactionBase const& replicatorTransaction,
             __in TKey key,
             __in TValue value,
-            __in LONG64 sequenceNumber) noexcept override
+            __in LONG64 sequenceNumber,
+            __in bool isPrimary) noexcept override
         {
+            UNREFERENCED_PARAMETER(isPrimary);
+
             Notification n;
             n.Operation = StoreModificationType::Update;
             n.Key = key;
@@ -81,9 +87,11 @@ namespace TStoreTests
         ktl::Awaitable<void> OnRemovedAsync(
             __in TxnReplicator::TransactionBase const& replicatorTransaction,
             __in TKey key,
-            __in LONG64 sequenceNumber) noexcept override
+            __in LONG64 sequenceNumber,
+            __in bool isPrimary) noexcept override
         {
             UNREFERENCED_PARAMETER(sequenceNumber);
+            UNREFERENCED_PARAMETER(isPrimary);
 
             Notification n;
             n.Operation = StoreModificationType::Remove;
@@ -161,9 +169,9 @@ namespace TStoreTests
             rebuildCallCount_ = 0;
         }
 
-        void Validate()
+        void Validate(__in_opt bool testSequenceNumbers = true)
         {
-            Validate(*expectedNotifications_, *actualNotifications_);
+            Validate(*expectedNotifications_, *actualNotifications_, testSequenceNumbers);
         }
 
     private:
@@ -184,7 +192,10 @@ namespace TStoreTests
             return keyComparerSPtr_->Compare(itemOne.Key, itemTwo.Key);
         }
 
-        void Validate(KSharedArray<Notification> & expected, KSharedArray<Notification> & actual)
+        void Validate(
+            __in KSharedArray<Notification> & expected,
+            __in KSharedArray<Notification> & actual,
+            __in_opt bool testSequenceNumbers = true)
         {
             CODING_ERROR_ASSERT(actual.Count() == expected.Count());
 
@@ -194,7 +205,7 @@ namespace TStoreTests
                 auto actualNotification = actual[i];
                 
                 CODING_ERROR_ASSERT(expectedNotification.Operation == actualNotification.Operation);
-                CODING_ERROR_ASSERT(expectedNotification.SequenceNumber == actualNotification.SequenceNumber);
+                CODING_ERROR_ASSERT(!testSequenceNumbers || expectedNotification.SequenceNumber == actualNotification.SequenceNumber);
                 CODING_ERROR_ASSERT(keyComparerSPtr_->Compare(expectedNotification.Key, actualNotification.Key) == 0);
                 CODING_ERROR_ASSERT(valueComparerSPtr_->Compare(expectedNotification.Value, actualNotification.Value) == 0);
             }

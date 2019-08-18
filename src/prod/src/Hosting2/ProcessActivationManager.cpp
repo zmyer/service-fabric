@@ -13,6 +13,7 @@ using namespace Hosting2;
 using namespace Management;
 using namespace ImageModel;
 using namespace Management::ResourceMonitor;
+using namespace Management::NetworkInventoryManager;
 
 StringLiteral const TraceType_ActivationManager("ProcessActivationManager");
 
@@ -23,16 +24,20 @@ class ProcessActivationManager::NotifyServiceTerminationAsyncOperation :
 public:
     NotifyServiceTerminationAsyncOperation(
         ProcessActivationManager & owner,
+        ActivityDescription const & activityDescription,
         wstring const & parentId,
         vector<wstring> const & appServiceId,
         DWORD exitCode,
+        bool isRootContainer,
         AsyncCallback const & callback,
         AsyncOperationSPtr parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
+        activityDescription_(activityDescription),
         parentId_(parentId),
         appServiceId_(appServiceId),
-        exitCode_(exitCode)
+        exitCode_(exitCode),
+        isRootContainer_(isRootContainer)
     {
     }
     static ErrorCode NotifyServiceTerminationAsyncOperation::End(AsyncOperationSPtr const & operation)
@@ -52,13 +57,13 @@ protected:
         auto error = owner_.requestorMap_.Get(parentId_, requestor);
         if (error.IsSuccess())
         {
-            ServiceTerminatedNotification notification(parentId_, appServiceId_, exitCode_);
+            ServiceTerminatedNotification notification(activityDescription_, parentId_, appServiceId_, exitCode_, isRootContainer_);
 
             MessageUPtr request = make_unique<Message>(notification);
             request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
             request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::ServiceTerminatedNotificationRequest));
 
-            WriteNoise(TraceType_ActivationManager, owner_.Root.TraceId, "ServiceTerminatedNotification: Message={0}, Body={1}", *request, notification);
+            WriteInfo(TraceType_ActivationManager, owner_.Root.TraceId, "ServiceTerminatedNotification: Message={0}, Body={1}", *request, notification);
             auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
                 move(request),
                 requestor->CallbackAddress,
@@ -98,9 +103,11 @@ protected:
     }
 private:
     ProcessActivationManager & owner_;
+    ActivityDescription activityDescription_;
     wstring parentId_;
     vector<wstring> appServiceId_;
     DWORD exitCode_;
+    bool isRootContainer_;
 };
 
 class ProcessActivationManager::NotifyContainerHealthCheckStatusAsyncOperation :
@@ -142,8 +149,8 @@ protected:
         {
             ContainerHealthCheckStatusChangeNotification notification(nodeId_, healthStatusList_);
 
-            auto request = make_unique<Message>(notification);
-            
+            auto request = make_unique<Message>(move(notification));
+
             request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
             request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::ContainerHealthCheckStatusChangeNotificationRequest));
 
@@ -151,7 +158,7 @@ protected:
                 TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "ContainerHealthCheckStatusChangeNotification: Message={0}, Body={1}", *request, notification);
-            
+
             auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
                 move(request),
                 requestor->CallbackAddress,
@@ -175,7 +182,7 @@ protected:
         }
 
         MessageUPtr reply;
-        
+
         auto error = owner_.activationManager_.IpcServerObj.EndRequest(operation, reply);
         if (!error.IsSuccess() && error.IsError(ErrorCodeValue::Timeout))
         {
@@ -197,6 +204,103 @@ private:
     ProcessActivationManager & owner_;
     wstring nodeId_;
     vector<ContainerHealthStatusInfo> healthStatusList_;
+};
+
+class ProcessActivationManager::NotifyDockerProcessTerminationAsyncOperation :
+    public AsyncOperation,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+public:
+    NotifyDockerProcessTerminationAsyncOperation(
+        ProcessActivationManager & owner,
+        DWORD exitCode,
+        ULONG continuousFailurecount,
+        TimeSpan const& nextStartTime,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        exitCode_(exitCode),
+        continuousFailurecount_(continuousFailurecount),
+        nextStartTime_(nextStartTime)
+    {
+    }
+    static ErrorCode NotifyDockerProcessTerminationAsyncOperation::End(AsyncOperationSPtr const & operation)
+    {
+        auto thisPtr = AsyncOperation::End<NotifyDockerProcessTerminationAsyncOperation>(operation);
+        return thisPtr->Error;
+    }
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        SendDockerProcessTerminationNotification(thisSPtr);
+    }
+
+    void SendDockerProcessTerminationNotification(AsyncOperationSPtr const & thisSPtr)
+    {
+        auto requestors = owner_.requestorMap_.GetAll();
+        auto nodeCount = requestors.size();
+        pendingOperationCount_.store(nodeCount);
+
+        for (auto const& requestor : requestors)
+        {
+            auto nodeId = requestor->RequestorId;
+            DockerProcessTerminatedNotification notification(exitCode_, continuousFailurecount_, nextStartTime_);
+
+            MessageUPtr request = make_unique<Message>(move(notification));
+            request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
+            request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::DockerProcessTerminatedNotificationRequest));
+
+            WriteInfo(TraceType_ActivationManager, owner_.Root.TraceId, "DockerProcessTerminatedNotificationRequest: NodeId={0}", nodeId);
+            auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
+                move(request),
+                requestor->CallbackAddress,
+                HostingConfig::GetConfig().RequestTimeout,
+                [this, nodeId](AsyncOperationSPtr const & operation) { FinishSendServiceTerminationMessage(operation, nodeId, false); },
+                thisSPtr);
+            FinishSendServiceTerminationMessage(operation, nodeId, true);
+        }
+
+        CheckPendingOperations(thisSPtr, nodeCount);
+    }
+
+    void FinishSendServiceTerminationMessage(AsyncOperationSPtr operation, wstring nodeId, bool expectedCompletedAsynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedAsynchronously)
+        {
+            return;
+        }
+        MessageUPtr reply;
+        auto error = owner_.activationManager_.IpcServerObj.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivationManager,
+                owner_.Root.TraceId,
+                "Sending notification for DockerProcessManager failed. This notification is best effort and won't be retried. NodeId:{0}, Error:{1}",
+                nodeId,
+                error);
+        }
+
+        uint64 pendingOperationCount = --pendingOperationCount_;
+        CheckPendingOperations(operation->Parent, pendingOperationCount);
+    }
+
+    void CheckPendingOperations(AsyncOperationSPtr const & thisSPtr, uint64 pendingOperationCount)
+    {
+        if (pendingOperationCount == 0)
+        {
+            TryComplete(thisSPtr, ErrorCodeValue::Success);
+            return;
+        }
+    }
+
+private:
+    ProcessActivationManager & owner_;
+    atomic_uint64 pendingOperationCount_;
+    DWORD exitCode_;
+    ULONG continuousFailurecount_;
+    TimeSpan nextStartTime_;
 };
 
 class ProcessActivationManager::OpenAsyncOperation :
@@ -299,10 +403,10 @@ class ProcessActivationManager::OpenAsyncOperation :
                 timeoutHelper_.GetRemainingTime(),
                 [this](AsyncOperationSPtr const& operation)
             {
-                this->OnContainerActivationCompleted(operation, false);
+                this->OnContainerActivatorOpenCompleted(operation, false);
             },
                 thisSPtr);
-            OnContainerActivationCompleted(operation, true);
+            OnContainerActivatorOpenCompleted(operation, true);
         }
 #if defined(PLATFORM_UNIX)
 
@@ -347,7 +451,7 @@ class ProcessActivationManager::OpenAsyncOperation :
                 error = ECGFAIL;
                 goto CleanupSetupCgroup;
             }
-            
+
 CleanupSetupCgroup:
             if (cgroupObj)
             {
@@ -360,7 +464,7 @@ CleanupSetupCgroup:
         }
 
 #endif
-        void OnContainerActivationCompleted(AsyncOperationSPtr const & operation, bool expectedCompletedSyncronously)
+        void OnContainerActivatorOpenCompleted(AsyncOperationSPtr const & operation, bool expectedCompletedSyncronously)
         {
             if (operation->CompletedSynchronously != expectedCompletedSyncronously)
             {
@@ -374,8 +478,13 @@ CleanupSetupCgroup:
                 "ContainerActivator open returned error {0}",
                 error);
 
-            //Schedule a timer to Post Statistics.
+            // Schedule a timer to Post Statistics.
             owner_.ScheduleTimerForStats(HostingConfig::GetConfig().InitialStatisticsInterval);
+
+            // Create marker files for all container log directory so that FabricDCA can delete them.
+            // If FabricHost crashes and comes back up this will ensure that we are not leaving any
+            // container log directories behind.
+            ContainerHelper::GetContainerHelper().MarkContainerLogFolder(L"", false /*forProcessing*/,  true /*MarkAllLogDirectories*/);
 
             TryComplete(operation->Parent, error);
         }
@@ -483,7 +592,8 @@ private:
             auto error = owner_.crashDumpConfigurationManager_->Close();
             if (!error.IsSuccess())
             {
-                Trace.WriteError(TraceType_ActivationManager,
+                WriteError(
+                    TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to close crash dump configuration manager. Error {0}",
                     error);
@@ -493,7 +603,8 @@ private:
             auto err = owner_.principalsProvider_->Close();
             if (!err.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteError(
+                    TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to close principalsprovider. Error {0}",
                     err);
@@ -502,7 +613,8 @@ private:
             err = owner_.endpointProvider_->Close();
             if (!err.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteError(
+                    TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to close endpointsecurity provider. Error {0}",
                     err);
@@ -511,7 +623,8 @@ private:
             err = owner_.firewallProvider_->Close();
             if (!err.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteError(
+                    TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to close firewall provider. Error {0}",
                     err);
@@ -539,11 +652,17 @@ private:
 
         ErrorCode error = owner_.containerActivator_->EndClose(operation);
 
-        auto lastError = ErrorCode(ErrorCodeValue::Success);
+        if (!error.IsSuccess())
         {
-            lastError = lastError_;
-            lastError_.ReadValue();
+            WriteError(
+                TraceType_ActivationManager,
+                owner_.Root.TraceId,
+                "Failed to close ContainerActivator. Error {0}",
+                error);
+            lastError_.Overwrite(error);
         }
+
+        lastError_.ReadValue();
         TryComplete(operation->Parent, lastError_);
     }
 
@@ -597,7 +716,7 @@ protected:
         auto error = owner_.applicationServiceMap_->Contains(nodeId_, appServiceId_, appHostPresent);
         if (!error.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to check if apphost is already present for Node {0}, Application {1}, AppHostId {2}. Error {3}",
                 nodeId_,
@@ -609,7 +728,7 @@ protected:
         }
         if (appHostPresent)
         {
-            Trace.WriteInfo(TraceType_ActivationManager,
+            WriteInfo(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Apphost is already present for Node {0}, Application {1}, AppHostId {2}.",
                 nodeId_,
@@ -622,6 +741,7 @@ protected:
         SecurityUserSPtr secUser;
         //this means we should run this process as member of win fab admin group
         //this is needed for resource monitor service in order to communicate with fabric host
+        //and backup restore service which needs to access the encryption cert ACLed for winfabadmin group
         //should be only used for members of system app package
         bool isWinFabAdminMember = securityUserId_ == *Constants::WindowsFabricAdministratorsGroupAllowedUser;
 
@@ -630,7 +750,7 @@ protected:
             error = owner_.principalsProvider_->GetSecurityUser(nodeId_, applicationId_, securityUserId_, secUser);
             if (!error.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteWarning(TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to get security user for Node {0}, Application {1}, AppHostId {2} securityuserid {3}. Error {4}",
                     nodeId_,
@@ -648,7 +768,7 @@ protected:
             error = owner_.requestorMap_.Get(nodeId_, activatorRequestor);
             if (!error.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteWarning(TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to get requestor for Node {0}. Error {1}",
                     nodeId_,
@@ -670,7 +790,7 @@ protected:
 #endif
             if (!error.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteWarning(TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to get default security user for Node {0}. Error {1}",
                     nodeId_,
@@ -693,7 +813,7 @@ protected:
         auto err = owner_.applicationServiceMap_->Add(appService_);
         if (!err.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to add application service to map Node {0}, Application {1}, AppHostId {2}. Error {3}",
                 nodeId_,
@@ -710,7 +830,7 @@ private:
 
     void ActivateApplicationService(AsyncOperationSPtr const & thisSPtr)
     {
-        Trace.WriteInfo(TraceType_ActivationManager,
+        WriteInfo(TraceType_ActivationManager,
             owner_.Root.TraceId,
             "Activation applicationservice for  Node {0}, Application {1}, AppHostId {2}",
             nodeId_,
@@ -815,7 +935,7 @@ protected:
         ErrorCode err = owner_.applicationServiceMap_->Get(parentId_, appServiceId_, appService);
         if (!err.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to get application service {0} from services map. Error {1}",
                 appServiceId_,
@@ -834,7 +954,7 @@ protected:
             err = owner_.applicationServiceMap_->Remove(parentId_, appServiceId_);
             if (!err.IsSuccess())
             {
-                Trace.WriteWarning(TraceType_ActivationManager,
+                WriteWarning(TraceType_ActivationManager,
                     owner_.Root.TraceId,
                     "Failed to remove application service {0} from services map. Error {1}",
                     appServiceId_,
@@ -872,7 +992,8 @@ private:
         }
         auto error = appService->EndDeactivate(operation);
         DWORD exitCode = error.IsSuccess() ? ProcessActivator::ProcessDeactivateExitCode : ProcessActivator::ProcessAbortExitCode;
-        owner_.SendApplicationServiceTerminationNotification(parentId_, appServiceId_, exitCode);
+
+        owner_.SendApplicationServiceTerminationNotification(parentId_, appServiceId_, exitCode, ActivityDescription(ActivityId(), ActivityType::Enum::ServicePackageEvent), appService->IsContainerRoot);
         SendDeactivationReplyAndComplete(error, operation->Parent);
     }
 
@@ -986,10 +1107,47 @@ private:
         {
             owner_.containerActivator_->CleanupAssignedIpsToNode(parentId_);
             RemoveCGroups();
-            TryComplete(thisSPtr, lastError_);
+            RemoveAssignedOverlayNetworkResourcesToNode(thisSPtr, parentId_);
         }
     }
    
+    void RemoveAssignedOverlayNetworkResourcesToNode(AsyncOperationSPtr const & thisSPtr, wstring nodeId)
+    {
+        auto operation = owner_.containerActivator_->BeginCleanupAssignedOverlayNetworkResourcesToNode(
+            nodeId,
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation)
+        {
+            this->OnCleanupAssignedOverlayNetworkResourcesToNodeCompleted(operation, false);
+        },
+            thisSPtr);
+        
+        this->OnCleanupAssignedOverlayNetworkResourcesToNodeCompleted(operation, true);
+    }
+
+    void OnCleanupAssignedOverlayNetworkResourcesToNodeCompleted(AsyncOperationSPtr const & operation, bool expectedCompletedSynhronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynhronously)
+        {
+            return;
+        }
+
+        auto error = owner_.containerActivator_->EndCleanupAssignedOverlayNetworkResourcesToNode(operation);
+        
+        WriteInfo(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Clean up assigned overlay network resources to node completed for Node={0} with error={1}.",
+            parentId_,
+            error);
+
+        if (!error.IsSuccess())
+        {
+            lastError_.Overwrite(error);
+        }
+
+        TryComplete(operation->Parent, lastError_);
+    }
+
     void RemoveCGroups()
     {
 #if defined(PLATFORM_UNIX)
@@ -1018,33 +1176,40 @@ private:
     ProcessActivationManager & owner_;
 };
 
-class ProcessActivationManager::ActivateContainerGroupRootAsyncOperation :
-public AsyncOperation,
-TextTraceComponent<TraceTaskCodes::Hosting>
+class ProcessActivationManager::ActivateContainerGroupRootAsyncOperation
+    : public AsyncOperation
+    , TextTraceComponent<TraceTaskCodes::Hosting>
 {
 public:
     ActivateContainerGroupRootAsyncOperation(
         ProcessActivationManager & owner,
-        wstring const & nodeId,
-        wstring const & assignedIp,
-        wstring const & servicePackageId,
-        wstring const & appfolder,
-        wstring const & appId,
-        ServicePackageResourceGovernanceDescription const & spRg,
+        SetupContainerGroupRequest & request,
+#if defined(PLATFORM_UNIX)
+        ContainerPodDescription const &podDesc,
+#endif
         TimeSpan const timeout,
         Transport::IpcReceiverContextUPtr && context,
         AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
-        nodeId_(nodeId),
-        assignedIp_(assignedIp),
-        servicePackageId_(servicePackageId),
-        appId_(appId),
-        appFolder_(appfolder),
-        containerName_(GetContainerName(appId)),
+        nodeId_(request.NodeId),
+        networkType_(request.NetworkType),
+        openNetworkAssignedIp_(request.OpenNetworkAssignedIp),
+        overlayNetworkResources_(request.OverlayNetworkResources),
+        dnsServers_(request.DnsServers),
+        servicePackageId_(request.ServicePackageId),
+        appId_(request.AppId),
+        appFolder_(request.AppFolder),
+        appName_(request.AppName), 
+        partitionId_(request.PartitionId),
+        servicePackageActivationId_(request.ServicePackageActivationId),
+        containerName_(GetContainerName(request.AppId)),
         context_(move(context)),
         owner_(owner),
-        spRg_(spRg),
+#if defined(PLATFORM_UNIX)
+        podDescription_(podDesc),
+#endif
+        spRg_(request.ServicePackageRG),
         timeoutHelper_(timeout),
         processId_(0)
     {
@@ -1064,7 +1229,7 @@ protected:
         auto error = owner_.applicationServiceMap_->Contains(nodeId_, servicePackageId_, appHostPresent);
         if (!error.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to check if root container is already present for container group Node {0}, servicepackageId {1}. Error {2}",
                 nodeId_,
@@ -1075,7 +1240,7 @@ protected:
         }
         if (appHostPresent)
         {
-            Trace.WriteInfo(TraceType_ActivationManager,
+            WriteInfo(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Rootcontainer is already present for Node {0}, servicepackageId {1}.",
                 nodeId_,
@@ -1084,12 +1249,11 @@ protected:
             return;
         }
 
-
         ActivatorRequestorSPtr activatorRequestor;
         error = owner_.requestorMap_.Get(nodeId_, activatorRequestor);
         if (!error.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to get requestor for Node {0}. Error {1}",
                 nodeId_,
@@ -1147,8 +1311,18 @@ protected:
             entryPoint = L"tail,-f,/dev/null";
         }
 #endif
+
+        ContainerNetworkConfigDescription containerNetworkConfig(
+            openNetworkAssignedIp_,
+            overlayNetworkResources_,
+            map<wstring, wstring>(), // port bindings
+            nodeId_,
+            L"", // nodeName
+            L"", // nodeIpAddress
+            networkType_);
+
         ContainerDescription containerDescription(
-            L"ContainerGroupContainer",
+            appName_,
             containerName_,
             L"-1",
             containerName_,
@@ -1157,18 +1331,28 @@ protected:
             L"",
             L"",
             L"",
-            assignedIp_,
             map<wstring, wstring>(),
             LogConfigDescription(),
             vector<ContainerVolumeDescription>(),
-            vector<wstring>(),
+            vector<ContainerLabelDescription>(),
+            dnsServers_,
             RepositoryCredentialsDescription(),
             ContainerHealthConfigDescription(),
+            containerNetworkConfig,
             vector<wstring>(),
+#if defined(PLATFORM_UNIX)
+            podDescription_,
+#endif
+            true, // TODO: This should be propagated based on the requireSFRuntime flag.
             wstring(),
+            false,
+            false,
             true,
             true,
-            true);
+            true,
+            wstring(),
+            servicePackageActivationId_,
+            partitionId_);
 
         appService_ = make_shared<ApplicationService>(ProcessActivationManagerHolder(
             owner_,
@@ -1184,7 +1368,7 @@ protected:
         auto err = owner_.applicationServiceMap_->Add(appService_);
         if (!err.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to add application service to map Node {0}, servicepackageId {1}. Error {2}",
                 nodeId_,
@@ -1200,7 +1384,7 @@ private:
 
     void ActivateApplicationService(AsyncOperationSPtr const & thisSPtr)
     {
-        Trace.WriteInfo(TraceType_ActivationManager,
+        WriteInfo(TraceType_ActivationManager,
             owner_.Root.TraceId,
             "Activation root container applicationservice for  Node {0}, servicepackage {1}",
             nodeId_,
@@ -1261,13 +1445,22 @@ private:
 private:
     TimeoutHelper timeoutHelper_;
     wstring nodeId_;
-    wstring assignedIp_;
+    ServiceModel::NetworkType::Enum networkType_;
+    wstring openNetworkAssignedIp_;
+    std::map<std::wstring, std::wstring> overlayNetworkResources_;
+    std::vector<std::wstring> dnsServers_;
     wstring servicePackageId_;
     wstring appFolder_;
     ApplicationServiceSPtr appService_;
     wstring containerName_;
     wstring appId_;
+    wstring appName_;
+    wstring partitionId_;
+    wstring servicePackageActivationId_;
     ServicePackageResourceGovernanceDescription spRg_;
+#if defined(PLATFORM_UNIX)
+    ContainerPodDescription podDescription_;
+#endif
     ProcessActivationManager & owner_;
     DWORD processId_;
     Transport::IpcReceiverContextUPtr context_;
@@ -1316,7 +1509,7 @@ protected:
             EnvironmentMap environmentMap;
 
 #if defined(PLATFORM_UNIX)
-            // Environment map is only needed in linux since the environment is not 
+            // Environment map is only needed in linux since the environment is not
             // passed in by default in linux
             auto getEnvResult = Environment::GetEnvironmentMap(environmentMap);
             if (!getEnvResult)
@@ -1365,7 +1558,7 @@ private:
     void SetupFabricInstallerService(AsyncOperationSPtr const & thisSPtr)
     {
         //LINUXTODO
-#if !defined(PLATFORM_UNIX)    
+#if !defined(PLATFORM_UNIX)
         ServiceController sc(Constants::FabricUpgrade::FabricInstallerServiceName);
         DWORD serviceState = SERVICE_STOPPED;
         auto error = sc.GetState(serviceState);
@@ -1467,13 +1660,13 @@ private:
         {
             this->SendReplyAndCompleteOperation(thisSPtr, error);
         }
-#endif        
+#endif
     }
 
     ErrorCode ConfigureFabricInstallerService(bool copyOnly)
     {
         //LINUXTODO
-#if !defined(PLATFORM_UNIX)    
+#if !defined(PLATFORM_UNIX)
         wstring fabricRoot(L"");
         auto error = FabricEnvironment::GetFabricRoot(fabricRoot);
         if (!error.IsSuccess())
@@ -1607,19 +1800,20 @@ private:
         }
 
         return error;
-#endif        
+#endif
     }
 
     ErrorCode InstallFabricInstallerService(wstring const & servicePath)
     {
         //LINUXTODO
-#if !defined(PLATFORM_UNIX)    
+#if !defined(PLATFORM_UNIX)
         WriteInfo(
             TraceType_ActivationManager,
             owner_.Root.TraceId,
             "Installing Fabric installer service");
+        wstring servicePathWithQuotes = wformatString("\"{0}\"", servicePath);
         ServiceController scm(Constants::FabricUpgrade::FabricInstallerServiceName);
-        auto error = scm.InstallAuto(Constants::FabricUpgrade::FabricInstallerServiceDisplayName, servicePath);
+        auto error = scm.InstallAuto(Constants::FabricUpgrade::FabricInstallerServiceDisplayName, servicePathWithQuotes);
         if (error.IsWin32Error(ERROR_SERVICE_EXISTS))
         {
             WriteWarning(
@@ -1682,7 +1876,7 @@ private:
         }
 
         return error;
-#endif        
+#endif
     }
 
     void FinishActivate(AsyncOperationSPtr const & operation, bool expectedCompletedSynchronously)
@@ -2009,6 +2203,7 @@ public:
     GetContainerInfoAsyncOperation(
         wstring const & nodeId,
         wstring const & appServiceId,
+        bool isServicePackageActivationModeExclusive,
         wstring const & containerInfoTypeString,
         wstring const & containerInfoArgsString,
         ProcessActivationManager & owner,
@@ -2019,6 +2214,7 @@ public:
         AsyncOperation(callback, parent),
         nodeId_(nodeId),
         appServiceId_(appServiceId),
+        isServicePackageActivationModeExclusive_(isServicePackageActivationModeExclusive),
         containerInfoTypeString_(containerInfoTypeString),
         containerInfoArgsString_(containerInfoArgsString),
         owner_(owner),
@@ -2041,7 +2237,7 @@ protected:
         ErrorCode err = owner_.applicationServiceMap_->Get(nodeId_, appServiceId_, appService);
         if (!err.IsSuccess())
         {
-            Trace.WriteWarning(TraceType_ActivationManager,
+            WriteWarning(TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "Failed to get application service {0} from services map. Error {1}",
                 appServiceId_,
@@ -2068,10 +2264,10 @@ protected:
             switch (containerInfoType)
             {
                 case ServiceModel::ContainerInfoType::Logs:
-                    GetContainerLogs(appService->ContainerDescriptionObj.ContainerName, appService->ContainerDescriptionObj.RunInteractive, thisSPtr);
+                    GetContainerLogs(appService->ContainerDescriptionObj, isServicePackageActivationModeExclusive_, thisSPtr);
                     break;
                 case ServiceModel::ContainerInfoType::RawAPI:
-                    CallContainerApi(appService->ContainerDescriptionObj.ContainerName, thisSPtr);
+                    CallContainerApi(appService->ContainerDescriptionObj, thisSPtr);
                     break;
                 case ServiceModel::ContainerInfoType::Events:
                 case ServiceModel::ContainerInfoType::Inspect:
@@ -2085,7 +2281,7 @@ protected:
         }
     }
 
-    void CallContainerApi(std::wstring containerName, AsyncOperationSPtr const & thisSPtr)
+    void CallContainerApi(ContainerDescription containerDescription, AsyncOperationSPtr const & thisSPtr)
     {
         ServiceModel::ContainerInfoArgMap containerInfoArgMap;
         auto error = JsonHelper::Deserialize(containerInfoArgMap, containerInfoArgsString_);
@@ -2096,7 +2292,7 @@ protected:
                 TraceType_ActivationManager,
                 owner_.Root.TraceId,
                 "CallContainerApi({0}): ContainerInfoArgMap deserialization failed with {1}, input='{2}'",
-                containerName,
+                containerDescription.ContainerName,
                 error,
                 containerInfoArgsString_);
 
@@ -2109,7 +2305,7 @@ protected:
         auto requestContentType = containerInfoArgMap.GetValue(*StringConstants::HttpContentType);
         auto requestBody = containerInfoArgMap.GetValue(*StringConstants::HttpRequestBody);
         auto operation = owner_.containerActivator_->BeginInvokeContainerApi(
-            containerName,
+            containerDescription,
             httpVerb,
             uriSuffix,
             requestContentType,
@@ -2132,7 +2328,7 @@ protected:
         SendGetContainerInfoReplyAndComplete(error, result, operation->Parent);
     }
 
-    void GetContainerLogs(std::wstring containerName, bool isContainerRunInteractive, AsyncOperationSPtr const & thisSPtr)
+    void GetContainerLogs(ContainerDescription containerDescriptionObj, bool isServicePackageActivationModeExclusive, AsyncOperationSPtr const & thisSPtr)
     {
         ServiceModel::ContainerInfoArgMap containerInfoArgMap;
         auto error = JsonHelper::Deserialize(containerInfoArgMap, containerInfoArgsString_);
@@ -2142,8 +2338,7 @@ protected:
             WriteInfo(
                 TraceType_ActivationManager,
                 owner_.Root.TraceId,
-                "GetContainerLogs({0}): ContainerInfoArgMap deserialization failed: {1}",
-                containerName,
+                "GetContainerLogs(): ContainerInfoArgMap deserialization failed: {0}",
                 error);
 
             SendGetContainerInfoReplyAndComplete(error, wstring(), thisSPtr);
@@ -2151,10 +2346,14 @@ protected:
         }
 
         wstring tailArgString = containerInfoArgMap.GetValue(ContainerInfoArgs::Tail);
+        int previous;
+        StringUtility::ParseIntegralString<int, true>::Try(containerInfoArgMap.GetValue(ContainerInfoArgs::Previous), previous, 0);
+
         auto operation = owner_.containerActivator_->BeginGetLogs(
-            containerName,
+            containerDescriptionObj,
+            isServicePackageActivationModeExclusive,
             tailArgString,
-            isContainerRunInteractive,
+            previous,
             timeoutHelper_.GetRemainingTime(),
             [this](AsyncOperationSPtr const & operation)
         {
@@ -2194,11 +2393,520 @@ private:
     ProcessActivationManager & owner_;
     wstring nodeId_;
     wstring appServiceId_;
+    bool isServicePackageActivationModeExclusive_;
     wstring containerInfoTypeString_;
     wstring containerInfoArgsString_;
     TimeoutHelper timeoutHelper_;
     Common::TimerSPtr timer_;
     Transport::IpcReceiverContextUPtr context_;
+};
+
+class ProcessActivationManager::GetImagesAsyncOperation : public AsyncOperation
+{
+public:
+    GetImagesAsyncOperation(
+        ProcessActivationManager & owner,
+        Transport::IpcReceiverContextUPtr && context,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        context_(move(context))
+    {
+    }
+
+    static ErrorCode GetImagesAsyncOperation::End(AsyncOperationSPtr const & operation)
+    {
+        auto thisPtr = AsyncOperation::End<GetImagesAsyncOperation>(operation);
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        ContainerDescription containerDescription;
+
+        auto operation = owner_.containerActivator_->BeginInvokeContainerApi(
+            containerDescription,
+            L"GET",
+            L"/images/json",
+            L"application/json",
+            L"",
+            HostingConfig::GetConfig().NodeAvailableContainerImagesTimeout,
+            [this](AsyncOperationSPtr const & operation)
+        {
+            this->OnContainerApiGetImagesCompleted(operation, false);
+        },
+            thisSPtr);
+        this->OnContainerApiGetImagesCompleted(operation, true);
+    }
+
+    void OnContainerApiGetImagesCompleted(
+        AsyncOperationSPtr const & operation,
+        bool expectedCompletedSynhronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynhronously)
+        {
+            return;
+        }
+
+        wstring result;
+        auto error = owner_.containerActivator_->EndInvokeContainerApi(operation, result);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(TraceType_ActivationManager,
+                owner_.Root.TraceId,
+                "GetImages(): Failed communication with docker with error: {0}",
+                error);
+            SendGetImagesReplyAndComplete(std::vector<wstring>(), error, operation->Parent);
+            return;
+        }
+        else
+        {
+            ContainerApiResponse containerApiResponse;
+            error = JsonHelper::Deserialize(containerApiResponse, result);
+            if (!error.IsSuccess())
+            {
+                WriteWarning(
+                    TraceType_ActivationManager,
+                    owner_.Root.TraceId,
+                    "GetImages(): ContainerApiResponse deserialization failed with error: {0}",
+                    error);
+
+                SendGetImagesReplyAndComplete(std::vector<wstring>(), error, operation->Parent);
+                return;
+            }
+
+            auto & containerApiResult = containerApiResponse.Result();
+            std::vector<NodeAvailableImage> nodeAvailableImages;
+            error = JsonHelper::Deserialize(nodeAvailableImages, containerApiResult.Body());
+            if (!error.IsSuccess())
+            {
+                WriteWarning(
+                    TraceType_ActivationManager,
+                    owner_.Root.TraceId,
+                    "GetImages(): NodeAvailableImages deserialization failed with error: {0}",
+                    error);
+
+                SendGetImagesReplyAndComplete(std::vector<wstring>(), error, operation->Parent);
+                return;
+            }
+
+            std::vector<wstring> images;
+            for (auto & image : nodeAvailableImages)
+            {
+                for (auto & name : image.AvailableImages_)
+                {
+                    images.push_back(name);
+                }
+            }
+
+            SendGetImagesReplyAndComplete(images, error, operation->Parent);
+        }
+    }
+
+    void SendGetImagesReplyAndComplete(std::vector<wstring> const & images, ErrorCode const & error, AsyncOperationSPtr const & thisSPtr)
+    {
+        unique_ptr<GetImagesReply> replyBody;
+        replyBody = make_unique<GetImagesReply>(images, error);
+        MessageUPtr reply = make_unique<Message>(*replyBody);
+        WriteNoise(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Sent GetImagesReply: Available node images {0}, error {1}",
+            images,
+            error);
+        context_->Reply(move(reply));
+        TryComplete(thisSPtr, error);
+    }
+
+private:
+    ProcessActivationManager & owner_;
+    Transport::IpcReceiverContextUPtr context_;
+};
+
+class ProcessActivationManager::GetOverlayNetworkDefinitionAsyncOperation :
+    public AsyncOperation,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+public:
+    GetOverlayNetworkDefinitionAsyncOperation(
+        ProcessActivationManager & owner,
+        wstring const & networkName,
+        wstring const & parentId,
+        wstring const & nodeName,
+        wstring const & nodeIpAddress,
+        Common::TimeSpan const timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        networkName_(networkName),
+        parentId_(parentId),
+        nodeName_(nodeName),
+        nodeIpAddress_(nodeIpAddress),
+        timeoutHelper_(timeout)
+    {
+    }
+
+    static ErrorCode GetOverlayNetworkDefinitionAsyncOperation::End(AsyncOperationSPtr const & operation, __out OverlayNetworkDefinitionSPtr & networkDefinition)
+    {
+        auto thisPtr = AsyncOperation::End<GetOverlayNetworkDefinitionAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            networkDefinition = move(thisPtr->networkDefinition_);
+        }
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        ActivatorRequestorSPtr requestor;
+        auto error = owner_.requestorMap_.Get(parentId_, requestor);
+        if (error.IsSuccess())
+        {
+            MessageUPtr request = CreateNetworkAllocationRequest();
+            auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
+                move(request),
+                requestor->CallbackAddress,
+                timeoutHelper_.GetRemainingTime(),
+                [this](AsyncOperationSPtr const & operation) { OnGetOverlayNetworkDefinitionCompleted(operation, false); },
+                thisSPtr);
+
+            OnGetOverlayNetworkDefinitionCompleted(operation, true);
+        }
+        else
+        {
+            TryComplete(thisSPtr, error);
+        }
+    }
+
+    void OnGetOverlayNetworkDefinitionCompleted(AsyncOperationSPtr operation, bool expectedCompletedAsynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedAsynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.activationManager_.IpcServerObj.EndRequest(operation, reply);
+        WriteInfo(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Get overlay network definition completed for Node={0} Network={1} with error={2}.",
+            parentId_,
+            networkName_,
+            error);
+
+        if (error.IsSuccess())
+        {
+            // process the reply
+            Management::NetworkInventoryManager::NetworkAllocationResponseMessage networkAllocationResponse;
+            if (!reply->GetBody<Management::NetworkInventoryManager::NetworkAllocationResponseMessage>(networkAllocationResponse))
+            {
+                error = ErrorCode::FromNtStatus(reply->Status);
+                WriteWarning(
+                    TraceType_ActivationManager,
+                    owner_.Root.TraceId,
+                    "GetBody<Management::NetworkInventoryManager::NetworkAllocationResponseMessage> failed: Message={0}, ErrorCode={1}",
+                    *reply,
+                    error);
+                TryComplete(operation->Parent, error);
+                return;
+            }
+
+            error = networkAllocationResponse.ErrorCode;
+
+            if (error.IsSuccess())
+            {
+                // convert to network definition
+                wstring subnet = wformatString("{0}/{1}", networkAllocationResponse.Subnet, networkAllocationResponse.Prefix);
+
+                this->networkDefinition_ = make_shared<OverlayNetworkDefinition>(
+                    networkAllocationResponse.NetworkName,
+                    networkAllocationResponse.NetworkId,
+                    Common::ContainerEnvironment::ContainerOverlayNetworkTypeName,
+                    subnet,
+                    networkAllocationResponse.Gateway,
+                    networkAllocationResponse.Prefix,
+                    networkAllocationResponse.OverlayId,
+                    networkAllocationResponse.StartMacPoolAddress,
+                    networkAllocationResponse.EndMacPoolAddress,
+                    networkAllocationResponse.NodeIpAddress,
+                    parentId_,
+                    this->nodeName_,
+                    networkAllocationResponse.IpMacAddressMapToBeAdded,
+                    networkAllocationResponse.IpMacAddressMapToBeRemoved);
+
+                std::wstring isolatedNetworkInterfaceName;
+                error = FabricEnvironment::GetFabricIsolatedNetworkInterfaceName(isolatedNetworkInterfaceName);
+                if (error.IsSuccess())
+                {
+                    this->networkDefinition_->NetworkAdapterName = isolatedNetworkInterfaceName;
+                }
+                else
+                {
+                    WriteWarning(
+                        TraceType_ActivationManager,
+                        owner_.Root.TraceId,
+                        "GetFabricIsolatedNetworkInterfaceName failed: ErrorCode={0}",
+                        error);
+                }
+            }
+        }
+
+        TryComplete(operation->Parent, error);
+    }
+
+    MessageUPtr CreateNetworkAllocationRequest()
+    {
+        NetworkAllocationRequestMessage networkAllocationRequest(
+            this->networkName_,
+            this->nodeName_,
+            this->nodeIpAddress_);
+
+        MessageUPtr request = make_unique<Message>(networkAllocationRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::GetOverlayNetworkDefinition));
+
+        WriteNoise(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Get overlay network definition request: Message={0}, Body={1}", *request, networkAllocationRequest);
+            
+        return move(request);
+    }
+
+private:
+    ProcessActivationManager & owner_;
+    OverlayNetworkDefinitionSPtr networkDefinition_;
+    TimeoutHelper timeoutHelper_;
+    wstring parentId_;
+    wstring networkName_;
+    wstring nodeName_;
+    wstring nodeIpAddress_;
+};
+
+class ProcessActivationManager::DeleteOverlayNetworkDefinitionAsyncOperation :
+    public AsyncOperation,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+public:
+    DeleteOverlayNetworkDefinitionAsyncOperation(
+        ProcessActivationManager & owner,
+        wstring const & networkName,
+        wstring const & parentId,
+        Common::TimeSpan const timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        networkName_(networkName),
+        parentId_(parentId),
+        timeoutHelper_(timeout)
+    {
+    }
+
+    static ErrorCode DeleteOverlayNetworkDefinitionAsyncOperation::End(AsyncOperationSPtr const & operation)
+    {
+        auto thisPtr = AsyncOperation::End<DeleteOverlayNetworkDefinitionAsyncOperation>(operation);
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        ActivatorRequestorSPtr requestor;
+        auto error = owner_.requestorMap_.Get(parentId_, requestor);
+        if (error.IsSuccess())
+        {
+            MessageUPtr request = CreateNetworkRemoveRequestMessage();
+            auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
+                move(request),
+                requestor->CallbackAddress,
+                timeoutHelper_.GetRemainingTime(),
+                [this](AsyncOperationSPtr const & operation) { OnDeleteOverlayNetworkDefinitionCompleted(operation, false); },
+                thisSPtr);
+
+            OnDeleteOverlayNetworkDefinitionCompleted(operation, true);
+        }
+        else
+        {
+            TryComplete(thisSPtr, error);
+        }
+    }
+
+    void OnDeleteOverlayNetworkDefinitionCompleted(AsyncOperationSPtr operation, bool expectedCompletedAsynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedAsynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.activationManager_.IpcServerObj.EndRequest(operation, reply);
+        WriteInfo(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Delete overlay network definition completed for Node={0} Network={1} with error={2}.",
+            parentId_,
+            networkName_,
+            error);
+
+        if (error.IsSuccess())
+        {
+            // process the reply
+            Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage networkRemoveResponse;
+            if (!reply->GetBody<Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage>(networkRemoveResponse))
+            {
+                error = ErrorCode::FromNtStatus(reply->Status);
+                WriteWarning(
+                    TraceType_ActivationManager,
+                    owner_.Root.TraceId,
+                    "GetBody<Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage> failed: Message={0}, ErrorCode={1}",
+                    *reply,
+                    error);
+                TryComplete(operation->Parent, error);
+                return;
+            }
+
+            error = networkRemoveResponse.ErrorCode;
+        }
+
+        TryComplete(operation->Parent, error);
+    }
+
+    MessageUPtr CreateNetworkRemoveRequestMessage()
+    {
+        NetworkRemoveRequestMessage networkRemoveRequest(
+            this->networkName_,
+            this->parentId_);
+
+        MessageUPtr request = make_unique<Message>(networkRemoveRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::DeleteOverlayNetworkDefinition));
+
+        WriteNoise(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Delete overlay network definition request: Message={0}, Body={1}", *request, networkRemoveRequest);
+
+        return move(request);
+    }
+
+private:
+    ProcessActivationManager & owner_;
+    TimeoutHelper timeoutHelper_;
+    wstring parentId_;
+    wstring networkName_;
+};
+
+class ProcessActivationManager::PublishNetworkTablesAsyncOperation :
+    public AsyncOperation,
+    TextTraceComponent<TraceTaskCodes::Hosting>
+{
+public:
+    PublishNetworkTablesAsyncOperation(
+        ProcessActivationManager & owner,
+        wstring const & networkName,
+        wstring const & parentId,
+        Common::TimeSpan const timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        networkName_(networkName),
+        parentId_(parentId),
+        timeoutHelper_(timeout)
+    {
+    }
+
+    static ErrorCode PublishNetworkTablesAsyncOperation::End(AsyncOperationSPtr const & operation)
+    {
+        auto thisPtr = AsyncOperation::End<PublishNetworkTablesAsyncOperation>(operation);
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        ActivatorRequestorSPtr requestor;
+        auto error = owner_.requestorMap_.Get(parentId_, requestor);
+        if (error.IsSuccess())
+        {
+            MessageUPtr request = CreatePublishNetworkTablesRequestMessage();
+            auto operation = owner_.activationManager_.IpcServerObj.BeginRequest(
+                move(request),
+                requestor->CallbackAddress,
+                timeoutHelper_.GetRemainingTime(),
+                [this](AsyncOperationSPtr const & operation) { OnPublishNetworkTablesRequestCompleted(operation, false); },
+                thisSPtr);
+
+            OnPublishNetworkTablesRequestCompleted(operation, true);
+        }
+        else
+        {
+            TryComplete(thisSPtr, error);
+        }
+    }
+
+    void OnPublishNetworkTablesRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedAsynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedAsynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.activationManager_.IpcServerObj.EndRequest(operation, reply);
+        WriteInfo(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Publish network tables request completed for Node={0} Network={1} with error={2}.",
+            parentId_,
+            networkName_,
+            error);
+
+        if (error.IsSuccess())
+        {
+            // process the reply
+            Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage publishNetworkTablesResponse;
+            if (!reply->GetBody<Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage>(publishNetworkTablesResponse))
+            {
+                error = ErrorCode::FromNtStatus(reply->Status);
+                WriteWarning(
+                    TraceType_ActivationManager,
+                    owner_.Root.TraceId,
+                    "GetBody<Reliability::PublishNetworkTablesResponseMessage> failed: Message={0}, ErrorCode={1}",
+                    *reply,
+                    error);
+                TryComplete(operation->Parent, error);
+                return;
+            }
+
+            error = publishNetworkTablesResponse.ErrorCode;
+        }
+
+        TryComplete(operation->Parent, error);
+    }
+
+    MessageUPtr CreatePublishNetworkTablesRequestMessage()
+    {
+        PublishNetworkTablesMessageRequest publishNetworkTablesRequest(
+            this->networkName_,
+            this->parentId_);
+
+        MessageUPtr request = make_unique<Message>(publishNetworkTablesRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivatorClient));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::PublishNetworkTablesRequest));
+
+        WriteNoise(TraceType_ActivationManager,
+            owner_.Root.TraceId,
+            "Publish network tables request: Message={0}, Body={1}", *request, publishNetworkTablesRequest);
+
+        return move(request);
+    }
+
+private:
+    ProcessActivationManager & owner_;
+    TimeoutHelper timeoutHelper_;
+    wstring parentId_;
+    wstring networkName_;
 };
 
 ProcessActivationManager::ProcessActivationManager(
@@ -2226,20 +2934,16 @@ ProcessActivationManager::ProcessActivationManager(
     auto firewallProvider = make_unique<FirewallSecurityProvider>(root);
     firewallProvider_ = move(firewallProvider);
 
-#if !defined(PLATFORM_UNIX)
-    auto containerActivator = make_unique<ContainerActivatorWindows>(
-#else
-    auto containerActivator = make_unique<ContainerActivatorLinux>(
-#endif
+    auto containerActivator = make_unique<ContainerActivator>(
         root,
         *this,
         [this](wstring const & appHostId, wstring const & nodeId, DWORD exitCode)
         {
             this->OnContainerTerminated(appHostId, nodeId, exitCode);
         },
-        [this]()
+        [this](DWORD exitCode, ULONG continuousFailureCount, TimeSpan const& nextStartTime)
         {
-            this->OnContainerEngineTerminated();
+            this->OnContainerEngineTerminated(exitCode, continuousFailureCount, nextStartTime);
         },
         [this](wstring const & nodeId, std::vector<ContainerHealthStatusInfo> const & healthStatusInfoList)
         {
@@ -2285,7 +2989,7 @@ Common::ErrorCode ProcessActivationManager::OnEndClose(Common::AsyncOperationSPt
 
 void ProcessActivationManager::OnAbort()
 {
-    Trace.WriteInfo(TraceType_ActivationManager,
+    WriteInfo(TraceType_ActivationManager,
         Root.TraceId,
         "Aborting ProcessActivationManager");
     this->principalsProvider_->Abort();
@@ -2377,7 +3081,7 @@ void ProcessActivationManager::OnApplicationServiceTerminated(
             appServiceId,
             err);
 
-        this->SendApplicationServiceTerminationNotification(parentId, appServiceId, exitCode);
+        this->SendApplicationServiceTerminationNotification(parentId, appServiceId, exitCode, ActivityDescription(ActivityId(), ActivityType::Enum::ServicePackageEvent), appService->IsContainerRoot);
     }
     else if (!err.IsError(ErrorCodeValue::ObjectClosed))
     {
@@ -2386,39 +3090,48 @@ void ProcessActivationManager::OnApplicationServiceTerminated(
             "Failed to get Service with Id {0} from servicemap. Error {1}, sending notification regardless",
             appServiceId,
             err);
-        this->SendApplicationServiceTerminationNotification(parentId, appServiceId, exitCode);
+        this->SendApplicationServiceTerminationNotification(parentId, appServiceId, exitCode, ActivityDescription(ActivityId(), ActivityType::Enum::ServicePackageEvent), false);
     }
 }
 
 void ProcessActivationManager::SendApplicationServiceTerminationNotification(
     wstring const & parentId,
     wstring const & appServiceId,
-    DWORD exitCode)
+    DWORD exitCode,
+    ActivityDescription const & activityDescription,
+    bool isRootContainer)
 {
     WriteInfo(TraceType_ActivationManager,
         this->Root.TraceId,
-        "Sending ApplicationService host down notification for apphost {0}, node {1}",
+        "Sending ApplicationService host down notification for apphost {0}, node {1}, activityDescription {2}",
         appServiceId,
-        parentId);
+        parentId,
+        activityDescription);
 
     vector<wstring> appIds;
     appIds.push_back(appServiceId);
     SendApplicationServiceTerminationNotification(
+        activityDescription,
         parentId,
         appIds,
-        exitCode);
+        exitCode,
+        isRootContainer);
 }
 
 void ProcessActivationManager::SendApplicationServiceTerminationNotification(
+    ActivityDescription const & activityDescription,
     wstring const & parentId,
     vector<wstring> const & appServiceId,
-    DWORD exitCode)
+    DWORD exitCode,
+    bool isRootContainer)
 {
     auto operation = AsyncOperation::CreateAndStart<NotifyServiceTerminationAsyncOperation>(
         *this,
+        activityDescription,
         parentId,
         appServiceId,
         exitCode,
+        isRootContainer,
         [this](AsyncOperationSPtr const & operation) { this->FinishSendServiceTerminationMessage(operation, false); },
         this->Root.CreateAsyncOperationRoot());
     FinishSendServiceTerminationMessage(operation, true);
@@ -2446,6 +3159,11 @@ void ProcessActivationManager::OnContainerHealthCheckStatusEvent(
     vector<ContainerHealthStatusInfo> const & healthStatusInfoList)
 {
     this->SendContainerHealthCheckStatusNotification(nodeId, healthStatusInfoList);
+}
+
+void ProcessActivationManager::OnContainerActivatorServiceTerminated()
+{
+    containerActivator_->OnContainerActivatorServiceTerminated();
 }
 
 void ProcessActivationManager::SendContainerHealthCheckStatusNotification(
@@ -2481,6 +3199,77 @@ void ProcessActivationManager::FinishSendContainerHealthCheckStatusMessage(
     }
 }
 
+Common::AsyncOperationSPtr ProcessActivationManager::BeginGetOverlayNetworkDefinition(
+    std::wstring const & networkName,
+    std::wstring const & nodeId,
+    std::wstring const & nodeName,
+    std::wstring const & nodeIpAddress,
+    Common::TimeSpan const timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<GetOverlayNetworkDefinitionAsyncOperation>(
+        *this,
+        networkName,
+        nodeId,
+        nodeName,
+        nodeIpAddress,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode ProcessActivationManager::EndGetOverlayNetworkDefinition(
+    Common::AsyncOperationSPtr const & operation,
+    OverlayNetworkDefinitionSPtr & networkDefinition)
+{
+    return GetOverlayNetworkDefinitionAsyncOperation::End(operation, networkDefinition);
+}
+
+Common::AsyncOperationSPtr ProcessActivationManager::BeginDeleteOverlayNetworkDefinition(
+    std::wstring const & networkName,
+    std::wstring const & nodeId,
+    Common::TimeSpan const timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<DeleteOverlayNetworkDefinitionAsyncOperation>(
+        *this,
+        networkName,
+        nodeId,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode ProcessActivationManager::EndDeleteOverlayNetworkDefinition(
+    Common::AsyncOperationSPtr const & operation)
+{
+    return DeleteOverlayNetworkDefinitionAsyncOperation::End(operation);
+}
+
+Common::AsyncOperationSPtr ProcessActivationManager::BeginPublishNetworkTablesRequest(
+    std::wstring const & networkName,
+    std::wstring const & nodeId,
+    Common::TimeSpan const timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<PublishNetworkTablesAsyncOperation>(
+        *this,
+        networkName,
+        nodeId,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode ProcessActivationManager::EndPublishNetworkTablesRequest(
+    Common::AsyncOperationSPtr const & operation)
+{
+    return PublishNetworkTablesAsyncOperation::End(operation);
+}
+
 bool ProcessActivationManager::IsRequestorRegistered(wstring const & requestorId)
 {
     bool contains;
@@ -2501,7 +3290,8 @@ bool ProcessActivationManager::IsRequestorRegistered(wstring const & requestorId
 ErrorCode ProcessActivationManager::CheckAddParentProcessMonitoring(
     DWORD parentId,
     wstring const & nodeId,
-    wstring const & callbackAddress)
+    wstring const & callbackAddress,
+    uint64 nodeInstanceId)
 {
     ActivatorRequestorSPtr requestor = nullptr;
     {
@@ -2537,15 +3327,16 @@ ErrorCode ProcessActivationManager::CheckAddParentProcessMonitoring(
                 parentId);
             requestor = make_shared<ActivatorRequestor>(
                 ProcessActivationManagerHolder(*this, this->Root.CreateComponentRoot()),
-                [this](DWORD parentId, wstring const & nodeId, ErrorCode waitResult)
+                [this](DWORD parentId, wstring const & nodeId, ErrorCode waitResult, uint64 nodeInstanceId)
                 {
-                    this->OnParentProcessTerminated(parentId, nodeId, waitResult);
+                    this->OnParentProcessTerminated(parentId, nodeId, waitResult, nodeInstanceId);
                 },
                 ActivatorRequestorType::FabricNode,
                 nodeId,
                 callbackAddress,
                 parentId,
-                this->isSystem_);
+                this->isSystem_,
+                nodeInstanceId);
 
             err = requestorMap_.Add(nodeId, requestor);
             if (!err.IsSuccess())
@@ -2588,7 +3379,8 @@ ErrorCode ProcessActivationManager::CheckAddParentProcessMonitoring(
 void ProcessActivationManager::OnParentProcessTerminated(
     DWORD parentId,
     wstring const & nodeId,
-    ErrorCode const & waitResult)
+    ErrorCode const & waitResult,
+    uint64 nodeInstanceId)
 {
     LONG state = this->State.Value;
     if (state > FabricComponentState::Opened)
@@ -2605,18 +3397,20 @@ void ProcessActivationManager::OnParentProcessTerminated(
 
     WriteInfo(TraceType_ActivationManager,
         Root.TraceId,
-        "Process with Id {0} and node Id {1} terminated. Error {2}",
+        "Process with Id {0} and node Id {1} nodeInstanceId {2} terminated. Error {3}",
         parentId,
         nodeId,
+        nodeInstanceId,
         waitResult);
-    auto error = this->TerminateAndCleanup(nodeId, parentId);
+    auto error = this->TerminateAndCleanup(nodeId, parentId, nodeInstanceId);
 
     WriteTrace(error.ToLogLevel(),
         TraceType_ActivationManager,
         Root.TraceId,
-        "Termination and cleanup for processId {0} and node Id {1} returned Error {2}",
+        "Termination and cleanup for processId {0} and node Id {1} nodeInstanceId {2} returned Error {3}",
         parentId,
         nodeId,
+        nodeInstanceId,
         waitResult);
 }
 
@@ -2705,6 +3499,22 @@ void ProcessActivationManager::ProcessIpcMessage(
     {
         this->ProcessAssignIPAddressesRequest(message, context);
     }
+    else if (action == Hosting2::Protocol::Actions::ManageOverlayNetworkResources)
+    {
+        this->ProcessManageOverlayNetworkResourcesRequest(message, context);
+    }
+    else if (action == Hosting2::Protocol::Actions::UpdateOverlayNetworkRoutes)
+    {
+        this->ProcessUpdateOverlayNetworkRoutesRequest(message, context);
+    }
+    else if (action == Hosting2::Protocol::Actions::GetNetworkDeployedCodePackages)
+    {
+        this->ProcessGetDeployedNetworkCodePackagesRequest(message, context);
+    }
+    else if (action == Hosting2::Protocol::Actions::GetDeployedNetworks)
+    {
+        this->ProcessGetDeployedNetworksRequest(message, context);
+    }
 #if defined(PLATFORM_UNIX)
     else if (action == Hosting2::Protocol::Actions::DeleteApplicationFolder)
     {
@@ -2747,6 +3557,10 @@ void ProcessActivationManager::ProcessIpcMessage(
     {
         this->ProcessGetResourceUsage(message, context);
     }
+    else if (action == Hosting2::Protocol::Actions::GetImages)
+    {
+        this->ProcessGetImagesMessage(message, context); // Process request to get available images on node
+    }
     else
     {
         WriteWarning(
@@ -2777,8 +3591,6 @@ void ProcessActivationManager::ProcessActivateProcessRequest(
     if (this->IsRequestorRegistered(request.NodeId))
     {
         wstring appServiceId = request.ApplicationServiceId;
-
-        TimeSpan timeout = TimeSpan::FromTicks(request.TimeoutInTicks);
 
         WriteNoise(
             TraceType_ActivationManager,
@@ -2914,7 +3726,7 @@ void ProcessActivationManager::ProcessTerminateProcessRequest(
     auto err = applicationServiceMap_->Get(request.ParentId, appServiceId, appService);
     if (!err.IsSuccess())
     {
-        Trace.WriteWarning(TraceType_ActivationManager,
+        WriteWarning(TraceType_ActivationManager,
             Root.TraceId,
             "Failed to get application service {0} from services map. Error {1}",
             appServiceId,
@@ -2923,7 +3735,7 @@ void ProcessActivationManager::ProcessTerminateProcessRequest(
     }
     if (!appService)
     {
-        Trace.WriteWarning(TraceType_ActivationManager,
+        WriteWarning(TraceType_ActivationManager,
             Root.TraceId,
             "Did not find application service {0} in services map.",
             appServiceId);
@@ -2931,20 +3743,29 @@ void ProcessActivationManager::ProcessTerminateProcessRequest(
     err = applicationServiceMap_->Remove(request.ParentId, appServiceId);
     if (!err.IsSuccess())
     {
-        Trace.WriteWarning(TraceType_ActivationManager,
+        WriteWarning(TraceType_ActivationManager,
             Root.TraceId,
             "Failed to remove application service {0} from services map. Error {1}",
             appServiceId,
             err);
         return;
     }
-    Trace.WriteInfo(TraceType_ActivationManager,
+    
+    WriteInfo(
+        TraceType_ActivationManager,
         Root.TraceId,
         "Aborting application service {0} associated with parent {1}",
         appServiceId,
         appService->ParentId);
+
     appService->AbortAndWaitForTermination();
-    SendApplicationServiceTerminationNotification(request.ParentId, appServiceId, ProcessActivator::ProcessAbortExitCode);
+
+    SendApplicationServiceTerminationNotification(
+        request.ParentId,
+        appServiceId, 
+        ProcessActivator::ProcessAbortExitCode, 
+        ActivityDescription(ActivityId(), ActivityType::Enum::ServicePackageEvent),
+        appService->IsContainerRoot);
     return;
 }
 
@@ -2971,7 +3792,7 @@ void ProcessActivationManager::ProcessRegisterClientRequest(
         request.ParentProcessId,
         request.NodeId);
 
-    auto error = this->CheckAddParentProcessMonitoring(request.ParentProcessId, request.NodeId, context->From);
+    auto error = this->CheckAddParentProcessMonitoring(request.ParentProcessId, request.NodeId, context->From, request.NodeInstanceId);
 
     SendRegisterClientReply(error, context);
 }
@@ -3050,7 +3871,7 @@ void ProcessActivationManager::ProcessConfigureSecurityPrincipalRequest(
                 error.ReadValue();    // read the previous error
                 error = cleanupError; // save the last error
             }
-            
+
         }
         SendFabricActivatorOperationReply(error, context);
     }
@@ -3441,13 +4262,14 @@ void ProcessActivationManager::ProcessConfigureEndpointSecurityRequest(
 ErrorCode ProcessActivationManager::ConfigureFirewallPolicy(
     bool removeRule,
     wstring const & servicePackageId,
-    std::vector<LONG> const & ports)
+    std::vector<LONG> const & ports,
+    uint64 nodeInstanceId)
 {
     ErrorCode error(ErrorCodeValue::Success);
 
     if (removeRule)
     {
-        error = firewallProvider_->RemoveFirewallRule(servicePackageId);
+        error = firewallProvider_->RemoveFirewallRule(servicePackageId, ports, nodeInstanceId);
         WriteTrace(
             error.ToLogLevel(),
             TraceType_ActivationManager,
@@ -3458,7 +4280,7 @@ ErrorCode ProcessActivationManager::ConfigureFirewallPolicy(
     }
     else
     {
-        error = firewallProvider_->ConfigurePortFirewallPolicy(servicePackageId, ports);
+        error = firewallProvider_->ConfigurePortFirewallPolicy(servicePackageId, ports, nodeInstanceId);
         if (!error.IsSuccess())
         {
             WriteWarning(
@@ -3466,7 +4288,7 @@ ErrorCode ProcessActivationManager::ConfigureFirewallPolicy(
                 Root.TraceId,
                 "Failed to configure firewall ports for servicepackage id : {0}, error {1} removing policies",
                 servicePackageId, error);
-            firewallProvider_->RemoveFirewallRule(servicePackageId).ReadValue();
+            firewallProvider_->RemoveFirewallRule(servicePackageId, ports, nodeInstanceId).ReadValue();
         }
     }
     error = ErrorCode(error.ReadValue(),
@@ -3570,12 +4392,13 @@ void ProcessActivationManager::ProcessConfigureEndpointCertificatesAndFirewallPo
 
     ErrorCode error, lastError;
 
-    if (request.CleanupFirewallPolicy || !request.FirewallPorts.empty())
+    if (!request.FirewallPorts.empty())
     {
         error = this->ConfigureFirewallPolicy(
             request.CleanupFirewallPolicy,
             request.ServicePackageId,
-            request.FirewallPorts);
+            request.FirewallPorts,
+            request.NodeInstanceId);
 
         if (!error.IsSuccess())
         {
@@ -3642,9 +4465,267 @@ void ProcessActivationManager::ProcessAssignIPAddressesRequest(
     MessageUPtr reply = make_unique<Message>(*replyBody);
     WriteNoise(TraceType_ActivationManager,
         Root.TraceId,
-        "Sending AssignIPAddressReply: for NodeId {0} ServicePackageIdId={1}",
+        "Sending AssignIPAddressReply: for NodeId {0} ServicePackageId={1}",
         request.NodeId,
         request.ServicePackageId);
+    context->Reply(move(reply));
+}
+
+void ProcessActivationManager::ProcessManageOverlayNetworkResourcesRequest(
+    __in Transport::Message & message,
+    __in Transport::IpcReceiverContextUPtr & context)
+{
+    ManageOverlayNetworkResourcesRequest request;
+    if (!message.GetBody<ManageOverlayNetworkResourcesRequest>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivationManager,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    if (request.Action == ManageOverlayNetworkAction::Assign)
+    {
+        this->containerActivator_->BeginAssignOverlayNetworkResources(
+            request.NodeId,
+            request.NodeName,
+            request.NodeIpAddress,
+            request.ServicePackageId,
+            request.CodePackageNetworkNames,
+            HostingConfig::GetConfig().RequestTimeout,
+            [this, request, ctx = context.release()](AsyncOperationSPtr const & operation)
+        {
+            std::map<std::wstring, std::map<std::wstring, std::wstring>> assignedNetworkResources;
+            ErrorCode error(ErrorCodeValue::Success);
+            error = this->containerActivator_->EndAssignOverlayNetworkResources(operation, assignedNetworkResources);
+            unique_ptr<ManageOverlayNetworkResourcesReply> replyBody;
+            replyBody = make_unique<ManageOverlayNetworkResourcesReply>(request.Action, error, assignedNetworkResources);
+
+            MessageUPtr reply = make_unique<Message>(*replyBody);
+            WriteNoise(TraceType_ActivationManager,
+                Root.TraceId,
+                "Sending ManageOverlayNetworkResourcesReply: for NodeId={0} ServicePackageId={1} Action={2}",
+                request.NodeId,
+                request.ServicePackageId,
+                request.Action);
+
+            ctx->Reply(move(reply));
+        },
+            this->Root.CreateAsyncOperationRoot());
+    }
+    else
+    {
+        std::set<wstring> networkNamesSet;
+        for (auto const & cpn : request.CodePackageNetworkNames)
+        {
+            for (auto const & networkName : cpn.second)
+            {
+                networkNamesSet.insert(networkName);
+            }
+        }
+
+        std::vector<wstring> networkNames;
+        networkNames.assign(networkNamesSet.begin(), networkNamesSet.end());
+
+        this->containerActivator_->BeginReleaseOverlayNetworkResources(
+            request.NodeId,
+            request.NodeName,
+            request.NodeIpAddress,
+            request.ServicePackageId,
+            networkNames,
+            HostingConfig::GetConfig().RequestTimeout,
+            [this, request, ctx = context.release()](AsyncOperationSPtr const & operation)
+        {
+            ErrorCode error(ErrorCodeValue::Success);
+            error = this->containerActivator_->EndReleaseOverlayNetworkResources(operation);
+            unique_ptr<ManageOverlayNetworkResourcesReply> replyBody;
+            replyBody = make_unique<ManageOverlayNetworkResourcesReply>(request.Action, error, std::map<wstring, std::map<std::wstring, std::wstring>>());
+
+            MessageUPtr reply = make_unique<Message>(*replyBody);
+            WriteNoise(TraceType_ActivationManager,
+                Root.TraceId,
+                "Sending ManageOverlayNetworkResourcesReply: for NodeId={0} ServicePackageId={1} Action={2}",
+                request.NodeId,
+                request.ServicePackageId,
+                request.Action);
+
+            ctx->Reply(move(reply));
+        },
+            this->Root.CreateAsyncOperationRoot());
+    }
+}
+
+void ProcessActivationManager::ProcessUpdateOverlayNetworkRoutesRequest(
+    __in Transport::Message & message,
+    __in Transport::IpcReceiverContextUPtr & context)
+{
+    UpdateOverlayNetworkRoutesRequest request;
+    if (!message.GetBody<UpdateOverlayNetworkRoutesRequest>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivationManager,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    std::vector<OverlayNetworkRouteSPtr> overlayNetworkRoutes;
+    for (auto const & r : request.NetworkMappingTable)
+    {
+        auto overlayNetworkRoute = make_shared<OverlayNetworkRoute>(r->IpAddress, r->MacAddress, r->InfraIpAddress);
+        overlayNetworkRoutes.push_back(overlayNetworkRoute);
+    }
+
+    auto overlayNetworkRoutingInformation = make_shared<OverlayNetworkRoutingInformation>(
+        request.NetworkName,
+        request.NodeIpAddress,
+        request.InstanceID,
+        request.SequenceNumber,
+        request.IsDelta,
+        overlayNetworkRoutes);
+
+    this->containerActivator_->BeginUpdateRoutes(
+        overlayNetworkRoutingInformation,
+        HostingConfig::GetConfig().RequestTimeout,
+        [this, request, ctx = context.release()](AsyncOperationSPtr const & operation)
+    {
+        ErrorCode error(ErrorCodeValue::Success);
+        error = this->containerActivator_->EndUpdateRoutes(operation);
+        unique_ptr<UpdateOverlayNetworkRoutesReply> replyBody;
+        replyBody = make_unique<UpdateOverlayNetworkRoutesReply>(request.NetworkName, request.NodeIpAddress, error);
+
+        MessageUPtr reply = make_unique<Message>(*replyBody);
+        WriteNoise(TraceType_ActivationManager,
+            Root.TraceId,
+            "Sending UpdateOverlayNetworkRoutesReply: for NodeIp={0} NetworkName={1}",
+            request.NodeIpAddress,
+            request.NetworkName);
+
+        ctx->Reply(move(reply));
+    },
+        this->Root.CreateAsyncOperationRoot());
+}
+
+void ProcessActivationManager::ProcessGetDeployedNetworkCodePackagesRequest(
+    __in Transport::Message & message,
+    __in Transport::IpcReceiverContextUPtr & context)
+{
+    GetNetworkDeployedPackagesRequest request;
+    if (!message.GetBody<GetNetworkDeployedPackagesRequest>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivationManager,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    std::map<std::wstring, std::vector<std::wstring>> networkReservedCodePackages;
+    ErrorCode error(ErrorCodeValue::Success);
+    this->containerActivator_->GetDeployedNetworkCodePackages(
+        request.ServicePackageIds,
+        request.CodePackageName,
+        request.NetworkName,
+        __out networkReservedCodePackages
+    );
+
+    std::map<std::wstring, std::wstring> containerInfoMap;
+    for (auto const & cp : request.CodePackageInstanceAppHostMap)
+    {
+        ApplicationServiceSPtr appService;
+        auto appServiceGetError = applicationServiceMap_->Get(request.NodeId, cp.second, appService);
+        if (appServiceGetError.IsSuccess())
+        {
+            // key is of format: "codePackageInstanceId,containerId"
+            auto key = wformatString("{0},{1}", cp.first, appService->ContainerId);
+
+            // assigned ips
+            wstring assignedIpAddresses = L"";
+            if (!appService->ContainerDescriptionObj.NetworkConfig.OpenNetworkAssignedIp.empty())
+            {
+                assignedIpAddresses = appService->ContainerDescriptionObj.NetworkConfig.OpenNetworkAssignedIp;
+            }
+
+            for (auto const & onr : appService->ContainerDescriptionObj.NetworkConfig.OverlayNetworkResources)
+            {
+                wstring ipAddress;
+                wstring macAddress;
+                StringUtility::SplitOnce(onr.second, ipAddress, macAddress, L",");
+                if (assignedIpAddresses.empty())
+                {
+                    assignedIpAddresses = ipAddress;
+                }
+                else
+                {
+                    assignedIpAddresses = wformatString("{0},{1}", assignedIpAddresses, ipAddress);
+                }
+            }
+
+            containerInfoMap[key] = assignedIpAddresses;
+        }
+    }
+
+    unique_ptr<GetNetworkDeployedPackagesReply> replyBody;
+    replyBody = make_unique<GetNetworkDeployedPackagesReply>(networkReservedCodePackages, containerInfoMap);
+    MessageUPtr reply = make_unique<Message>(*replyBody);
+
+    wstring servicePackageIdsStr = L"";
+    for (auto const & servicePackageId : request.ServicePackageIds)
+    {
+        if (servicePackageIdsStr.empty())
+        {
+            servicePackageIdsStr = servicePackageId;
+        }
+        else
+        {
+            servicePackageIdsStr = wformatString("{0},{1}", servicePackageIdsStr, servicePackageId);
+        }
+    }
+
+    WriteNoise(TraceType_ActivationManager,
+        Root.TraceId,
+        "Sending GetNetworkDeployedPackagesReply: for ServicePackageIds={0} CodePackageName={1} NetworkName={2}",
+        servicePackageIdsStr,
+        request.CodePackageName,
+        request.NetworkName);
+
+    context->Reply(move(reply));
+}
+
+void ProcessActivationManager::ProcessGetDeployedNetworksRequest(
+    __in Transport::Message & message,
+    __in Transport::IpcReceiverContextUPtr & context)
+{
+    GetDeployedNetworksRequest request;
+    if (!message.GetBody<GetDeployedNetworksRequest>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivationManager,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    std::vector<std::wstring> results;
+    this->containerActivator_->GetDeployedNetworkNames(request.NetworkType, results);
+
+    unique_ptr<GetDeployedNetworksReply> replyBody;
+    replyBody = make_unique<GetDeployedNetworksReply>(results);
+    MessageUPtr reply = make_unique<Message>(*replyBody);
+
+    WriteNoise(TraceType_ActivationManager, 
+        Root.TraceId, 
+        "Sending GetDeployedNetworksReply");
+
     context->Reply(move(reply));
 }
 
@@ -3710,7 +4791,7 @@ void ProcessActivationManager::ProcessConfigureContainerCertificateExportRequest
             auto certFilePath = Path::Combine(request.WorkDirectoryPath, codePackageName + L"_" + it->Name + L"_PEM.pem");
             auto passwordFilePath = Path::Combine(request.WorkDirectoryPath, passwordFileName.GetPlaintext() + L".key");
             vector<wstring> machineAccountNamesForACL = { L"root" };
-#endif  
+#endif
 
             if (!it->X509FindValue.empty())
             {
@@ -3776,7 +4857,7 @@ void ProcessActivationManager::ProcessConfigureContainerCertificateExportRequest
 
                 vector<wchar_t> buffer(file.size());
                 DWORD bytesRead;
-                error = file.TryRead2(reinterpret_cast<void*>(buffer.data()), file.size(), bytesRead);             
+                error = file.TryRead2(reinterpret_cast<void*>(buffer.data()), file.size(), bytesRead);
                 if(!error.IsSuccess())
                 {
                     WriteWarning(
@@ -3788,15 +4869,15 @@ void ProcessActivationManager::ProcessConfigureContainerCertificateExportRequest
                     return;
                 }
                 file.Close();
-                password = SecureString(move(wstring(buffer.data()))); 
-#endif 
+                password = SecureString(move(wstring(buffer.data())));
+#endif
             }
             else if(!it->DataPackageRef.empty())
             {
                 error = CopyAndACLCertificateFromDataPackage(
-                                 it->DataPackageRef, 
-                                 it->DataPackageVersion, 
-                                 it->RelativePath, 
+                                 it->DataPackageRef,
+                                 it->DataPackageVersion,
+                                 it->RelativePath,
                                  certFilePath,
                                  machineAccountNamesForACL);
                 if (!error.IsSuccess())
@@ -3932,7 +5013,7 @@ void ProcessActivationManager::ProcessUnregisterActivatorClientRequest(
         "Unregister fabric activator client  message received for node: {0}",
         request.NodeId);
 
-    auto error = this->TerminateAndCleanup(request.NodeId, request.ParentProcessId);
+    auto error = this->TerminateAndCleanup(request.NodeId, request.ParentProcessId, request.NodeInstanceId);
     SendRegisterClientReply(error, context);
 }
 
@@ -4011,18 +5092,15 @@ void ProcessActivationManager::ProcessSetupContainerGroupRequest(
         WriteNoise(
             TraceType_ActivationManager,
             Root.TraceId,
-            "Processing SetupContainerGroup request for NodeId {0}, application Id {1}, applicationService Id {2}",
-            request.NodeId,
-            request.AppId,
-            request.ServicePackageId);
-            auto operation = AsyncOperation::CreateAndStart<ActivateContainerGroupRootAsyncOperation>(
+            "Processing SetupContainerGroup request {0}",
+            request);
+
+        auto operation = AsyncOperation::CreateAndStart<ActivateContainerGroupRootAsyncOperation>(
             *this,
-            request.NodeId,
-            request.AssignedIP,
-            request.ServicePackageId,
-            request.AppFolder,
-            request.AppId,
-            request.ServicePackageRG,
+            request,
+#if defined(PLATFORM_UNIX)
+             request.PodDescription,
+#endif
             timeout,
             move(context),
             [this](AsyncOperationSPtr const & operation)
@@ -4191,6 +5269,7 @@ void ProcessActivationManager::ProcessGetContainerInfoMessage(
     auto operation = AsyncOperation::CreateAndStart<GetContainerInfoAsyncOperation>(
         request.NodeId,
         request.ApplicationServiceId,
+        request.IsServicePackageActivationModeExclusive,
         request.ContainerInfoType,
         request.ContainerInfoArgs,
         *this,
@@ -4254,6 +5333,34 @@ void ProcessActivationManager::OnGetResourceUsageComplete(AsyncOperationSPtr con
         TraceType_ActivationManager,
         "GetResourceUsageAsyncOperation Operation returned {0}",
         error);
+}
+
+void ProcessActivationManager::ProcessGetImagesMessage(
+    __in Transport::Message & message,
+    __in Transport::IpcReceiverContextUPtr & context)
+{
+    // no need to read message as body is empty
+    UNREFERENCED_PARAMETER(message);
+
+    auto operation = AsyncOperation::CreateAndStart<GetImagesAsyncOperation>(
+        *this,
+        move(context),
+        [this](AsyncOperationSPtr const & operation)
+    {
+        this->OnGetImagesCompleted(operation, false);
+    },
+        this->Root.CreateAsyncOperationRoot());
+    this->OnGetImagesCompleted(operation, true);
+}
+
+void ProcessActivationManager::OnGetImagesCompleted(AsyncOperationSPtr const & operation, bool expectedCompletedSynhronously)
+{
+    if (operation->CompletedSynchronously != expectedCompletedSynhronously)
+    {
+        return;
+    }
+
+    auto error = GetImagesAsyncOperation::End(operation);
 }
 
 void ProcessActivationManager::ProcessConfigureSharedFolderRequest(
@@ -4340,7 +5447,7 @@ void ProcessActivationManager::ProcessConfigureSharedFolderRequest(
         error = SecurityUtility::OverwriteFolderACL(
             *iter,
             principalPermissions,
-            false, //dont disable inheritence on shared folders 
+            false, //dont disable inheritence on shared folders
             false, //IgnoreInheritence flag, if inheritence is already set dont apply permissions.
             timeout);
         if (!error.IsSuccess())
@@ -4419,7 +5526,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         securityDescriptor);
     if (!error.IsSuccess())
     {
-        Trace.WriteWarning(
+        WriteWarning(
             TraceType_ActivationManager,
             Root.TraceId,
             "SetupShare: Failed to create SecurityDescriptor object. Error:{0}", error);
@@ -4432,7 +5539,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         error = Directory::Create2(request.LocalFullPath);
         if (!error.IsSuccess())
         {
-            Trace.WriteWarning(
+            WriteWarning(
                 TraceType_ActivationManager,
                 Root.TraceId,
                 "SetupShare: Failed to create Directory '{0}'. Error:{1}",
@@ -4447,7 +5554,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
     if (!error.IsSuccess())
     {
         // This is best effort. If the service is not running, CreateShare will fail.
-        Trace.WriteWarning(
+        WriteWarning(
             TraceType_ActivationManager,
             Root.TraceId,
             "SetupShare: EnsureServerServiceIsRunning failed with Error:{0}",
@@ -4457,7 +5564,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
     error = SMBShareUtility::CreateShare(request.LocalFullPath, request.ShareName, securityDescriptor);
     if (!error.IsSuccess())
     {
-        Trace.WriteWarning(
+        WriteWarning(
             TraceType_ActivationManager,
             Root.TraceId,
             "SetupShare: Failed to create share. LocalFullPath:{0}, ShareName:{1}, AccessMask:{2}, Error:{3}",
@@ -4469,10 +5576,77 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         return;
     }
 
+    SidSPtr fssGroupSid;
+    error = BufferedSid::CreateSPtr(*Constants::FileStoreServiceUserGroup, fssGroupSid);
+    if (!error.IsSuccess())
+    {
+        WriteWarning(
+            TraceType_ActivationManager,
+            Root.TraceId,
+            "Unable to lookup for sid for {0}: Failed to acl share's local permission. LocalFullPath:{1}, ShareName:{2}, AccessMask:{3}, Error:{4}",
+            *Constants::FileStoreServiceUserGroup,
+            request.LocalFullPath,
+            request.ShareName,
+            request.AccessMask,
+            error);
+    }
+    else
+    {
+        vector<SidSPtr> sids;
+        sids.push_back(fssGroupSid);
+        error = SecurityUtility::UpdateFolderAcl(sids, request.LocalFullPath, request.AccessMask, timoutHelper.GetRemainingTime(), true);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(TraceType_ActivationManager,
+                Root.TraceId,
+                "UpdateFolderAcl failed for FSS group {0} : Error={1}",
+                *Constants::FileStoreServiceUserGroup,
+                error);
+        }
+    }
+
+    // Trace out ACLs that are applied to the share.
+    // LookupAccount is an expensive operation, so delete the code block below when tracing is not needed anymore
+    std::wstring strAclSids;
+    Common::StringWriter writer(strAclSids);
+    if (error.IsSuccess())
+    {
+        for (auto const &sid : allowedSids)
+        {
+            wstring sidString, domain, accountName;
+            auto innerError = sid->ToString(sidString);
+            if (!innerError.IsSuccess())
+            {
+                WriteWarning(TraceType_ActivationManager,
+                    Root.TraceId,
+                    "Unable to convert sid to string Error={0}",
+                    innerError);
+
+                continue;
+            }
+
+            innerError = Sid::LookupAccount(sid->PSid, domain, accountName);
+            if (innerError.IsSuccess())
+            {
+                writer.Write("{0}|{1}|{2} ", sidString, accountName, domain);
+            }
+            else
+            {
+                WriteWarning(TraceType_ActivationManager,
+                    Root.TraceId,
+                    "Unable to lookup sid to account name Sid={0} Error={1}",
+                    sidString,
+                    innerError);
+
+                writer.Write("{0}|<>|<> ", sidString);
+            }
+        }
+    }
+
     if (anonymousSid)
     {
         error = SMBShareUtility::EnableAnonymousAccess(request.LocalFullPath, request.ShareName, request.AccessMask, anonymousSid, timoutHelper.GetRemainingTime());
-        Trace.WriteTrace(
+        WriteTrace(
             error.ToLogLevel(),
             TraceType_ActivationManager,
             "EnableAnonymousAccess. LocalPath:{0}, ShareName:{1}, Error:{2}",
@@ -4483,7 +5657,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         error = SMBShareUtility::DisableAnonymousAccess(request.LocalFullPath, request.ShareName, timoutHelper.GetRemainingTime());
         if(!error.IsSuccess())
         {
-            Trace.WriteWarning(
+            WriteWarning(
                 TraceType_ActivationManager,
                 "DisableAnonymousAccess: Failed to disable anonymous access. LocalFullPath:{0}, ShareName:{1}, Error:{2}",
                 request.LocalFullPath,
@@ -4499,11 +5673,12 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         error.IsSuccess() ? LogLevel::Info : LogLevel::Warning,
         TraceType_ActivationManager,
         Root.TraceId,
-        "ProcessConfigureSMBShareRequest completed with LocalFullPath={0}, ShareName={1}, AccessMask={2}, Error={3}",
+        "ProcessConfigureSMBShareRequest completed with LocalFullPath={0}, ShareName={1}, AccessMask={2}, Error={3}, SidsAcled(Sid|Account|Domain)={4}",
         request.LocalFullPath,
         request.ShareName,
         request.AccessMask,
-        error);
+        error,
+        strAclSids);
 
     this->SendFabricActivatorOperationReply(error, context);
 
@@ -4514,7 +5689,7 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
         error = Directory::Create2(request.LocalFullPath);
         if (!error.IsSuccess())
         {
-            Trace.WriteWarning(
+            WriteWarning(
                 TraceType_ActivationManager,
                 Root.TraceId,
                 "SetupShare: Failed to create Directory '{0}'. Error:{1}",
@@ -4528,10 +5703,16 @@ void ProcessActivationManager::ProcessConfigureSMBShareRequest(
     StringUtility::Utf16ToUtf8(request.LocalFullPath, dir);
 
     wstring str;
-    SecurityUserSPtr securityUser = make_shared<BuiltinServiceAccount>(str, str, str, str, false,
-        SecurityPrincipalAccountType::NetworkService,
-        std::vector<std::wstring>(),
-        std::vector<std::wstring>());
+    SecurityUserSPtr securityUser = make_shared<BuiltinServiceAccount>(
+                                        str,
+                                        str,
+                                        str,
+                                        str,
+                                        false,
+                                        false,
+                                        SecurityPrincipalAccountType::NetworkService,
+                                        std::vector<std::wstring>(),
+                                        std::vector<std::wstring>());
     securityUser->ConfigureAccount();
 
     string fabricuname;
@@ -4647,12 +5828,15 @@ void ProcessActivationManager::ProcessConfigureNodeForDnsServiceMessage(
         "ProcessConfigureNodeForDnsServiceMessage request.IsDnsServiceEnabled {0}.", request.IsDnsServiceEnabled);
 
     ConfigureNodeForDnsService dns(this->Root);
-    ErrorCode error = dns.Configure(request.IsDnsServiceEnabled, request.SetAsPreferredDns, request.Sid);
+    ErrorCode error = dns.Configure(request.IsDnsServiceEnabled, request.SetAsPreferredDns);
 
     SendFabricActivatorOperationReply(error, context);
 }
 
-ErrorCode ProcessActivationManager::TerminateAndCleanup(wstring const & nodeId, DWORD processId)
+ErrorCode ProcessActivationManager::TerminateAndCleanup(
+    wstring const & nodeId,
+    DWORD processId,
+    uint64 nodeInstanceId)
 {
     ActivatorRequestorSPtr activatorRequestor;
     auto err = requestorMap_.Get(nodeId, activatorRequestor);
@@ -4708,6 +5892,25 @@ ErrorCode ProcessActivationManager::TerminateAndCleanup(wstring const & nodeId, 
                 this->Root.CreateAsyncOperationRoot());
             }
             this->principalsProvider_->Cleanup(nodeId).ReadValue();
+
+#if !defined(PLATFORM_UNIX)
+            if (HostingConfig::GetConfig().EnableFirewallSecurityCleanup && HostingConfig::GetConfig().FirewallPolicyEnabled)
+            {
+                Threadpool::Post([nodeInstanceId]() {
+                    vector<BSTR> rules;
+                    auto error = FirewallSecurityProviderHelper::GetOrRemoveFirewallRules(
+                        rules,
+                        L"", /* groupname is empty. Donot remove all rules matching group name.*/
+                        nodeInstanceId,
+                        true);
+
+                    if (!error.IsSuccess())
+                    {
+                        WriteInfo(TraceType_ActivationManager, "Failed to remove firewall policies for nodeInstance {0} error:{1}", nodeInstanceId, error);
+                    }
+                });
+            }
+#endif
             return requestorMap_.Remove(nodeId, activatorRequestor);
         }
         else
@@ -4743,7 +5946,7 @@ void ProcessActivationManager::CleanupPortAclsForNode(wstring const & nodeId)
 }
 
 void ProcessActivationManager::OnContainerTerminated(
-    wstring const & appServiceId, 
+    wstring const & appServiceId,
     std::wstring const & nodeId,
     DWORD exitCode)
 {
@@ -4752,94 +5955,173 @@ void ProcessActivationManager::OnContainerTerminated(
     WriteTrace(err.ToLogLevel(),
         TraceType_ActivationManager,
         this->Root.TraceId,
-        "Removing service with Id {0} from servicemap returned error {1}",
+        "Removing service with Id {0} from servicemap returned error {1}. The service is ContainerHost.",
         appServiceId,
         err);
+
     if (err.IsSuccess())
     {
+        bool isRootContainer = false;
         if (appService != nullptr)
         {
             hostingTrace.ContainerTerminated(
                 this->Root.TraceId,
                 appService->ContainerDescriptionObj.ContainerName,
                 appService->ContainerDescriptionObj.ApplicationName,
-                appService->ContainerDescriptionObj.ServiceName);
+                appService->ContainerDescriptionObj.ServiceName,
+                appService->ContainerDescriptionObj.CodePackageName);
+
+            isRootContainer = appService->IsContainerRoot;
+
+#if defined(PLATFORM_UNIX)
+            this->UnmapClearContainerVolumes(appService);
+#endif
+            appService->SetTerminatedExternally(true);
+            appService->AbortAndWaitForTermination();
         }
-        this->SendApplicationServiceTerminationNotification(nodeId, appServiceId, exitCode);
     }
 
-    MarkContainerLogFolderForDeletion(appServiceId);
+    this->SendApplicationServiceTerminationNotification(
+        nodeId,
+        appServiceId,
+        exitCode,
+        ActivityDescription(ActivityId(), ActivityType::Enum::ServicePackageEvent),
+        false);
+
+    // Create marker files for the container log directory with appHostId so that FabricDCA can delete them.
+    ContainerHelper::GetContainerHelper().MarkContainerLogFolder(appServiceId);
 }
 
-void ProcessActivationManager::MarkContainerLogFolderForDeletion(wstring const & appServiceId)
+#if defined(PLATFORM_UNIX)
+void ProcessActivationManager::UnmapClearContainerVolumes(ApplicationServiceSPtr const & appService)
 {
-    WriteInfo(TraceType_ActivationManager,
-        "MarkContainerLogFolderForDeletion for appServiceId {0}",
-        appServiceId);
-
-    wstring fabricLogRoot;
-    auto error = Common::FabricEnvironment::GetFabricLogRoot(fabricLogRoot);
-    if (!error.IsSuccess())
+    if (!(appService->IsContainerHost) ||
+        (appService->ContainerDescriptionObj.PodDescription.IsolationMode != ServiceModel::ContainerIsolationMode::hyperv))
     {
-        WriteWarning(
-            TraceType_ActivationManager,
-            "GetFabricLogRoot(fabricLogRoot) failed. Container folder was not marked for deletion");
         return;
     }
 
-    wstring containerLogRoot = Path::Combine(fabricLogRoot, L"Containers");
-    if (!Directory::Exists(containerLogRoot))
+    vector<ContainerVolumeDescription> pluginProvidedVolumes;
+    for (auto const & volume : appService->ContainerDescriptionObj.ContainerVolumes)
     {
-        WriteWarning(
-            TraceType_ActivationManager,
-            "Directory {0} does not exist. Container folder was not marked for deletion",
-            containerLogRoot);
-        return;
+        if (!volume.Driver.empty())
+        {
+            pluginProvidedVolumes.push_back(volume);
+        }
     }
+    WriteTrace(
+        LogLevel::Info,
+        TraceType_ActivationManager,
+        Root.TraceId,
+        "Application service {0} for parent process {1} has {2} volumes that need to be unmapped.",
+        appService->ApplicationServiceId,
+        appService->ParentId,
+        pluginProvidedVolumes.size());
 
-    vector<wstring> appServiceLogRoot = Directory::GetSubDirectories(containerLogRoot, L"*" + appServiceId, true, true);
-    if (appServiceLogRoot.size() == 0)
-    {
-        WriteWarning(
-            TraceType_ActivationManager,
-            "Container Log Root not found at {0} for appId {1}",
-            containerLogRoot,
-            appServiceId);
-        return;
-    }
-
-    TESTASSERT_IF(appServiceLogRoot.size() > 1, "Multiple log folders found for same appServiceId");
-    FileWriter removeContainerLog;
-    error = removeContainerLog.TryOpen(Path::Combine(appServiceLogRoot[0], L"RemoveContainerLog.txt"));
-    if (!error.IsSuccess())
-    {
-        WriteWarning(
-            TraceType_ActivationManager,
-            "Error while opening file: error={0}. Container folder was not marked for deletion",
-            ::GetLastError());
-
-        removeContainerLog.Close();
-        return;
-    }
-    wstring removeContainerLogString = L"RemoveContainerLog = true";
-    removeContainerLog.WriteUnicodeBuffer(removeContainerLogString.c_str(), removeContainerLogString.size());
-    removeContainerLog.Close();
+    auto operation = VolumeMapper::BeginUnmapAllVolumes(
+        appService->ContainerDescriptionObj.ContainerName,
+        move(pluginProvidedVolumes),
+        TimeSpan::MaxValue,
+        [this](AsyncOperationSPtr const & operation)
+        {
+            this->OnUnmapAllVolumesCompleted(operation, false);
+        },
+        this->Root.CreateAsyncOperationRoot());
+    this->OnUnmapAllVolumesCompleted(operation, true);
 }
 
-void ProcessActivationManager::OnContainerEngineTerminated()
+void ProcessActivationManager::OnUnmapAllVolumesCompleted(
+    AsyncOperationSPtr const & operation,
+    bool expectedCompletedSynchronously)
 {
+    if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+    {
+        return;
+    }
+
+    // TODO: Should add some retry logic on unmap failure
+    VolumeMapper::EndUnmapAllVolumes(operation);
+}
+#endif
+
+void ProcessActivationManager::OnContainerEngineTerminated(
+    DWORD exitCode,
+    ULONG continuousFailureCount,
+    TimeSpan const& nextStartTime)
+{
+    //Step1: Send a notification for AppService termination to Fabric.exe
     auto appServices = this->applicationServiceMap_->RemoveAllContainerServices();
 
     for (auto i = appServices.begin(); i != appServices.end(); i++)
     {
         vector<wstring> appServiceIds;
+        vector<wstring> rootContainers;
         for (auto it = i->second.begin(); it != i->second.end(); ++it)
         {
-            appServiceIds.push_back(it->second->ApplicationServiceId);
+            if (it->second->IsContainerRoot)
+            {
+                rootContainers.push_back(it->second->ApplicationServiceId);
+            }
+            else
+            {
+                appServiceIds.push_back(it->second->ApplicationServiceId);
+            }
         }
-        this->SendApplicationServiceTerminationNotification(i->first, appServiceIds, ProcessActivator::ProcessAbortExitCode);
+
+        this->SendApplicationServiceTerminationNotification(
+            ActivityDescription(ActivityId(),
+            ActivityType::Enum::ServicePackageEvent), 
+            i->first, 
+            appServiceIds,
+            ProcessActivator::ProcessAbortExitCode,
+            false);
+
+        if (!rootContainers.empty())
+        {
+            this->SendApplicationServiceTerminationNotification(
+                ActivityDescription(ActivityId(),
+                ActivityType::Enum::ServicePackageEvent),
+                i->first,
+                rootContainers,
+                ProcessActivator::ProcessAbortExitCode,
+                true);
+        }
     }
     appServices.clear();
+
+    // Step2: Post a notification for DockerProcess termination to Fabric.exe
+    // Sending a notification to Fabric for Dockerd is best effort.
+    if (HostingConfig::GetConfig().ReportDockerHealth)
+    {
+        auto componentRoot = this->Root.CreateComponentRoot();
+
+        Threadpool::Post([this, exitCode, continuousFailureCount, nextStartTime, componentRoot]() {
+            this->SendDockerProcessTerminationNotification(exitCode, continuousFailureCount, nextStartTime);
+        });
+    }
+}
+
+void ProcessActivationManager::SendDockerProcessTerminationNotification(DWORD exitCode, ULONG continuousFailureCount, TimeSpan const& nextStartTime)
+{
+    auto operation = AsyncOperation::CreateAndStart<NotifyDockerProcessTerminationAsyncOperation>(
+        *this,
+        exitCode,
+        continuousFailureCount,
+        nextStartTime,
+        [this](AsyncOperationSPtr const & operation) { this->FinishSendDockerProcessTerminationNotification(operation, false); },
+        this->Root.CreateAsyncOperationRoot());
+    this->FinishSendDockerProcessTerminationNotification(operation, true);
+}
+
+void ProcessActivationManager::FinishSendDockerProcessTerminationNotification(AsyncOperationSPtr const & operation, bool expectedCompletedSynchronously)
+{
+    if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+    {
+        return;
+    }
+    MessageUPtr reply;
+    auto error = NotifyDockerProcessTerminationAsyncOperation::End(operation);
+    error.ReadValue();
 }
 
 Common::ErrorCode ProcessActivationManager::CopyAndACLCertificateFromDataPackage(
@@ -5012,9 +6294,9 @@ Common::ErrorCode ProcessActivationManager::CopyAndACLPEMFromStore(
             error);
         return error;
     }
-    
+
     wstring tempStr(privKey.FilePath().begin(), privKey.FilePath().end());
-    privKeyPath = tempStr;           
+    privKeyPath = tempStr;
     return error;
 }
 #endif

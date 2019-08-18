@@ -17,6 +17,7 @@ namespace Data
             static ULONG64 const InvalidRecordPosition;
             static ULONG64 const InvalidPhysicalRecordOffset;
             static ULONG64 const InvalidLogicalRecordOffset;
+            static ULONG64 const NumberLogRecordTypes;
             static LONG64 const InvalidLsn;
             static LONG64 const InvalidPsn;
             static LONG64 const OneLsn;
@@ -27,11 +28,19 @@ namespace Data
             static LONG64 const NullOperationDataCode;
             static ULONG const KGuid_KString_Length;
             static ULONG const LogReaderNameMaxLength = 128;
+            static wstring const Constants::StartingJSON;
+            static wstring const Constants::CloseJSON;
+            static wstring const Constants::Quote;
+            static wstring const Constants::DivisionJSON;
+            static wstring const Constants::DivisionBoolJSON;
+            static wstring const Constants::EndlJSON;
+            static wstring const Constants::CompEndlJSON;
             static const Common::StringLiteral SFLogSuffix;
             static const Common::StringLiteral Test_EmptyString;
             static const LPCWSTR LogPathPrefix;
             static const std::wstring Test_Ktl_LoggingEngine;
             static const std::wstring Test_File_LoggingEngine;
+            static const std::wstring SerialDispatchingMode;
             static const ULONG PhysicalLogWriterMovingAverageHistory;
             static LONG64 const PhysicalLogWriterSlowFlushDurationInMs;
             static LONG64 const ProgressVectorMaxStringSizeInKb;

@@ -67,7 +67,7 @@ ErrorCode UriArgumentParser::TryGetOperationId(__out Guid & operationId)
 
     if (!Guid::TryParse(value, Constants::HttpGatewayTraceId, operationId))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_COMMON_RC(Invalid_Guid), value));
     }
 
     return ErrorCodeValue::Success;
@@ -115,12 +115,13 @@ Common::ErrorCode UriArgumentParser::TryGetNodeInstanceId(__out uint64 & nodeIns
 
     if (!TryParseUInt64(value, nodeInstanceId))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_COMMON_RC(Invalid_Node_Instance), value));
     }
 
     return ErrorCodeValue::Success;
 }
 
+// TODO: Make these error messages more detailed by adding an actual error message
 ErrorCode UriArgumentParser::TryGetNodeName(__out wstring & nodeName)
 {
     if (!uri_.GetItem(Constants::NodeIdString, nodeName))
@@ -193,6 +194,18 @@ ErrorCode UriArgumentParser::TryGetContinuationToken(__out wstring & continuatio
     }
 
     return Utility::ValidateString(continuationToken);
+}
+
+ErrorCode UriArgumentParser::TryGetCodePackageName(
+    __out wstring & codePackageName)
+{
+    wstring escapedCodePackageName;
+    if (!uri_.GetItem(Constants::CodePackageNameIdString, escapedCodePackageName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    return NamingUri::UnescapeString(escapedCodePackageName, codePackageName);
 }
 
 // MaxResults will return InvalidArgument if it's a negative number.
@@ -287,6 +300,31 @@ ErrorCode UriArgumentParser::TryGetApplicationName(
     return TryGetPathId(Constants::ApplicationIdString, applicationName);
 }
 
+ErrorCode UriArgumentParser::TryGetAbsoluteServiceName(
+    __out NamingUri & name)
+{
+    wstring serviceName;
+    if (!uri_.GetItem(Constants::ServiceIdString, serviceName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    wstring applicationName;
+    if (!uri_.GetItem(Constants::ApplicationIdString, applicationName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    wstring nameString;
+    auto error = NamingUri::IdToFabricName(NamingUri::RootNamingUriString, wformatString("{0}/{1}", applicationName, serviceName), nameString);
+    if (!error.IsSuccess())
+    {
+        return error;
+    }
+
+    return NamingUri::TryParse(nameString, Constants::HttpGatewayTraceId, name);
+}
+
 ErrorCode UriArgumentParser::TryGetDeploymentName(
     __out wstring & deploymentName)
 {
@@ -297,6 +335,19 @@ ErrorCode UriArgumentParser::TryGetDeploymentName(
     else
     {
         return Utility::ValidateString(deploymentName);
+    }
+}
+
+ErrorCode UriArgumentParser::TryGetContainerName(
+    __out wstring & containerName)
+{
+    if (!uri_.GetItem(Constants::ContainerNameString, containerName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+    else
+    {
+        return Utility::ValidateString(containerName);
     }
 }
 
@@ -330,6 +381,17 @@ ErrorCode UriArgumentParser::TryGetImageStoreRelativePath(
     return NamingUri::UnescapeString(unescapedRelativePath, relativePath);
 }
 
+ErrorCode UriArgumentParser::TryGetInstanceId(
+    __out wstring & instanceId) const
+{
+    if (!uri_.GetItem(Constants::InstanceIdString, instanceId))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    return Utility::ValidateString(instanceId);
+}
+
 ErrorCode UriArgumentParser::TryGetServiceName(
     __out NamingUri &serviceName)
 {
@@ -344,6 +406,17 @@ ErrorCode UriArgumentParser::TryGetServiceTypeName(__out wstring & serviceTypeNa
     }
 
     return Utility::ValidateString(serviceTypeName);
+}
+
+ErrorCode UriArgumentParser::TryGetServiceManifestName(__out wstring & serviceManifestName)
+{
+    wstring escapedServiceManifestName;
+    if (!uri_.GetItem(Constants::ServiceManifestNameIdString, escapedServiceManifestName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    return NamingUri::UnescapeString(escapedServiceManifestName, serviceManifestName);
 }
 
 ErrorCode UriArgumentParser::TryGetMode(
@@ -612,7 +685,7 @@ ErrorCode UriArgumentParser::TryGetApplicationTypeVersion(
     wstring temp;
     if (!uri_.GetItem(Constants::ApplicationTypeVersionString, temp))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_HTTP_GATEWAY_RC(Missing_Required_Parameter), Constants::ApplicationTypeVersionString));
     }
 
     return NamingUri::UnescapeString(temp, appTypeVersion);
@@ -635,7 +708,7 @@ ErrorCode UriArgumentParser::TryGetClusterManifestVersion(
     wstring temp;
     if (!uri_.GetItem(Constants::ClusterManifestVersionString, temp))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_HTTP_GATEWAY_RC(Missing_Required_Parameter), Constants::ClusterManifestVersionString));
     }
 
     clusterManifestVersion = move(temp);
@@ -649,7 +722,7 @@ ErrorCode UriArgumentParser::TryGetClusterConfigurationApiVersion(
     wstring temp;
     if (!uri_.GetItem(Constants::ConfigurationApiVersionString, temp))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_HTTP_GATEWAY_RC(Missing_Required_Parameter), Constants::ConfigurationApiVersionString));
     }
 
     apiVersion = move(temp);
@@ -702,7 +775,7 @@ ErrorCode UriArgumentParser::TryGetStartTimeUtc(DateTime & startTimeUtc) const
     int64 tickCount;
     if (!TryParseInt64(value, tickCount))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_COMMON_RC(Invalid_Int64), value));
     }
 
     startTimeUtc = DateTime(tickCount);
@@ -721,7 +794,7 @@ ErrorCode UriArgumentParser::TryGetEndTimeUtc(DateTime & endTimeUtc) const
     int64 tickCount;
     if (!TryParseInt64(value, tickCount))
     {
-        return ErrorCodeValue::InvalidArgument;
+        return ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_COMMON_RC(Invalid_Int64), value));
     }
 
     endTimeUtc = DateTime(tickCount);
@@ -738,7 +811,7 @@ ErrorCode UriArgumentParser::TryGetUploadSessionId(
         return ErrorCodeValue::Success;
     }
 
-    return Common::Guid::TryParse(sessionIdString, sessionId) ? ErrorCodeValue::Success : ErrorCodeValue::InvalidArgument;
+    return Common::Guid::TryParse(sessionIdString, sessionId) ? ErrorCodeValue::Success : ErrorCode(ErrorCodeValue::InvalidArgument, wformatString(GET_COMMON_RC(Invalid_Guid), sessionIdString));;
 }
 
 Common::ErrorCode UriArgumentParser::TryGetDataLossMode(
@@ -888,6 +961,64 @@ ErrorCode UriArgumentParser::TryGetPropertyName(
     return NamingUri::UnescapeString(escapedPropertyName, propertyName);
 }
 
+ErrorCode UriArgumentParser::TryGetNetworkName(
+    __out wstring & networkName)
+{
+    wstring escapedNetworkName;
+    if (!uri_.GetItem(Constants::NetworkNameString, escapedNetworkName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    return NamingUri::UnescapeString(escapedNetworkName, networkName);
+}
+
+ErrorCode UriArgumentParser::TryGetNetworkStatusFilter(
+    __out DWORD & networkStatusFilter)
+{
+    wstring networkStatusFilterString;
+    networkStatusFilter = FABRIC_NETWORK_STATUS_FILTER_DEFAULT;
+
+    if (uri_.GetItem(Constants::NetworkStatusFilterString, networkStatusFilterString))
+    {
+        wstring networkStatusFilterValue;
+        if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterDefaultString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterDefault;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterAllString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterAll;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterReadyString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterReady;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterCreatingString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterCreating;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterDeletingString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterDeleting;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterUpdatingString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterUpdating;
+        }
+        else if (StringUtility::AreEqualCaseInsensitive(networkStatusFilterString, Constants::NetworkStatusFilterFailedString))
+        {
+            networkStatusFilterValue = *Constants::NetworkStatusFilterFailed;
+        }
+
+        return Utility::TryParseQueryFilter(networkStatusFilterValue, FABRIC_NETWORK_STATUS_FILTER_DEFAULT, networkStatusFilter);
+    }
+    else
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+}
+
 Common::ErrorCode UriArgumentParser::TryGetIncludeSystemApplicationHealthStatisticsFilter(
     __inout bool & filter)
 {
@@ -898,4 +1029,29 @@ Common::ErrorCode UriArgumentParser::TryGetExcludeStatisticsFilter(
     __inout bool & filter)
 {
     return TryGetBoolOrError(Constants::ExcludeHealthStatisticsString, filter);
+}
+
+ErrorCode UriArgumentParser::TryGetVolumeName(
+    __out std::wstring & volumeName)
+{
+    std::wstring escapedVolumeName;
+    if (!uri_.GetItem(Constants::VolumeNameString, escapedVolumeName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+
+    return NamingUri::UnescapeString(escapedVolumeName, volumeName);
+}
+
+ErrorCode UriArgumentParser::TryGetGatewayName(
+    __out wstring & gatewayName)
+{
+    if (!uri_.GetItem(Constants::GatewayNameString, gatewayName))
+    {
+        return ErrorCodeValue::NameNotFound;
+    }
+    else
+    {
+        return Utility::ValidateString(gatewayName);
+    }
 }

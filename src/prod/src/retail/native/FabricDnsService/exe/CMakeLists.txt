@@ -1,10 +1,4 @@
-IF(CMAKE_BUILD_TYPE MATCHES Debug)
-  message("Debug build, linking against WinFab.Ktl.Linux")
-  include_directories(BEFORE "${EXTERNAL_DEPS_DIR}/WinFab.Ktl.Linux.debug/inc")
-ELSE()
-  message("Optimized build, linking against WinFab.Ktl.Linux.retail")
-  include_directories(BEFORE "${EXTERNAL_DEPS_DIR}/WinFab.Ktl.Linux.retail/inc")
-ENDIF()
+
 include_directories(BEFORE "${PROJECT_SOURCE_DIR}/src/Management/DnsService/linux_include")
 include_directories("${PROJECT_SOURCE_DIR}/src/Management/DnsService/include")
 include_directories("${PROJECT_SOURCE_DIR}/src/Management/DnsService/config")
@@ -30,17 +24,14 @@ add_precompiled_header(${exe_FabricDnsService} ../precomp/stdafx.h)
 
 set_target_properties(${exe_FabricDnsService} PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY ${TEST_OUTPUT_DIR}) 
-
+    
 add_custom_target(CopyFabricDnsService ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/DnsService.Code.Current
     COMMAND ${CMAKE_COMMAND} -E copy ${TEST_OUTPUT_DIR}/${exe_FabricDnsService} ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/DnsService.Code.Current/FabricDnsService.exe
-    COMMAND strip ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/DnsService.Code.Current/FabricDnsService.exe
+    COMMAND ${CMAKE_STRIP} ${TEST_OUTPUT_DIR}/__FabricSystem_App4294967295/DnsService.Code.Current/FabricDnsService.exe
     DEPENDS ${exe_FabricDnsService}
 )
 
-find_library(KtlfullDbg NAMES ktlfull PATHS "${EXTERNAL_DEPS_DIR}/WinFab.Ktl.Linux.debug" NO_DEFAULT_PATH)
-find_library(KtlfullOpt NAMES ktlfull PATHS "${EXTERNAL_DEPS_DIR}/WinFab.Ktl.Linux.retail" NO_DEFAULT_PATH)
-    
 target_link_libraries(${exe_FabricDnsService}
   ${lib_DnsService}
   ${lib_DnsServiceConfig}
@@ -51,7 +42,7 @@ target_link_libraries(${exe_FabricDnsService}
   ${lib_FabricClient}
   ${lib_FabricResources}
   ${lib_FabricRuntime}
-  debug ${KtlfullDbg} optimized ${KtlfullOpt}
+  ${Ktlfull}
   ${Cxx}
   ${CxxABI}
   ssh2
@@ -64,7 +55,5 @@ target_link_libraries(${exe_FabricDnsService}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
   icuuc
 )

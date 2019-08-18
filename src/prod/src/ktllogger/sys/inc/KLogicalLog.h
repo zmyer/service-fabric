@@ -40,7 +40,7 @@ class KLogicalLogInformation
     
     //
     // This method returns the LogStreamType that is associated
-    // with the winfab logical log
+    // with the SF logical log
     //
     static RvdLogStreamType const&    GetLogicalLogStreamType()
     {
@@ -51,7 +51,7 @@ class KLogicalLogInformation
     }        
     
     //
-    // This struct preceeds every stream block written and describes
+    // This struct precedes every stream block written and describes
     // the block of data. It is expected to be placed on an ULONGLONG
     // (8 byte boundary) and padded out to a ULONGLONG boundary. Any
     // data for the record immediately follows the stream block header
@@ -477,13 +477,19 @@ class KLogicalLogInformation
     //    InBuffer = SharedTruncationAsnStruct with new values
     //    OutBuffer = SharedTruncationAsnStruct with previous values
     //
-    //    Set the shared truncatin ASN for the current stream
+    //    Set the shared truncating ASN for the current stream
     //
     // ControlCode = QueryLogicalLogReadInformation
     //     InBuffer = NULL
     //     OutBuffer = struct LogicalLogReadInformation
     //
     //     returns information used for reading the log
+    //
+    // ControlCode = QueryAcceleratedFlushMode
+    //     InBuffer = NULL
+    //     OutBuffer = struct AcceleratedFlushMode
+    //
+    //     returns information about accelerated flush mode
     //
     enum
     {
@@ -503,10 +509,25 @@ class KLogicalLogInformation
         SetSharedTruncationAsn = 12,
 
         QueryLogicalLogReadInformation = 13,
+
+        QueryTelemetryStatistics = 14,
+                                         
+        QueryLogSizeAndSpaceRemaining = 15,
         
-        Last = 13
+        QueryAcceleratedFlushMode = 16,
+
+        Last = 16
     } LogicalLogControlCodes;
 
+    struct TelemetryStatistics
+    {
+        LONGLONG DedicatedWriteBytesOutstanding;
+        LONGLONG DedicatedWriteBytesOutstandingThreshold;
+        LONGLONG ApplicationBytesWritten;
+        LONGLONG SharedBytesWritten;
+        LONGLONG DedicatedBytesWritten;
+    };
+    
     struct LogicalLogTailAsnAndHighestOperation
     {
         ULONGLONG HighestOperationCount;
@@ -534,8 +555,8 @@ class KLogicalLogInformation
         //
         LONGLONG MaximumOutstandingBytes;
     };
-	static const LONGLONG WriteThrottleThresholdMinimum = 16 * (1024 * 1024);
-	static const LONGLONG WriteThrottleThresholdNoLimit = -1;
+    static const LONGLONG WriteThrottleThresholdMinimum = 16 * (1024 * 1024);
+    static const LONGLONG WriteThrottleThresholdNoLimit = -1;
 
     struct CurrentLogUsageInformation
     {
@@ -555,6 +576,17 @@ class KLogicalLogInformation
         ULONG     MaximumReadRecordSize;
     };
     
+    struct LogSizeAndSpaceRemaining
+    {
+        ULONGLONG LogSize;
+        ULONGLONG SpaceRemaining;
+    };
+
+    struct AcceleratedFlushMode
+    {
+        BOOLEAN IsAccelerateInActiveMode;
+    };
+        
 };
 
 

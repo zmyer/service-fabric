@@ -88,6 +88,7 @@ namespace TransactionalReplicatorTests
                 *logManager,
                 *dataLossHandler,
                 move(healthClient),
+                true,
                 allocator);
 
             CODING_ERROR_ASSERT(txnReplicatorSPtr != nullptr);
@@ -119,7 +120,8 @@ namespace TransactionalReplicatorTests
             __in int64 maxMetadataSizeInKB = DEFAULT_TXN_REPLICATOR_SETTING,
             __in int64 serializationVersion = DEFAULT_TXN_REPLICATOR_SETTING,
             __in bool enableSecondaryCommitApplyAcknowledgement = false,
-            __in bool optimizeLogForLowerDiskUsage = true)
+            __in bool optimizeLogForLowerDiskUsage = true,
+            __in bool enableIncrementalBackupsAcrossReplicas = false)
         {
             // Set all values to 0 initially
             *config = { 0 };
@@ -208,6 +210,11 @@ namespace TransactionalReplicatorTests
             {
                 config->SerializationVersion = static_cast<DWORD>(serializationVersion);
                 config->Flags |= FABRIC_TRANSACTIONAL_REPLICATOR_SERIALIZATION_VERSION;
+            }
+            if (enableIncrementalBackupsAcrossReplicas != false)
+            {
+                config->EnableIncrementalBackupsAcrossReplicas = enableIncrementalBackupsAcrossReplicas;
+                config->Flags |= FABRIC_TRANSACTIONAL_REPLICATOR_ENABLE_INCREMENTAL_BACKUPS_ACROSS_REPLICAS;
             }
         }
 
@@ -321,6 +328,10 @@ namespace TransactionalReplicatorTests
             {
                 VERIFY_ARE_EQUAL(initial->SerializationVersion, output->SerializationVersion);
             }
+            if (initial->Flags & FABRIC_TRANSACTIONAL_REPLICATOR_ENABLE_INCREMENTAL_BACKUPS_ACROSS_REPLICAS)
+            {
+                VERIFY_ARE_EQUAL(initial->EnableIncrementalBackupsAcrossReplicas, output->EnableIncrementalBackupsAcrossReplicas);
+            }
         };
 
         void UpdateConfig(wstring name, wstring newvalue, ConfigSettings & settings, shared_ptr<ConfigSettingsConfigStore> & store)
@@ -387,6 +398,8 @@ namespace TransactionalReplicatorTests
     {
         TR_TEST_TRACE_BEGIN(L"Verify_DefaultSettings")
         {
+            Common::ScopedHeap heap;
+
             TRANSACTIONAL_REPLICATOR_SETTINGS config;
             GetPublicApiSettings(&config);              // Do not load any settings
 
@@ -438,6 +451,8 @@ namespace TransactionalReplicatorTests
     {
         TR_TEST_TRACE_BEGIN(L"Verify_NullSettings")
         {
+            Common::ScopedHeap heap;
+
             TRANSACTIONAL_REPLICATOR_SETTINGS config;
             TRANSACTIONAL_REPLICATOR_SETTINGS createdConfig;
 
@@ -488,6 +503,8 @@ namespace TransactionalReplicatorTests
     {
         TR_TEST_TRACE_BEGIN(L"Verify_UserSettings")
         {
+            Common::ScopedHeap heap;
+
             TRANSACTIONAL_REPLICATOR_SETTINGS config;
             
             KtlLogger::SharedLogSettingsSPtr sharedLogSettings;
@@ -526,7 +543,8 @@ namespace TransactionalReplicatorTests
                 2048,   // MaxMetadataSizeinKB,
                 0,      // SerializationVersion
                 true,   // EnableSecondaryCommitApplyAcknowledgement
-                false); // OptimizeLogForLowerDiskUsage
+                false,  // OptimizeLogForLowerDiskUsage
+                false); // EnableIncrementalBackupsAcrossReplicas
 
             // Create and open TransactionalReplicator
             TransactionalReplicator::SPtr createdReplicator = SyncAwait(this->CreateAndOpenTransactionalReplicator(&config, logManager, allocator));
@@ -669,6 +687,8 @@ namespace TransactionalReplicatorTests
     {
         TR_TEST_TRACE_BEGIN(L"Verify_DynamicSetting_UserValue_Update")
         {
+            Common::ScopedHeap heap;
+
             KtlLogger::SharedLogSettingsSPtr sharedLogSettings;
             TR_Test_InitializeKtlConfig(
                 allocator,
@@ -773,11 +793,12 @@ namespace TransactionalReplicatorTests
         TR_TEST_TRACE_BEGIN(L"Verify_FromPublicApi_SettingValidation")
         {
             UNREFERENCED_PARAMETER(allocator);
+            Common::ScopedHeap heap;
 
             TRANSACTIONAL_REPLICATOR_SETTINGS config;                       // Public settings object
             TransactionalReplicatorSettingsUPtr output;                     // ServiceModel TransactionalReplicatorSettings object unique ptr
 
-            GetDefaultApiSettings(&config);                                 // Populate default values
+            GetDefaultApiSettings(&config);                           // Populate default values
             config.CheckpointThresholdInMB = DWord(0);                      // CheckpointThresholdInMB = 0
             VerifyPublicApiValidationStatus(config, output, false);         // CheckpointThresholdInMB should be greater than 1
 

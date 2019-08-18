@@ -21,6 +21,8 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::ApplicationHealthPolicy(L"ApplicationHealthPolicy");
     Common::WStringLiteral const Constants::ApplicationHealthPolicyMap(L"ApplicationHealthPolicyMap");
     Common::WStringLiteral const Constants::ApplicationHealthPolicies(L"ApplicationHealthPolicies");
+    Common::WStringLiteral const Constants::instances(L"instances");
+    Common::WStringLiteral const Constants::instanceNames(L"instanceNames");
     Common::WStringLiteral const Constants::MaxPercentServicesUnhealthy(L"MaxPercentServicesUnhealthy");
     Common::WStringLiteral const Constants::MaxPercentDeployedApplicationsUnhealthy(L"MaxPercentDeployedApplicationsUnhealthy");
     Common::WStringLiteral const Constants::Value(L"Value");
@@ -164,6 +166,7 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::DomainName(L"DomainName");
     Common::WStringLiteral const Constants::ManifestVersion(L"ManifestVersion");
     Common::WStringLiteral const Constants::NodeName(L"NodeName");
+    Common::WStringLiteral const Constants::NodeNameCamelCase(L"nodeName");
     Common::WStringLiteral const Constants::NodeId(L"NodeId");
     Common::WStringLiteral const Constants::NodeInstanceId(L"NodeInstanceId");
     Common::WStringLiteral const Constants::Content(L"Content");
@@ -186,6 +189,7 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::CreateFabricDump(L"CreateFabricDump");
     Common::WStringLiteral const Constants::IsStateful(L"IsStateful");
     Common::WStringLiteral const Constants::UseImplicitHost(L"UseImplicitHost");
+    Common::WStringLiteral const Constants::UseServiceFabricReplicatedStore(L"UseServiceFabricReplicatedStore");
     Common::WStringLiteral const Constants::UseImplicitFactory(L"UseImplicitFactory");
     Common::WStringLiteral const Constants::Extensions(L"Extensions");
     Common::WStringLiteral const Constants::LoadMetrics(L"LoadMetrics");
@@ -292,6 +296,7 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::NodeHealthStateChunks(L"NodeHealthStateChunks");
     Common::WStringLiteral const Constants::Metadata(L"Metadata");
     Common::WStringLiteral const Constants::ServiceDnsName(L"ServiceDnsName");
+    Common::WStringLiteral const Constants::ScalingPolicies(L"ScalingPolicies");
     Common::WStringLiteral const Constants::Key(L"Key");
     Common::WStringLiteral const Constants::LastBalancingStartTimeUtc(L"LastBalancingStartTimeUtc");
     Common::WStringLiteral const Constants::LastBalancingEndTimeUtc(L"LastBalancingEndTimeUtc");
@@ -324,6 +329,7 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::PrimaryLoadMetricReports(L"PrimaryLoadMetricReports");
     Common::WStringLiteral const Constants::SecondaryLoadMetricReports(L"SecondaryLoadMetricReports");
     Common::WStringLiteral const Constants::CurrentConfigurationEpoch(L"CurrentConfigurationEpoch");
+    Common::WStringLiteral const Constants::PrimaryEpoch(L"PrimaryEpoch");
     Common::WStringLiteral const Constants::ConfigurationVersion(L"ConfigurationVersion");
     Common::WStringLiteral const Constants::DataLossVersion(L"DataLossVersion");
     Common::WStringLiteral const Constants::ContinuationToken(L"ContinuationToken");
@@ -357,8 +363,12 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::ErrorMessage(L"ErrorMessage");
     Common::WStringLiteral const Constants::OperationIndex(L"OperationIndex");
 
+    Common::WStringLiteral const Constants::QueryPagingDescription(L"QueryPagingDescription");
+
     Common::WStringLiteral const Constants::ChaosEvent(L"ChaosEvent");
+    Common::WStringLiteral const Constants::ChaosEventsFilter(L"Filter");
     Common::WStringLiteral const Constants::ChaosParameters(L"ChaosParameters");
+    Common::WStringLiteral const Constants::ClientType(L"ClientType");
     Common::WStringLiteral const Constants::Reason(L"Reason");
     Common::WStringLiteral const Constants::Faults(L"Faults");
     Common::WStringLiteral const Constants::MaxClusterStabilizationTimeoutInSeconds(L"MaxClusterStabilizationTimeoutInSeconds");
@@ -373,10 +383,34 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::NodeTypeInclusionList(L"NodeTypeInclusionList");
     Common::WStringLiteral const Constants::ApplicationInclusionList(L"ApplicationInclusionList");
     Common::WStringLiteral const Constants::ChaosTargetFilter(L"ChaosTargetFilter");
+    Common::WStringLiteral const Constants::Schedule(L"Schedule");
+    Common::WStringLiteral const Constants::ChaosStatus(L"Status");
+    Common::WStringLiteral const Constants::ChaosScheduleStatus(L"ScheduleStatus");
+    Common::WStringLiteral const Constants::StartDate(L"StartDate");
+    Common::WStringLiteral const Constants::ExpiryDate(L"ExpiryDate");
+    Common::WStringLiteral const Constants::StartTime(L"StartTime");
+    Common::WStringLiteral const Constants::EndTime(L"EndTime");
+    Common::WStringLiteral const Constants::StartTimeUtc(L"StartTimeUtc");
+    Common::WStringLiteral const Constants::EndTimeUtc(L"EndTimeUtc");
+    Common::WStringLiteral const Constants::ChaosParametersMap(L"ChaosParametersDictionary");
+    Common::WStringLiteral const Constants::Jobs(L"Jobs");
+    Common::WStringLiteral const Constants::Days(L"Days");
+    Common::WStringLiteral const Constants::Times(L"Times");
+    Common::WStringLiteral const Constants::Hour(L"Hour");
+    Common::WStringLiteral const Constants::Minute(L"Minute");
+    Common::WStringLiteral const Constants::Sunday(L"Sunday");
+    Common::WStringLiteral const Constants::Monday(L"Monday");
+    Common::WStringLiteral const Constants::Tuesday(L"Tuesday");
+    Common::WStringLiteral const Constants::Wednesday(L"Wednesday");
+    Common::WStringLiteral const Constants::Thursday(L"Thursday");
+    Common::WStringLiteral const Constants::Friday(L"Friday");
+    Common::WStringLiteral const Constants::Saturday(L"Saturday");
 
     Common::WStringLiteral const Constants::ServiceStatus(L"ServiceStatus");
     Common::WStringLiteral const Constants::Kind(L"Kind");
+    Common::WStringLiteral const Constants::KindLowerCase(L"kind");
     Common::WStringLiteral const Constants::UnhealthyEvent(L"UnhealthyEvent");
+    Common::WStringLiteral const Constants::unhealthyEvaluation(L"unhealthyEvaluation");
     Common::WStringLiteral const Constants::UnhealthyEvaluations(L"UnhealthyEvaluations");
     Common::WStringLiteral const Constants::ApplicationUnhealthyEvaluations(L"ApplicationUnhealthyEvaluations");
     Common::WStringLiteral const Constants::HealthEvaluation(L"HealthEvaluation");
@@ -395,6 +429,19 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::WorkDirectory(L"WorkDirectory");
     Common::WStringLiteral const Constants::LogDirectory(L"LogDirectory");
     Common::WStringLiteral const Constants::TempDirectory(L"TempDirectory");
+
+    Common::WStringLiteral const Constants::MetricName(L"MetricName");
+    Common::WStringLiteral const Constants::MaxInstanceCount(L"MaxInstanceCount");
+    Common::WStringLiteral const Constants::MaxPartitionCount(L"MaxPartitionCount");
+    Common::WStringLiteral const Constants::MinInstanceCount(L"MinInstanceCount");
+    Common::WStringLiteral const Constants::MinPartitionCount(L"MinPartitionCount");
+    Common::WStringLiteral const Constants::LowerLoadThreshold(L"LowerLoadThreshold");
+    Common::WStringLiteral const Constants::UpperLoadThreshold(L"UpperLoadThreshold");
+    Common::WStringLiteral const Constants::UseOnlyPrimaryLoad(L"UseOnlyPrimaryLoad");
+    Common::WStringLiteral const Constants::ScaleIntervalInSeconds(L"ScaleIntervalInSeconds");
+    Common::WStringLiteral const Constants::ScaleIncrement(L"ScaleIncrement");
+    Common::WStringLiteral const Constants::ScalingTrigger(L"ScalingTrigger");
+    Common::WStringLiteral const Constants::ScalingMechanism(L"ScalingMechanism");
 
     WStringLiteral const Constants::ReplicatorStatus(L"ReplicatorStatus");
 
@@ -427,7 +474,8 @@ namespace ServiceModel
     WStringLiteral const Constants::LastSequenceNumber(L"LastSequenceNumber");
     WStringLiteral const Constants::QueueMemorySize(L"QueueMemorySize");
 
-    WStringLiteral const Constants::LastReportedUtc(L"LastReportedUtc");;
+    WStringLiteral const Constants::CurrentValue(L"CurrentValue");
+    WStringLiteral const Constants::LastReportedUtc(L"LastReportedUtc");
     WStringLiteral const Constants::CurrentServiceOperation(L"CurrentServiceOperation");
     WStringLiteral const Constants::CurrentServiceOperationStartTimeUtc(L"CurrentServiceOperationStartTimeUtc");
     WStringLiteral const Constants::ReportedLoad(L"ReportedLoad");
@@ -536,8 +584,7 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::ExpectedRanges(L"ExpectedRanges");
     Common::WStringLiteral const Constants::UploadSessions(L"UploadSessions");
     Common::WStringLiteral const Constants::IsRecursive(L"IsRecursive");
-
-    Common::GlobalWString const Constants::SFApplicationPackageExtension = make_global<std::wstring>(L".sfpkg");
+    Common::WStringLiteral const Constants::ChunkContent(L"ChunkContent");
 
     // Health Reporting
     // HealthReport SourceId
@@ -573,6 +620,7 @@ namespace ServiceModel
     GlobalWString const Constants::HealthReplicaOpenStatusProperty = make_global<std::wstring>(L"ReplicaOpenStatus");
     GlobalWString const Constants::HealthReplicaCloseStatusProperty = make_global<std::wstring>(L"ReplicaCloseStatus");
     GlobalWString const Constants::HealthReplicaServiceTypeRegistrationStatusProperty = make_global<std::wstring>(L"ReplicaServiceTypeRegistrationStatus");
+    GlobalWString const Constants::HealthRAStoreProvider = make_global<std::wstring>(L"RAStoreProvider");
     GlobalWString const Constants::HealthReplicaChangeRoleStatusProperty = make_global<std::wstring>(L"ReplicaChangeRoleStatus");
     GlobalWString const Constants::UpgradePrimarySwapHealthProperty = make_global<std::wstring>(L"UpgradePrimarySwapFailure_");
     GlobalWString const Constants::BalancingUnsuccessfulProperty = make_global<std::wstring>(L"BalancingUnsuccessful_");
@@ -583,6 +631,7 @@ namespace ServiceModel
     GlobalWString const Constants::DurationHealthProperty = make_global<std::wstring>(L"Duration_");
     GlobalWString const Constants::AuthorityReportProperty = make_global<std::wstring>(L"AuthorityReport");
     GlobalWString const Constants::ResourceGovernanceReportProperty = make_global<std::wstring>(L"ResourceGovernance");
+    GlobalWString const Constants::HealthReportCountProperty = make_global<std::wstring>(L"HealthReportCount");
 
     // KVS replica query
     Common::WStringLiteral const Constants::DatabaseRowCountEstimate(L"DatabaseRowCountEstimate");
@@ -590,6 +639,10 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::CopyNotificationCurrentKeyFilter(L"CopyNotificationCurrentKeyFilter");
     Common::WStringLiteral const Constants::CopyNotificationCurrentProgress(L"CopyNotificationCurrentProgress");
     Common::WStringLiteral const Constants::StatusDetails(L"StatusDetails");
+    Common::WStringLiteral const Constants::MigrationStatus(L"MigrationStatus");
+    Common::WStringLiteral const Constants::CurrentPhase(L"CurrentPhase");
+    Common::WStringLiteral const Constants::NextPhase(L"NextPhase");
+    Common::WStringLiteral const Constants::ProviderKind(L"ProviderKind");
 
     Common::WStringLiteral const Constants::TestCommandState(L"TestCommandState");
     Common::WStringLiteral const Constants::TestCommandType(L"TestCommandType");
@@ -643,7 +696,16 @@ namespace ServiceModel
     Common::WStringLiteral const Constants::NodeResult(L"NodeResult");
 
     //
-    // Docker compose application
+    // Secret Store Service
+    //
+    int const Constants::SecretNameMaxLength(256);
+    int const Constants::SecretVersionMaxLength(256);
+    int const Constants::SecretKindMaxLength(256);
+    int const Constants::SecretContentTypeMaxLength(256);
+    int const Constants::SecretValueMaxSize(4 * 1024 * 1024); //4MB
+
+    //
+    // Compose Deployment
     //
     Common::WStringLiteral const Constants::RegistryUserName(L"RegistryUserName");
     Common::WStringLiteral const Constants::RegistryPassword(L"RegistryPassword");
@@ -657,6 +719,86 @@ namespace ServiceModel
 
     Common::WStringLiteral const Constants::ComposeDeploymentStatus(L"ComposeDeploymentStatus");
 
+    //
+    // Mesh
+    //
+    Common::WStringLiteral const Constants::deploymentName(L"deploymentName");
+    Common::WStringLiteral const Constants::applicationName(L"applicationName");
+    Common::WStringLiteral const Constants::applicationUri(L"applicationUri");
+    Common::WStringLiteral const Constants::status(L"status");
+    Common::WStringLiteral const Constants::statusDetails(L"statusDetails");
+    Common::WStringLiteral const Constants::properties(L"properties");
+    Common::WStringLiteral const Constants::instanceCount(L"instanceCount");
+    Common::WStringLiteral const Constants::containerRegistryServer(L"server");
+    Common::WStringLiteral const Constants::containerRegistryUserName(L"username");
+    Common::WStringLiteral const Constants::containerRegistryPassword(L"password");
+    Common::WStringLiteral const Constants::restartPolicy(L"restartPolicy");
+    Common::WStringLiteral const Constants::volumes(L"volumes");
+    Common::WStringLiteral const Constants::image(L"image");
+    Common::WStringLiteral const Constants::command(L"command");
+    Common::WStringLiteral const Constants::ports(L"ports");
+    Common::WStringLiteral const Constants::environmentVariables(L"environmentVariables");
+    Common::WStringLiteral const Constants::instanceView(L"instanceView");
+    Common::WStringLiteral const Constants::restartCount(L"restartCount");
+    Common::WStringLiteral const Constants::currentState(L"currentState");
+    Common::WStringLiteral const Constants::previousState(L"previousState");
+    Common::WStringLiteral const Constants::state(L"state");
+    Common::WStringLiteral const Constants::exitCode(L"exitCode");
+    Common::WStringLiteral const Constants::resources(L"resources");
+    Common::WStringLiteral const Constants::resourcesRequests(L"requests");
+    Common::WStringLiteral const Constants::resourcesLimits(L"limits");
+    Common::WStringLiteral const Constants::volumeMounts(L"volumeMounts");
+    Common::WStringLiteral const Constants::memoryInGB(L"memoryInGB");
+    Common::WStringLiteral const Constants::cpu(L"cpu");
+    Common::WStringLiteral const Constants::mountPath(L"mountPath");
+    Common::WStringLiteral const Constants::readOnly(L"readOnly");
+    Common::WStringLiteral const Constants::imageRegistryCredentials(L"imageRegistryCredentials");
+    Common::WStringLiteral const Constants::port(L"port");
+    Common::WStringLiteral const Constants::creationParameters(L"creationParameters");
+    Common::WStringLiteral const Constants::nameCamelCase(L"name");
+    Common::WStringLiteral const Constants::valueCamelCase(L"value");
+    Common::WStringLiteral const Constants::azureFile(L"azureFile");
+    Common::WStringLiteral const Constants::shareName(L"shareName");
+    Common::WStringLiteral const Constants::storageAccountName(L"storageAccountName");
+    Common::WStringLiteral const Constants::storageAccountKey(L"storageAccountKey");
+    Common::WStringLiteral const Constants::accountName(L"accountName");
+    Common::WStringLiteral const Constants::accountKey(L"accountKey");
+    Common::WStringLiteral const Constants::sizeDisk(L"sizeDisk");
+    Common::WStringLiteral const Constants::volumeName(L"volumeName");
+    Common::WStringLiteral const Constants::volumeDescription(L"description");
+    Common::WStringLiteral const Constants::volumeDescriptionForImageBuilder(L"volumeDescription");
+    Common::WStringLiteral const Constants::volumeParameters(L"parameters");
+    Common::WStringLiteral const Constants::osType(L"osType");
+    Common::WStringLiteral const Constants::doNotPersistState(L"doNotPersistState");
+    Common::WStringLiteral const Constants::gatewayName(L"gatewayName");
+
+    Common::WStringLiteral const Constants::autoScalingPolicies(L"autoScalingPolicies");
+    Common::WStringLiteral const Constants::autoScalingName(L"name");
+    Common::WStringLiteral const Constants::autoScalingTrigger(L"trigger");
+    Common::WStringLiteral const Constants::autoScalingTriggerKind(L"kind");
+    Common::WStringLiteral const Constants::autoScalingMetric(L"metric");
+    Common::WStringLiteral const Constants::autoScalingMetricKind(L"kind");
+    Common::WStringLiteral const Constants::autoScalingMetricName(L"name");
+    Common::WStringLiteral const Constants::autoScalingLowerLoadThreshold(L"lowerLoadThreshold");
+    Common::WStringLiteral const Constants::autoScalingUpperLoadThreshold(L"upperLoadThreshold");
+    Common::WStringLiteral const Constants::autoScaleIntervalInSeconds(L"scaleIntervalInSeconds");
+    Common::WStringLiteral const Constants::autoScalingMechanism(L"mechanism");
+    Common::WStringLiteral const Constants::autoScalingMechanismKind(L"kind");
+    Common::WStringLiteral const Constants::autoScalingMinInstanceCount(L"minCount");
+    Common::WStringLiteral const Constants::autoScalingMaxInstanceCount(L"maxCount");
+    Common::WStringLiteral const Constants::autoScaleIncrement(L"scaleIncrement");
+
+    //
+    // In the mesh environment we use the given service name and application name to generate the dns name. The behavior of dns queries
+    // across operating system's when 'dots' are present in the dns names is not consistent. So we prevent users from specifying 'dot' in
+    // the service name and application name.
+    // Eg: Linux behavior can be read here(https://linux.die.net/man/5/resolv.conf).
+    //
+    Common::GlobalWString const Constants::ModelV2ReservedDnsNameCharacters = make_global<std::wstring>(L".");
+
+    Common::WStringLiteral const Constants::RemoveServiceFabricRuntimeAccess(L"RemoveServiceFabricRuntimeAccess");
+    Common::WStringLiteral const Constants::AzureFilePluginName(L"AzureFilePluginName");
+
     Common::GlobalWString const Constants::SystemMetricNameCpuCores = make_global<std::wstring>(L"servicefabric:/_CpuCores");
     Common::GlobalWString const Constants::SystemMetricNameMemoryInMB = make_global<std::wstring>(L"servicefabric:/_MemoryInMB");
     uint const Constants::ResourceGovernanceCpuCorrectionFactor(1000000);
@@ -669,6 +811,26 @@ namespace ServiceModel
         v->push_back(L"V4");
         return v;
     } ();
+
+    //
+    // Container Network
+    //
+    Common::WStringLiteral const Constants::NetworkType(L"NetworkType");
+    Common::WStringLiteral const Constants::NetworkTypeCamelCase(L"networkType");
+    Common::WStringLiteral const Constants::NetworkName(L"NetworkName");
+    Common::WStringLiteral const Constants::NetworkNameCamelCase(L"networkName");
+    Common::WStringLiteral const Constants::NetworkAddressPrefix(L"NetworkAddressPrefix");
+    Common::WStringLiteral const Constants::NetworkAddressPrefixCamelCase(L"networkAddressPrefix");
+    Common::WStringLiteral const Constants::NetworkStatus(L"NetworkStatus");
+    Common::WStringLiteral const Constants::NetworkDescription(L"NetworkDescription");
+    Common::WStringLiteral const Constants::CodePackageVersion(L"CodePackageVersion");
+    Common::WStringLiteral const Constants::ContainerAddress(L"ContainerAddress");
+    Common::WStringLiteral const Constants::ContainerId(L"ContainerId");
+    Common::WStringLiteral const Constants::ContainerNetworkPolicies(L"ContainerNetworkPolicies");
+    Common::WStringLiteral const Constants::NetworkRef(L"NetworkRef");
+    Common::WStringLiteral const Constants::EndpointBindings(L"EndpointBindings");
+    Common::WStringLiteral const Constants::EndpointRef(L"EndpointRef");
+    Common::WStringLiteral const Constants::endpointRefsCamelCase(L"endpointRefs");
 
     //
     // ContinuationToken Constants

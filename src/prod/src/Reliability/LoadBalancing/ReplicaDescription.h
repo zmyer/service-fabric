@@ -122,6 +122,9 @@ namespace Reliability
             bool UsePrimaryLoad() const;
             bool UseSecondaryLoad() const;
 
+            // Check if replica is None and if it has resource governance configured
+            bool UseNoneLoad(bool isRGLoad) const;
+
             bool HasLoad() const;
 
             void WriteTo(Common::TextWriter&, Common::FormatOptions const &) const;
@@ -139,7 +142,7 @@ namespace Reliability
             // whether the replica is ToBePromoted, MoveInProgress, ToBeDropped, InBuild, StandBy, Offline
             bool isInTransition_;
 
-            // whether the replica is active (up and non-StandBy) ToBePromoted or InBuild - FU should be marked as in transition
+            // whether the replica is active (up and non-StandBy) ToBePromoted or InBuild - FT should be marked as in transition
             bool makesFuInTransition_;
 
             Reliability::ReplicaFlags::Enum flags_;

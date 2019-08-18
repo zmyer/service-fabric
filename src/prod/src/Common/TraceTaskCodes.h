@@ -106,6 +106,9 @@ namespace Common
             // Backup Restore Service
             BackupRestoreService = 108,
 
+            //  Gateway Resource Manager service
+            GatewayResourceManager = 109,
+
             // Management
             ServiceModel = 110,
             ImageStore = 111,
@@ -119,6 +122,15 @@ namespace Common
             // Lease API
             LeaseLayer = 120,
 
+            // Central Secret Service
+            CentralSecretService = 125,
+
+            // Local Secret Service
+            LocalSecretService = 126,
+
+            // Resource Manager
+            ResourceManager = 127,
+            
             // ServiceGroup
             ServiceGroupCommon = 130,
             ServiceGroupStateful = 131,
@@ -139,6 +151,7 @@ namespace Common
             TestabilityComponent = 174,
 
             // Data Stack
+            RCR = 189, // ReliableCollectionRuntime (Interop)
             LR = 190, // Logging replicator
             SM = 191, // Dynamic state manager
             RStore = 192, // don't use TStore as it is already used in managed

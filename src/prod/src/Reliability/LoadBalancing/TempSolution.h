@@ -41,8 +41,12 @@ namespace Reliability
             // Iterate only through nodes where a specific application has its replicas
             void ForEachNode(ApplicationEntry const* app, bool changedOnly, std::function<bool(NodeEntry const *)> processor) const;
 
-            // Iterate through all nodes
-            void ForEachNode(bool changedOnly, std::function<bool(NodeEntry const *)> processor) const;
+            // Iterate through all nodes that have node capacity or throttling defined
+            void ForEachNode(bool changedOnly,
+                std::function<bool(NodeEntry const *)> processor,
+                bool requireCapacity,
+                bool requireThrottling) const;
+
             void ForEachReplica(bool changedOnly, std::function<bool(PlacementReplica const *)> processor) const;
 
             NodeEntry const* GetReplicaLocation(PlacementReplica const* replica) const;
@@ -50,7 +54,7 @@ namespace Reliability
             // modify the solution by placing a replica on a specified node
             void PlaceReplica(PlacementReplica const* replica, NodeEntry const* targetNode);
             void PlaceReplicaAndPromote(PlacementReplica * replica, NodeEntry const* targetNode);
-            void PromoteSecondary(PartitionEntry const* replica, Common::Random & random, NodeEntry const* targetNode);
+            size_t PromoteSecondary(PartitionEntry const* replica, Common::Random & random, NodeEntry const* targetNode);
             void PromoteSecondaryForPartitions(std::vector<PartitionEntry const*> const& partitions, Common::Random & random, NodeEntry const* targetNode);
 
             void AddVoidMovement(PartitionEntry const* partition, Common::Random & random, NodeEntry const* sourceNode);
@@ -95,6 +99,9 @@ namespace Reliability
 
             __declspec (property(get=get_PartitionPlacements)) PartitionPlacement const& PartitionPlacements;
             PartitionPlacement const& get_PartitionPlacements() const { return partitionPlacements_; }
+
+            __declspec(property(get = get_InBuildCountsPerNode)) InBuildCountPerNode const& InBuildCountsPerNode;
+            InBuildCountPerNode const& get_InBuildCountsPerNode() const { return inBuildCountsPerNode_; }
 
             __declspec(property(get = get_ServicePackagePlacement)) ServicePackagePlacement const& ServicePackagePlacements;
             ServicePackagePlacement const& get_ServicePackagePlacement() const { return servicePackagePlacements_; }
@@ -186,6 +193,9 @@ namespace Reliability
 
             // partition entry mapping to replica placements
             PartitionPlacement partitionPlacements_;
+
+            // NodeEntry to InBuild replica count mapping
+            InBuildCountPerNode inBuildCountsPerNode_;
 
             // partition entry mapping to replica placements
             ApplicationPlacement applicationPlacements_;

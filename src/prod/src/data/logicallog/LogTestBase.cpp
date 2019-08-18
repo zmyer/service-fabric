@@ -4,10 +4,7 @@
 // ------------------------------------------------------------
 
 #include "stdafx.h"
-
-#if defined(PLATFORM_UNIX)
-#include <pal.h>
-#endif
+#include "TestHeaders.h"
 
 #include <boost/test/unit_test.hpp>
 #include "Common/boost-taef.h"
@@ -19,13 +16,52 @@ namespace LogTests
     using namespace Data::Log;
     using namespace Data::Utilities;
 
+    volatile bool LogTestBase::g_UseKtlFilePrefix = true;
+
+    LPCWSTR LogTestBase::GetTestDirectoryPath()
+    {
 #if !defined(PLATFORM_UNIX)
-    const LPCWSTR LogTestBase::TestDirectoryPath = L"\\??\\c:\\LogTestTemp";
+        if (LogTestBase::g_UseKtlFilePrefix)
+        {
+            return L"\\??\\c:\\LogTestTemp";
+        }
+        else
+        {
+            return L"c:\\LogTestTemp";
+        }
 #else
-    const LPCWSTR LogTestBase::TestDirectoryPath = L"/tmp/logtesttemp/";
+        return L"/tmp/logtesttemp/";
 #endif
+    }
 
     Common::StringLiteral const TraceComponent("LogTestBase");
+
+    NTSTATUS CreateKtlLogManager(
+        __in KtlLoggerMode ktlLoggerMode,
+        __in KAllocator& allocator,
+        __out KtlLogManager::SPtr& physicalLogManager)
+    {
+        switch (ktlLoggerMode)
+        {
+        case KtlLoggerMode::Default:
+#if !defined(PLATFORM_UNIX)
+            return KtlLogManager::CreateDriver(KTL_TAG_TEST, allocator, physicalLogManager);
+#else
+            return KtlLogManager::CreateInproc(KTL_TAG_TEST, allocator, physicalLogManager);
+#endif
+            break;
+        case KtlLoggerMode::InProc:
+            return KtlLogManager::CreateInproc(KTL_TAG_TEST, allocator, physicalLogManager);
+            break;
+        case KtlLoggerMode::OutOfProc:
+            return KtlLogManager::CreateDriver(KTL_TAG_TEST, allocator, physicalLogManager);
+            break;
+        default:
+            KInvariant(FALSE);
+            return STATUS_NOT_IMPLEMENTED;
+            break;
+        }
+    }
 
     VOID LogTestBase::RestoreEOFState(
         __in Data::Log::ILogicalLog& log,
@@ -54,7 +90,7 @@ namespace LogTests
         NTSTATUS status = KString::Create(filename, GetThisAllocator());
         KInvariant(NT_SUCCESS(status));
 
-        res = filename->Concat(TestDirectoryPath);
+        res = filename->Concat(GetTestDirectoryPath());
         KInvariant(res);
         
         res = filename->Concat(KVolumeNamespace::PathSeparator);
@@ -75,16 +111,16 @@ namespace LogTests
 
     VOID LogTestBase::CreateTestDirectory()
     {
-        if (!Common::Directory::Exists(TestDirectoryPath))
+        if (!Common::Directory::Exists(GetTestDirectoryPath()))
         {
-            Common::ErrorCode errorCode = Common::Directory::Create2(TestDirectoryPath);
+            Common::ErrorCode errorCode = Common::Directory::Create2(GetTestDirectoryPath());
             VERIFY_IS_TRUE(errorCode.IsSuccess(), L"Common::Directory::Create2");
         }
     }
 
     VOID LogTestBase::DeleteTestDirectory()
     {
-        Common::ErrorCode errorCode = Common::Directory::Delete(TestDirectoryPath, true);
+        Common::ErrorCode errorCode = Common::Directory::Delete(GetTestDirectoryPath(), true);
         VERIFY_IS_TRUE(errorCode.IsSuccess(), L"Common::Directory::Delete");
     }
 
@@ -158,7 +194,7 @@ namespace LogTests
 
     const int NumStreams = 100;
 
-    VOID LogTestBase::OpenManyStreamsTest()
+    VOID LogTestBase::OpenManyStreamsTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 
@@ -621,7 +657,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::BasicIOTest()
+    VOID LogTestBase::BasicIOTest(__in KtlLoggerMode, __in KGuid const & physicalLogId)
     {
         NTSTATUS status;
 
@@ -645,9 +681,6 @@ namespace LogTests
 
         KString::SPtr physicalLogName;
         GenerateUniqueFilename(physicalLogName);
-
-        KGuid physicalLogId;
-        physicalLogId.CreateNew();
 
         // Don't care if this fails
         SyncAwait(logManager->DeletePhysicalLogAsync(*physicalLogName, physicalLogId, CancellationToken::None));
@@ -1129,7 +1162,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::WriteAtTruncationPointsTest()
+    VOID LogTestBase::WriteAtTruncationPointsTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 
@@ -1371,7 +1404,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::RemoveFalseProgressTest()
+    VOID LogTestBase::RemoveFalseProgressTest(__in KtlLoggerMode)
     {
         // Main line test
 
@@ -1508,7 +1541,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::ReadAheadCacheTest()
+    VOID LogTestBase::ReadAheadCacheTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 
@@ -1847,8 +1880,8 @@ namespace LogTests
             LONG count = 56;
             KArray<LONG> pos1(GetThisAllocator(), count, count);
             KArray<LONG> len1(GetThisAllocator(), count, count);
-			pos1.SetCount(count);
-			len1.SetCount(count);
+            pos1.SetCount(count);
+            len1.SetCount(count);
 
             pos1[0] = 6643136;
             len1[0] = 284158;
@@ -2525,7 +2558,7 @@ namespace LogTests
         }
     }
 
-    VOID LogTestBase::TruncateInDataBufferTest()
+    VOID LogTestBase::TruncateInDataBufferTest(__in KtlLoggerMode ktlLoggerMode)
     {
         NTSTATUS status;
 
@@ -2704,7 +2737,9 @@ namespace LogTests
         // prove truncate head succeeded
         //
         KtlLogManager::SPtr physicalLogManager;
-        status = KtlLogManager::Create(GetThisAllocationTag(), GetThisAllocator(), physicalLogManager);
+
+        status = CreateKtlLogManager(ktlLoggerMode, GetThisAllocator(), physicalLogManager);
+
         VERIFY_STATUS_SUCCESS("KtlLogManager::Create", status);
         status = SyncAwait(physicalLogManager->OpenLogManagerAsync(nullptr, nullptr));
         VERIFY_STATUS_SUCCESS("OpenLogManagerAsync", status);
@@ -2753,7 +2788,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::SequentialAndRandomStreamTest()
+    VOID LogTestBase::SequentialAndRandomStreamTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 
@@ -2953,9 +2988,7 @@ namespace LogTests
     ktl::Awaitable<void> LogTestBase::ReadWriteCloseRaceWorker(
         __in ILogicalLog& logicalLog,
         __in int maxSize,
-        __in ILogicalLog::SPtr logicalLogs[],
-        __in int numLogicalLogs,
-        __inout volatile LONGLONG & amountWritten,
+        __inout volatile ULONGLONG & numTruncates,
         __in int fileSize,
         __in int taskId,
         __in CancellationToken const & cancellationToken)
@@ -2963,6 +2996,8 @@ namespace LogTests
         LONGLONG bytes = 0;
         Common::Random rnd;
         NTSTATUS status;
+        ILogicalLog::SPtr thisLogicalLog = &logicalLog;
+        LONGLONG amountWritten = 0;
 
         KFinally([taskId, &bytes] { TestCommon::TestSession::WriteInfo(TraceComponent, "Exit task {0} bytes {1}", taskId, bytes); });
 
@@ -2986,7 +3021,7 @@ namespace LogTests
             }
             
             bytes += toWrite;
-            InterlockedAdd64(&amountWritten, max(toWrite, 4 * 1024)); // small writes will still reserve 4k
+            amountWritten +=  max(toWrite, 4 * 1024); // small writes will still reserve 4k
 
             status = co_await logicalLog.FlushWithMarkerAsync(CancellationToken::None);
             if (status == K_STATUS_API_CLOSED)
@@ -3000,18 +3035,19 @@ namespace LogTests
                 KInvariant(FALSE);
             }
 
-            LONGLONG snapAmountWritten;
-            while ((snapAmountWritten = amountWritten) >= (fileSize / 2))
+            if (amountWritten >= (fileSize / 2))
             {
-                LONGLONG trySwap = InterlockedCompareExchange64(&amountWritten, 0, snapAmountWritten);
-                if (trySwap == snapAmountWritten)
+                ULONGLONG currentTruncateIteration = InterlockedIncrement64((volatile LONGLONG*) &numTruncates);
+
+                status = co_await TruncateLogicalLogs(&thisLogicalLog, 1);
+                if (!NT_SUCCESS(status))
                 {
-                    status = co_await TruncateLogicalLogs(logicalLogs, numLogicalLogs);
-                    if (!NT_SUCCESS(status))
-                    {
-                        TestCommon::TestSession::WriteInfo(TraceComponent, "Task {0} TruncateLogicalLogs failure {1}", taskId, status);
-                        KInvariant(FALSE);
-                    }
+                    TestCommon::TestSession::WriteInfo(TraceComponent, "Task {0} TruncateLogicalLogs iteration {1} failure {2}", taskId, currentTruncateIteration, status);
+                    KInvariant(FALSE);
+                }
+                else
+                {
+                    TestCommon::TestSession::WriteInfo(TraceComponent, "Task {0} TruncateLogicalLogs iteration {1} success.", taskId, currentTruncateIteration);
                 }
             }
 
@@ -3021,6 +3057,11 @@ namespace LogTests
             {
                 TestCommon::TestSession::WriteInfo(TraceComponent, "Task {0} ReadAsync failure (already closed) {1}", taskId, status);
                 co_return;
+            }
+            else if (status == STATUS_NOT_FOUND)
+            {
+                KInvariant(numTruncates > 0);
+                TestCommon::TestSession::WriteWarning(TraceComponent, "Task {0} ReadAsync failure (not found) {1}. Expected when the logs were just fully truncated by this (or another) thread.", taskId, status);
             }
             else if (!NT_SUCCESS(status))
             {
@@ -3032,7 +3073,7 @@ namespace LogTests
         co_return;
     }
 
-    VOID LogTestBase::ReadWriteCloseRaceTest()
+    VOID LogTestBase::ReadWriteCloseRaceTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 
@@ -3099,13 +3140,19 @@ namespace LogTests
         }
 
         const int fileSize = 1024 * 1024 * 100; // todo: define this in a single place
-        volatile LONGLONG amountWritten = 0;
+        volatile ULONGLONG numTruncates = 0;
         for (int i = 0; i < NumAwaitables; i++)
         {
             ILogicalLog::SPtr log = logicalLogs[i];
             CancellationToken token = cts->Token;
 
-            awaitables[i] = ReadWriteCloseRaceWorker(*log, MaxLogBlockSize, logicalLogs, NumAwaitables, amountWritten, fileSize, i, token);
+            awaitables[i] = ReadWriteCloseRaceWorker(
+                *log,
+                MaxLogBlockSize,
+                numTruncates,
+                fileSize,
+                i,
+                token);
         }
 
         KNt::Sleep(15 * 1000);
@@ -3167,7 +3214,7 @@ namespace LogTests
         logManager = nullptr;
     }
 
-    VOID LogTestBase::UPassthroughErrorsTest()
+    VOID LogTestBase::UPassthroughErrorsTest(__in KtlLoggerMode)
     {
         NTSTATUS status;
 

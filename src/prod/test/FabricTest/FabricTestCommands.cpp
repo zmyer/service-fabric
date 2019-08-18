@@ -31,6 +31,8 @@ wstring const FabricTestCommands::DefineInfrastructureServiceCommand = L"infrase
 wstring const FabricTestCommands::RemoveInfrastructureServiceCommand = L"removeinfraservice";
 wstring const FabricTestCommands::DefineRepairManagerServiceCommand = L"rmservice";
 wstring const FabricTestCommands::DefineDnsServiceCommand = L"dnsservice";
+wstring const FabricTestCommands::DefineNIMServiceCommand = L"networkinventorymanager";
+wstring const FabricTestCommands::DefineEnableUnsupportedPreviewFeaturesCommand = L"enableunsupportedpreviewfeatures";
 wstring const FabricTestCommands::DefineMockImageBuilderCommand = L"mockimagebuilder";
 
 wstring const FabricTestCommands::ListCommand = L"list";
@@ -46,6 +48,7 @@ wstring const FabricTestCommands::VerifyFromFMCommand = L"verifyfromfm";
 
 wstring const FabricTestCommands::CreateNameCommand = L"createname";
 wstring const FabricTestCommands::DeleteNameCommand = L"deletename";
+wstring const FabricTestCommands::DnsNameExistsCommand = L"dnsnameexists";
 wstring const FabricTestCommands::NameExistsCommand = L"nameexists";
 wstring const FabricTestCommands::PutPropertyCommand = L"putproperty";
 wstring const FabricTestCommands::PutCustomPropertyCommand = L"putcustomproperty";
@@ -115,6 +118,7 @@ wstring const FabricTestCommands::ActivateNodeCommand = L"activatenode";
 wstring const FabricTestCommands::DeactivateNodesCommand = L"deactivatenodes";
 wstring const FabricTestCommands::RemoveNodeDeactivationCommand = L"removenodedeactivation";
 wstring const FabricTestCommands::VerifyNodeDeactivationStatusCommand = L"verifynodedeactivationstatus";
+wstring const FabricTestCommands::UpdateNodeImagesCommand = L"updatenodeimages";
 
 wstring const FabricTestCommands::NodeStateRemovedCommand = L"nodestateremoved";
 wstring const FabricTestCommands::RecoverPartitionsCommand = L"recoverpartitions";
@@ -143,10 +147,17 @@ wstring const FabricTestCommands::EnableNativeImageStore = L"enablenativeimagest
 wstring const FabricTestCommands::VerifyImageStore = L"verifyimagestore";
 wstring const FabricTestCommands::VerifyNodeFiles = L"verifynodefiles";
 wstring const FabricTestCommands::DeployServicePackageCommand = L"deployservicepackagetonode";
+wstring const FabricTestCommands::VerifyDeployedCodePackageCountCommand = L"verifydeployedcodepackagecount";
 
 wstring const FabricTestCommands::CreateComposeCommand = L"createcompose";
 wstring const FabricTestCommands::DeleteComposeCommand = L"deletecompose";
 wstring const FabricTestCommands::UpgradeComposeCommand = L"upgradecompose";
+wstring const FabricTestCommands::RollbackComposeCommand = L"rollbackcompose";
+
+wstring const FabricTestCommands::CreateNetworkCommand = L"createnetwork";
+wstring const FabricTestCommands::DeleteNetworkCommand = L"deletenetwork";
+wstring const FabricTestCommands::GetNetworkCommand = L"getnetwork";
+wstring const FabricTestCommands::ShowNetworksCommand = L"shownetworks";
 
 wstring const FabricTestCommands::PrepareUpgradeFabricCommand = L"prepareupgradefabric";
 wstring const FabricTestCommands::ProvisionFabricCommand = L"provisionfabric";
@@ -301,3 +312,5 @@ wstring const FabricTestCommands::WaitForAllToApplyLsn = L"waitforalltoapplylsn"
 
 wstring const FabricTestCommands::SetEseOnly = L"seteseonly";
 wstring const FabricTestCommands::ClearEseOnly = L"cleareseonly";
+
+wstring const FabricTestCommands::EnableLogTruncationTimestampValidation = L"enablelogtruncationtimestampvalidation";

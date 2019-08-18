@@ -20,6 +20,8 @@ add_executable(${exe_FailoverFM.Test}
   ../ServiceLookupTable.Test.cpp
   ../ServiceCache.Test.cpp
   ../TestConstants.cpp
+  ../../../../client/TestClientFactory.cpp
+  ../../../../client/MockFabricClientImpl.cpp  
 )
 
 add_precompiled_header(${exe_FailoverFM.Test} ../stdafx.h)
@@ -38,9 +40,11 @@ target_link_libraries(${exe_FailoverFM.Test}
   ${lib_Transport}
   ${lib_LoadBalancing}
   ${lib_FailoverCommon}
+  ${lib_NetworkInventoryManager}
+  ${lib_NetworkInventoryManager}
   ${lib_Store}
   ${lib_TestHooks}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_Replication}
   ${lib_TStore}
   ${lib_StoreRepairPolicy}
@@ -69,8 +73,6 @@ target_link_libraries(${exe_FailoverFM.Test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(

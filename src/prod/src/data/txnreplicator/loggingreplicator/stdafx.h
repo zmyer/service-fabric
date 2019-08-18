@@ -10,6 +10,7 @@
 #define FILELOGMANAGER_TAG 'FgoL'
 #define KTLLOGMANAGER_TAG  'KgoL'
 #define FAULTYFILELOGMANAGER_TAG 'GlfF'
+#define MEMORYLOGMANAGER_TAG 'LmeM'
 #define LOGGEDRECORDS_TAG 'SgoL'
 #define LOGGINGREPLICATOR_TAG 'peRL'
 #define LOGRECORDS_DISPATCHER_TAG 'DgoL'
@@ -148,20 +149,22 @@
 #define BM_TRACE_AND_CO_RETURN_ON_FAILURE(text, id, status) \
     if (!NT_SUCCESS(status)) \
     { \
-        EventSource::Events->BackupManager_Error( \
+        EventSource::Events->IBM_BackupAsyncFinishError( \
             TracePartitionId, \
             ReplicaId, \
             id, \
+            L"status", \
             status, \
             text); \
         co_return status; \
     } \
 
 #define BM_TRACE_AND_CO_RETURN(text, id, status) \
-    EventSource::Events->BackupManager_Error( \
+    EventSource::Events->IBM_BackupAsyncFinishError( \
         TracePartitionId, \
         ReplicaId, \
         id, \
+        L"status", \
         status, \
         text); \
     co_return status; \
@@ -176,7 +179,15 @@
 #include "IOperation.h"
 #include "IOperationStream.h"
 #include "RoleContextDrainState.h"
-#include "FaultyFileLogicalLog.h"
+
+// This is a Win32 based Filelog
+#ifndef PLATFORM_UNIX
+#include "FileLog.h"
+#endif
+
+#include "FaultyFileLog.h"
+#include "MemoryLog.h"
+#include "MemoryLogReadStream.h"
 #include "TransactionMap.h"
 #include "LogRecordsMap.h"
 #include "LoggedRecords.h"
@@ -188,6 +199,7 @@
 #include "LogManager.h"
 #include "FileLogManager.h"
 #include "KLogManager.h"
+#include "MemoryLogManager.h"
 #include "IReplicatedLogManager.h"
 #include "ReplicatedLogManager.h"
 #include "RecordProcessingMode.h"
@@ -199,6 +211,8 @@
 #include "IOperationProcessor.h"
 #include "OperationProcessor.h"
 #include "LogRecordsDispatcher.h"
+#include "ParallelLogRecordsDispatcher.h"
+#include "SerialLogRecordsDispatcher.h"
 #include "TransactionManager.h"
 #include "RecoveryManager.h"
 #include "CopyStream.h"

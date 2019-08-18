@@ -56,13 +56,19 @@ namespace DNS
         virtual void CloseAsync() override;
 
         virtual IFabricResolveOp::SPtr CreateResolveOp(
-            __in ULONG fabricQueryTimeoutInSeconds
+            __in ULONG fabricQueryTimeoutInSeconds,
+            __in const KString::SPtr& spStrPartitionPrefix,
+            __in const KString::SPtr& spStrPartitionSuffix,
+            __in bool fIsPartitionedQueryEnabled
         ) const override;
 
         virtual void NotifyServiceChanged(
             __in KString& serviceName,
             __in bool fServiceDeleted
         ) override;
+
+    private:
+        IDnsTracer & Tracer() { return *_spTracer; }
 
     private:
         bool _fActive;

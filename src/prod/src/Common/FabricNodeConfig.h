@@ -20,6 +20,7 @@ namespace Common
         typedef ConfigCollection<std::wstring, std::wstring> KeyStringValueCollectionMap;
         typedef ConfigCollection<std::wstring, uint> NodeCapacityRatioCollectionMap;
         typedef ConfigCollection<std::wstring, uint> NodeCapacityCollectionMap;
+        typedef ConfigCollection<std::wstring, std::wstring> NodeSfssRgPolicyMap;
 
         class NodeFaultDomainIdCollection : public std::vector<Common::Uri>
         {
@@ -95,8 +96,14 @@ namespace Common
         INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", FaultAnalysisServiceReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);        
         // The address that BackupRestoreService uses to replicate to its other replica.
         INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", BackupRestoreServiceReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);        
+        // The address that CentralSecretService uses to replicate to its other replica.
+        INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", CentralSecretServiceReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);
         // The address that UpgradeService uses to replicate to its other replica.
         INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", UpgradeServiceReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);        
+        // The address that EventStoreService uses to replicate to its other replica.
+        INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", EventStoreServiceReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);
+        // The address that GatewayResourceManager uses to replicate to its other replica.
+        INTERNAL_CONFIG_ENTRY(std::wstring, L"FabricNode", GatewayResourceManagerReplicatorAddress, L"localhost:0", ConfigEntryUpgradePolicy::Static);
 
         // Path used by the Fabric Service to read or write information for local operation.
         // This is the base directory for all other directories specified at the node, unless
@@ -133,6 +140,9 @@ namespace Common
         PUBLIC_CONFIG_GROUP(NodePropertyCollectionMap, L"NodeProperties", NodeProperties, ConfigEntryUpgradePolicy::Static);
         // A collection of node capacities for different metrics.
         PUBLIC_CONFIG_GROUP(NodeCapacityCollectionMap, L"NodeCapacities", NodeCapacities, ConfigEntryUpgradePolicy::Static);
+
+        // A collection of SF system services resource governance policies.
+        INTERNAL_CONFIG_GROUP(NodeSfssRgPolicyMap, L"NodeSfssRgPolicies", NodeSfssRgPolicies, ConfigEntryUpgradePolicy::Dynamic);
 
         // Start of the application ports managed by hosting subsystem. 
         // Required if EndpointFilteringEnabled is true in Hosting.
@@ -206,5 +216,12 @@ namespace Common
         INTERNAL_CONFIG_GROUP(KeyStringValueCollectionMap, L"LogicalApplicationDirectories", LogicalApplicationDirectories, Common::ConfigEntryUpgradePolicy::NotAllowed);
 
         INTERNAL_CONFIG_GROUP(KeyStringValueCollectionMap, L"LogicalNodeDirectories", LogicalNodeDirectories, Common::ConfigEntryUpgradePolicy::NotAllowed);
+
+     public:
+         void SetHttpGatewayPort(unsigned short port) { httpGatewayPort_ = port; }
+         unsigned short HttpGatewayPort() const { return httpGatewayPort_; }
+
+     private:
+         unsigned short httpGatewayPort_ = 0;
     };
 }

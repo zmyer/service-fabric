@@ -20,7 +20,8 @@ namespace HttpClient
             KAllocator &allocator,
             __out IHttpClientRequestSPtr &clientRequest,
             bool allowRedirects = true,
-            bool enableCookies = true) = 0;
+            bool enableCookies = true,
+            bool enableWinauthAutoLogon = false) = 0;
 
         virtual Common::ErrorCode CreateHttpRequest(
             std::wstring const &requestUri,
@@ -29,6 +30,7 @@ namespace HttpClient
             Common::TimeSpan const &receiveTimeout,
             __out IHttpClientRequestSPtr &clientRequest,
             bool allowRedirects = true,
-            bool enableCookies = true) = 0;
+            bool enableCookies = true,
+            bool enableWinauthAutoLogon = false) = 0;
     };
 }

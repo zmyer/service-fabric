@@ -32,14 +32,14 @@ HealthReport HealthReportFactory::GenerateRebuildStuckHealthReport(const wstring
         ServiceModel::AttributeList());
 }
 
-HealthReport HealthReportFactory::GenerateRebuildStuckHealthReport()
+HealthReport HealthReportFactory::GenerateRebuildStuckHealthReport(Common::TimeSpan elapsedTime, Common::TimeSpan expectedTime)
 {
-    return GenerateRebuildStuckHealthReport(GenerateRebuildBroadcastStuckDescription());
+    return GenerateRebuildStuckHealthReport(GenerateRebuildBroadcastStuckDescription(elapsedTime, expectedTime));
 }
 
-HealthReport HealthReportFactory::GenerateRebuildStuckHealthReport(vector<NodeInstance> & stuckNodes)
+HealthReport HealthReportFactory::GenerateRebuildStuckHealthReport(vector<NodeInstance> & stuckNodes, Common::TimeSpan elapsedTime, Common::TimeSpan expectedTime)
 {
-    return GenerateRebuildStuckHealthReport(GenerateRebuildWaitingForNodesDescription(stuckNodes));
+    return GenerateRebuildStuckHealthReport(GenerateRebuildWaitingForNodesDescription(stuckNodes, elapsedTime, expectedTime));
 }
 
 HealthReport HealthReportFactory::GenerateClearRebuildStuckHealthReport()
@@ -48,7 +48,13 @@ HealthReport HealthReportFactory::GenerateClearRebuildStuckHealthReport()
     return HealthReport::CreateSystemRemoveHealthReport(healthReportCode, EntityHealthInformation::CreateClusterEntityHealthInformation(), L"");
 }
 
-HealthReport HealthReportFactory::GenerateNodeInfoHealthReport(NodeInfoSPtr nodeInfo, bool isUpgrade)
+bool HealthReportFactory::ShouldIncludeDocumentationUrl(SystemHealthReportCode::Enum reportCode)
+{
+    return ((reportCode == SystemHealthReportCode::FM_NodeDown) ||
+        (reportCode == SystemHealthReportCode::FM_SeedNodeDown));
+}
+
+HealthReport HealthReportFactory::GenerateNodeInfoHealthReport(NodeInfoSPtr nodeInfo, bool isSeedNode, bool isUpgrade)
 {
     auto nodeEntityInfo = EntityHealthInformation::CreateNodeEntityHealthInformation(
         nodeInfo->Id.IdValue,
@@ -66,16 +72,22 @@ HealthReport HealthReportFactory::GenerateNodeInfoHealthReport(NodeInfoSPtr node
     AttributeList attributeList;
     PopulateNodeAttributeList(attributeList, nodeInfo);
     
-    auto reportCode = nodeInfo->IsUp ? SystemHealthReportCode::FM_NodeUp : (isUpgrade ? SystemHealthReportCode::FM_NodeDownDuringUpgrade : SystemHealthReportCode::FM_NodeDown);
+    auto reportCode = nodeInfo->IsUp ?
+        SystemHealthReportCode::FM_NodeUp :
+        (isUpgrade ?
+            SystemHealthReportCode::FM_NodeDownDuringUpgrade :
+            isSeedNode ? SystemHealthReportCode::FM_SeedNodeDown : SystemHealthReportCode::FM_NodeDown);
     return HealthReport::CreateSystemHealthReport(
         reportCode,
         move(nodeEntityInfo),
-        L"" /*extraDescription*/,
+        ShouldIncludeDocumentationUrl(reportCode) ?
+          documentationUrl_ :
+          L"" /*extraDescription*/,
         nodeInfo->HealthSequence,
         move(attributeList));
 }
 
-HealthReport HealthReportFactory::GenerateNodeDeactivationHealthReport(NodeInfoSPtr nodeInfo, bool isDeactivationComplete)
+HealthReport HealthReportFactory::GenerateNodeDeactivationHealthReport(NodeInfoSPtr nodeInfo, bool isSeedNode, bool isDeactivationComplete)
 {
     FABRIC_SEQUENCE_NUMBER sequence = (isFMM_ ? SequenceNumber::GetNext() : nodeInfo->HealthSequence);
     TimeSpan ttl = (isFMM_ ? TimeSpan::FromTicks(stateTraceIntervalEntry_.GetValue().Ticks * 3) : TimeSpan::MaxValue);
@@ -98,7 +110,9 @@ HealthReport HealthReportFactory::GenerateNodeDeactivationHealthReport(NodeInfoS
                 sequence);
         }
 
-        reportCode = nodeInfo->IsUp ? SystemHealthReportCode::FM_NodeUp : SystemHealthReportCode::FM_NodeDown;
+        reportCode = nodeInfo->IsUp ?
+            SystemHealthReportCode::FM_NodeUp :
+            isSeedNode ? SystemHealthReportCode::FM_SeedNodeDown : SystemHealthReportCode::FM_NodeDown;
     }
     else
     {
@@ -111,7 +125,9 @@ HealthReport HealthReportFactory::GenerateNodeDeactivationHealthReport(NodeInfoS
     return HealthReport::CreateSystemHealthReport(
         reportCode,
         move(nodeEntityInfo),
-        wstring(),
+        ShouldIncludeDocumentationUrl(reportCode) ?
+          documentationUrl_ :
+          L"" /*extraDescription*/,
         sequence,
         ttl,
         move(attributeList));
@@ -231,12 +247,19 @@ HealthReport HealthReportFactory::GenerateFailoverUnitHealthReport(FailoverUnit 
 }
 
 
-wstring HealthReportFactory::GenerateRebuildBroadcastStuckDescription()
+wstring HealthReportFactory::GenerateRebuildBroadcastStuckDescription(Common::TimeSpan elapsedTime, Common::TimeSpan expectedTime)
 {
-    return wformatString(Common::StringResource::Get(IDS_FM_Rebuild_Stuck_Broadcast), nodeId_, documentationUrl_);
+    wstring description;
+    StringWriter writer(description);
+
+    writer.Write(wformatString(Common::StringResource::Get(IDS_FM_Rebuild_Stuck_Broadcast), nodeId_));
+    writer.Write(wformatString(Common::StringResource::Get(IDS_FM_Rebuild_Time_Info), elapsedTime, expectedTime));
+    writer.Write(wformatString(Common::StringResource::Get(IDS_FM_Rebuild_More_Info), documentationUrl_));
+
+    return description;
 }
 
-wstring HealthReportFactory::GenerateRebuildWaitingForNodesDescription(vector<Federation::NodeInstance> & stuckNodes)
+wstring HealthReportFactory::GenerateRebuildWaitingForNodesDescription(vector<Federation::NodeInstance> & stuckNodes, Common::TimeSpan elapsedTime, Common::TimeSpan expectedTime)
 {
     wstring description;    
     StringWriter writer(description);
@@ -257,6 +280,7 @@ wstring HealthReportFactory::GenerateRebuildWaitingForNodesDescription(vector<Fe
         }
     }
 
+    writer.Write(wformatString(Common::StringResource::Get(IDS_FM_Rebuild_Time_Info), elapsedTime, expectedTime));
     writer.Write(wformatString(Common::StringResource::Get(IDS_FM_Rebuild_More_Info), documentationUrl_));
 
     return description;

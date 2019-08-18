@@ -16,8 +16,6 @@ StringLiteral const TraceComponent("ComposeDeploymentUpgradeContext");
 
 RolloutContextType::Enum const ComposeDeploymentUpgradeContextType(RolloutContextType::ComposeDeploymentUpgrade);
 
-// TODO DUring delete, we should find all versions of that deployment and unprovision. Because there can be a failure in application upgrade where we dont unprovision the type
-
 ComposeDeploymentUpgradeContext::ComposeDeploymentUpgradeContext()
     : RolloutContext(ComposeDeploymentUpgradeContextType)
     , deploymentName_()
@@ -189,7 +187,11 @@ ErrorCode ComposeDeploymentUpgradeContext::UpdateUpgradeStatus(Store::StoreTrans
 
 ErrorCode ComposeDeploymentUpgradeContext::TryInterrupt(StoreTransaction const &storeTx)
 {
-    if (currentStatus_ == ComposeDeploymentUpgradeState::Enum::ProvisioningTarget)
+    if (isInterrupted_)
+    {
+        return ErrorCodeValue::SingleInstanceApplicationUpgradeInProgress;
+    }
+    else if (currentStatus_ == ComposeDeploymentUpgradeState::Enum::ProvisioningTarget)
     {
         // can be interrupted.
         isInterrupted_ = true;
@@ -211,13 +213,11 @@ ErrorCode ComposeDeploymentUpgradeContext::TryInterrupt(StoreTransaction const &
             if (error.IsSuccess()) 
             { 
                 isInterrupted_ = true;
-                storeTx.Update(*this); 
+                return storeTx.Update(*this); 
             }
-
-            return error;
         }
     }
-    else
+    else 
     {
         return ErrorCodeValue::ApplicationAlreadyInTargetVersion;
     }

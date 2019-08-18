@@ -17,6 +17,7 @@ namespace Reliability
         static Common::StringLiteral const FTUpdateFailureSource;
 
         static Common::StringLiteral const NodeSource;
+        static Common::StringLiteral const NodeUpSource;
         static Common::StringLiteral const NodeUpdateSource;
         static Common::StringLiteral const NodeCacheSource;
         static Common::StringLiteral const NodeStateSource;
@@ -30,6 +31,8 @@ namespace Reliability
         static Common::StringLiteral const AdminApiSource;
 
         static Common::StringLiteral const ServiceResolverSource;
+
+        static Common::StringLiteral const NIMApiSource;
 
         static int64 const InvalidConfigurationVersion;
         static int64 const InvalidDataLossVersion;

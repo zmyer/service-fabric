@@ -63,7 +63,7 @@ namespace Naming
             fmClient.Cache,
             Events,
             root);
-        auto tempProperties = make_unique<GatewayProperties>(
+        auto tempProperties = make_shared<GatewayProperties>(
             instance,
             innerRingCommunication,
             adminClient,
@@ -84,7 +84,7 @@ namespace Naming
         queryGateway_.swap(tempQueryGateway);
         systemServiceResolver_.swap(tempSystemServiceResolver);
         serviceNotificationManager_.swap(tempServiceNotificationManager);
-        properties_.swap(tempProperties);
+        properties_ = move(tempProperties);
     }
 
     EntreeService::~EntreeService()
@@ -433,14 +433,15 @@ namespace Naming
             this->AddHandler(t, NamingTcpMessage::ResetPartitionLoadAction, CreateHandler<ResetPartitionLoadAsyncOperation>);
             this->AddHandler(t, NamingTcpMessage::ToggleVerboseServicePlacementHealthReportingAction, CreateHandler<ToggleVerboseServicePlacementHealthReportingAsyncOperation>);
 
+            this->AddHandler(t, NamingTcpMessage::CreateNetworkAction, CreateHandler<CreateNetworkAsyncOperation>);
+            this->AddHandler(t, NamingTcpMessage::DeleteNetworkAction, CreateHandler<DeleteNetworkAsyncOperation>);
+
             this->AddHandler(t, NamingMessage::ForwardMessageAction, CreateHandler<ForwardToServiceOperation>);
             this->AddHandler(t, NamingMessage::ForwardToFileStoreMessageAction, CreateHandler<ForwardToFileStoreServiceAsyncOperation>);
 
             this->AddHandler(t, NamingTcpMessage::CreateSystemServiceRequestAction, CreateHandler<CreateSystemServiceAsyncOperation>);
             this->AddHandler(t, NamingTcpMessage::DeleteSystemServiceRequestAction, CreateHandler<DeleteSystemServiceAsyncOperation>);
             this->AddHandler(t, NamingTcpMessage::ResolveSystemServiceRequestAction, CreateHandler<ResolveSystemServiceAsyncOperation>);
-
-            //this->AddHandler(t, Communication::NamespaceManager::NamespaceManagerMessage::TestRequestAction, CreateHandler<Test_TestNamespaceManagerAsyncOperation>);
 
             this->AddHandler(t, NamingTcpMessage::RegisterServiceNotificationFilterRequestAction, CreateHandler<ProcessServiceNotificationRequestAsyncOperation>);
             this->AddHandler(t, NamingTcpMessage::UnregisterServiceNotificationFilterRequestAction, CreateHandler<ProcessServiceNotificationRequestAsyncOperation>);
@@ -803,6 +804,20 @@ namespace Naming
 
             return AsyncOperation::CreateAndStart<ForwardToServiceOperation>(this->Properties, std::move(message), timeout, callback, parent);
         }
+        else if (Common::StringUtility::AreEqualCaseInsensitive(childAddressSegment, QueryAddresses::GRMAddressSegment))
+        {
+            ServiceRoutingAgentMessage::SetForwardingHeaders(
+                *message,
+                Transport::Actor::GatewayResourceManager,
+                QueryTcpMessage::QueryAction,
+                *ServiceTypeIdentifier::GatewayResourceManagerServiceTypeId);
+
+            NamingUri serviceName;
+            NamingUri::TryParse(*SystemServiceApplicationNameHelper::PublicGatewayResourceManagerName, serviceName);
+            message->Headers.Replace(ServiceTargetHeader(serviceName));
+
+            return AsyncOperation::CreateAndStart<ForwardToServiceOperation>(this->Properties, std::move(message), timeout, callback, parent);
+        }
         else
         {
             WriteWarning(RequestProcessingTraceComponent, "{0}: Invalid query argument or incorrect query configuration", this->Properties.Instance);
@@ -986,18 +1001,21 @@ namespace Naming
     {
         auto selfRoot = this->Root.CreateComponentRoot();
 
+        // Debugging aid for scale scenario in Linux
+        auto propertiesCopy = properties_;
+
         if (!Properties.IsInZombieMode)
         {
             this->Properties.ReceivingChannel->RegisterMessageHandler(
                 Actor::NamingGateway,
-                [this, selfRoot](MessageUPtr &message, TimeSpan const timeout, AsyncCallback const &callback, AsyncOperationSPtr const &parent)
-            {
-                return this->BeginProcessRequest(move(message), timeout, callback, parent);
-            },
-                [this, selfRoot](AsyncOperationSPtr const &operation, __out MessageUPtr &reply)
-            {
-                return this->EndProcessRequest(operation, reply);
-            });
+                [this, selfRoot, propertiesCopy](MessageUPtr &message, TimeSpan const timeout, AsyncCallback const &callback, AsyncOperationSPtr const &parent)
+                {
+                    return this->BeginProcessRequest(move(message), timeout, callback, parent);
+                },
+                [this, selfRoot, propertiesCopy](AsyncOperationSPtr const &operation, __out MessageUPtr &reply)
+                {
+                    return this->EndProcessRequest(operation, reply);
+                });
         }
         else
         {

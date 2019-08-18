@@ -50,6 +50,8 @@ namespace Data
                 return isSingleOperationTransaction_;
             }
 
+            virtual std::wstring ToString() const override;
+
             //
             // Returns TRUE If the transaction consists of only 1 operation (followed by a commit)
             //
@@ -115,7 +117,8 @@ namespace Data
             void Write(
                 __in Utilities::BinaryWriter & binaryWriter,
                 __inout Utilities::OperationData & operationData,
-                __in bool isPhysicalWrite) override;
+                __in bool isPhysicalWrite,
+                __in bool forceRecomputeOffsets) override;
 
             ULONG GetSizeOnWire() const override;
 

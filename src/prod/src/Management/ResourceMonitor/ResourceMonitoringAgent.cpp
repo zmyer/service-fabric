@@ -12,9 +12,9 @@ using namespace Transport;
 
 StringLiteral const TraceComponent("ResourceMonitoringAgent");
 
-ResourceMonitoringAgent::ResourceMonitoringAgent(IFabricRuntime * & pRuntime) :
+ResourceMonitoringAgent::ResourceMonitoringAgent(Hosting2::ComFabricRuntime * pRuntime, Transport::IpcClient & ipcClient) :
     pRuntime_(pRuntime),
-    ipcClient_((dynamic_cast<ComFabricRuntime*>(pRuntime))->Runtime->Host.Client)
+    ipcClient_(ipcClient)
 {
     WriteNoise(TraceComponent, "ResourceMonitoringAgent constructed.");
 }
@@ -81,17 +81,52 @@ void ResourceMonitoringAgent::UpdateFromHost(Management::ResourceMonitor::HostUp
 
         for (auto updateEvent : hostEvents)
         {
-#ifdef DBG
-            WriteInfo(TraceComponent, "Update event host {0}", updateEvent);
-#endif
+            if (ResourceMonitorServiceConfig::GetConfig().IsTestMode)
+            {
+                WriteInfo(TraceComponent, "Update event host {0}", updateEvent);
+            }
 
             if (updateEvent.IsUp)
             {
-                hostsToMonitor_[updateEvent.AppHostId] = ResourceDescription(updateEvent.CodePackageInstanceIdentifier, updateEvent.AppName);
+                if (updateEvent.IsLinuxContainerIsolated)
+                {
+                    auto partitionIter = partitionsToMonitor_.find(updateEvent.PartitionId);
+                    if (partitionIter == partitionsToMonitor_.end())
+                    {
+                        partitionsToMonitor_[updateEvent.PartitionId] = ResourceDescription(
+                            updateEvent.CodePackageInstanceIdentifier,
+                            updateEvent.AppName,
+                            updateEvent.IsLinuxContainerIsolated);
+                    }
+                    partitionsToMonitor_[updateEvent.PartitionId].UpdateAppHosts(updateEvent.AppHostId, true);
+                }
+                else
+                {
+                    hostsToMonitor_[updateEvent.AppHostId] = ResourceDescription(
+                        updateEvent.CodePackageInstanceIdentifier,
+                        updateEvent.AppName,
+                        updateEvent.IsLinuxContainerIsolated);
+                }
             }
             else
             {
-                hostsToMonitor_.erase(updateEvent.AppHostId);
+                if (updateEvent.IsLinuxContainerIsolated)
+                {
+                    auto partitionIter = partitionsToMonitor_.find(updateEvent.PartitionId);
+                    if (partitionIter != partitionsToMonitor_.end())
+                    {
+                        partitionsToMonitor_[updateEvent.PartitionId].UpdateAppHosts(updateEvent.AppHostId, false);
+                        if (partitionIter->second.AppHosts.size() == 0)
+                        {
+                            partitionsToMonitor_.erase(updateEvent.PartitionId);
+                        }
+                    }
+                }
+                else
+                {
+                    hostsToMonitor_.erase(updateEvent.AppHostId);
+                }
+
             }
         }
     }
@@ -182,7 +217,7 @@ void ResourceMonitoringAgent::SendResourceUsage(TimerSPtr const & timer)
                 if (hostMeasured.second.IsExclusive)
                 {
                     Reliability::PartitionId partitionId(hostMeasured.second.PartitionId);
-
+                    // For other containers summarize usage for all code packages
                     partitionUsage[partitionId].CpuUsage += hostMeasured.second.resourceUsage_.cpuRate_;
                     partitionUsage[partitionId].MemoryUsage += hostMeasured.second.resourceUsage_.memoryUsage_;
 
@@ -191,16 +226,36 @@ void ResourceMonitoringAgent::SendResourceUsage(TimerSPtr const & timer)
                 }
             }
         }
+
+        for (auto & hostMeasured : partitionsToMonitor_)
+        {
+            if (hostMeasured.second.resourceUsage_.IsValid() && hostMeasured.second.AppHosts.size() > 0)
+            {
+                if (hostMeasured.second.IsExclusive && hostMeasured.second.IsLinuxContainerIsolated)
+                {
+                    Reliability::PartitionId partitionId(hostMeasured.second.PartitionId);
+                    // For Linux isolated containers (crio) - stats are retrieved by reading pod cgroup
+                    // This represents the usage on service package level (for all code packages)
+                    // Therefore there is no need in summarizing usage for each code package
+                    partitionUsage[partitionId].CpuUsage = hostMeasured.second.resourceUsage_.cpuRate_;
+                    partitionUsage[partitionId].MemoryUsage = hostMeasured.second.resourceUsage_.memoryUsage_;
+
+                    partitionUsage[partitionId].CpuUsageRaw = hostMeasured.second.resourceUsage_.cpuRateCurrent_;
+                    partitionUsage[partitionId].MemoryUsageRaw = hostMeasured.second.resourceUsage_.memoryUsageCurrent_;
+                }
+            }
+        }
     }
 
     WriteInfo(TraceComponent, "ResourceMonitoringAgent Sending ResourceUsage for {0} partitions", partitionUsage.size());
 
-#ifdef DBG
-    for (auto & usage : partitionUsage)
+    if (ResourceMonitorServiceConfig::GetConfig().IsTestMode)
     {
-        WriteInfo(TraceComponent, "Resource send {0} {1}", usage.first, usage.second);
+        for (auto & usage : partitionUsage)
+        {
+            WriteInfo(TraceComponent, "Resource send {0} {1}", usage.first, usage.second);
+        }
     }
-#endif
 
     if (partitionUsage.size() != 0)
     {
@@ -218,11 +273,34 @@ void ResourceMonitoringAgent::SendResourceUsage(TimerSPtr const & timer)
 
 void ResourceMonitoringAgent::TraceCallback(Common::TimerSPtr const & timer)
 {
-    WriteInfo(TraceComponent, "Tracing started with {0} hosts", hostsToMonitor_.size());
+    WriteInfo(TraceComponent, "Tracing started with {0} hosts and {1} partitions", hostsToMonitor_.size(), partitionsToMonitor_.size());
 
     AcquireReadLock grab(lock_);
 
     for (auto & hostMeasured : hostsToMonitor_)
+    {
+        if (hostMeasured.second.resourceUsage_.IsValid())
+        {
+            //this means that this is shared host
+            //for these RM will trace out resource info
+            //for exclusive RA is tracing
+            if (!hostMeasured.second.IsExclusive)
+            {
+                resourceMonitorEventSource_.ResourceUsageReportSharedHost(
+                    hostMeasured.second.appName_,
+                    hostMeasured.second.codePackageIdentifier_.ServicePackageInstanceId.ServicePackageName,
+                    hostMeasured.second.codePackageIdentifier_.CodePackageName,
+                    nodeId_.ToString(),
+                    hostMeasured.second.resourceUsage_.cpuRate_,
+                    hostMeasured.second.resourceUsage_.memoryUsage_,
+                    hostMeasured.second.resourceUsage_.cpuRateCurrent_,
+                    hostMeasured.second.resourceUsage_.memoryUsageCurrent_
+                );
+            }
+        }
+    }
+
+    for (auto & hostMeasured : partitionsToMonitor_)
     {
         if (hostMeasured.second.resourceUsage_.IsValid())
         {
@@ -250,18 +328,34 @@ void ResourceMonitoringAgent::TraceCallback(Common::TimerSPtr const & timer)
 
 std::vector<std::wstring> ResourceMonitoringAgent::GetHostsToMeasure()
 {
-    AcquireReadLock grab(lock_);
-
     std::vector<std::wstring> hosts;
-
-    auto now = DateTime::Now();
-
-    for (auto & host : hostsToMonitor_)
     {
-        if (host.second.resourceUsage_.ShouldCheckUsage(now))
+        AcquireReadLock grab(lock_);
+
+        auto now = DateTime::Now();
+
+        for (auto & host : hostsToMonitor_)
         {
-            hosts.push_back(host.first);
+            if (host.second.resourceUsage_.ShouldCheckUsage(now))
+            {
+                hosts.push_back(host.first);
+            }
         }
+
+        for (auto & host : partitionsToMonitor_)
+        {
+            if (host.second.resourceUsage_.ShouldCheckUsage(now) && host.second.AppHosts.size() > 0)
+            {
+                // take first app host for the partition based reports
+                hosts.push_back(*host.second.AppHosts.begin());
+            }
+        }
+    }
+
+    if (hosts.size() > ResourceMonitorServiceConfig::GetConfig().MaxHostsToMeasure)
+    {
+        std::random_shuffle(hosts.begin(), hosts.end());
+        hosts.resize(ResourceMonitorServiceConfig::GetConfig().MaxHostsToMeasure);
     }
 
     return hosts;
@@ -280,9 +374,26 @@ void ResourceMonitoringAgent::UpdateWithMeasurements(std::map<std::wstring, Mana
             if (itHost != hostsToMonitor_.end())
             {
                 itHost->second.resourceUsage_.Update(measurement.second);
-#ifdef DBG
-                WriteInfo(TraceComponent, "Resource update {0} {1}", itHost->first, itHost->second.resourceUsage_);
-#endif
+                if (ResourceMonitorServiceConfig::GetConfig().IsTestMode)
+                {
+                    WriteInfo(TraceComponent, "Resource update {0} {1}", itHost->first, itHost->second.resourceUsage_);
+                }
+            }
+            else
+            {
+                // check partitions
+                for (auto& partition : partitionsToMonitor_)
+                {
+                    auto foundAppHost = partition.second.AppHosts.find(measurement.first);
+                    if (foundAppHost != partition.second.AppHosts.end())
+                    {
+                        partition.second.resourceUsage_.Update(measurement.second);
+                        if (ResourceMonitorServiceConfig::GetConfig().IsTestMode)
+                        {
+                            WriteInfo(TraceComponent, "Resource update for partition {0} {1}", partition.first, partition.second.resourceUsage_);
+                        }
+                    }
+                }
             }
         }
     }
@@ -352,18 +463,7 @@ protected:
     {
         WriteNoise(TraceComponent, "ResourceMonitoringAgent::OpenAsyncOperation Started");
 
-        ComFabricRuntime * castedRuntimePtr;
-        try
-        {
-            castedRuntimePtr = dynamic_cast<ComFabricRuntime*>(owner_.pRuntime_);
-        }
-        catch (...)
-        {
-            Common::Assert::TestAssert("ResourceMonitoringAgent unable to cast ComFabricRuntime.");
-            WriteWarning(TraceComponent, "ResourceMonitoringAgent unable to get ComFabricRuntime");
-            TryComplete(thisSPtr, ErrorCode(ErrorCodeValue::OperationFailed));
-            return;
-        }
+        ComFabricRuntime * castedRuntimePtr = owner_.pRuntime_;
 
         owner_.RegisterMessageHandler();
         owner_.hostId_ = castedRuntimePtr->Runtime->Host.get_Id();

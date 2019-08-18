@@ -198,6 +198,8 @@ namespace Naming
         class ResolveSystemServiceAsyncOperation;
         class ResolveSystemServiceGatewayAsyncOperation;
         class PrefixResolveServiceAsyncOperation;
+        class CreateNetworkAsyncOperation;
+        class DeleteNetworkAsyncOperation;
         class Test_TestNamespaceManagerAsyncOperation;
 
         class ProcessQueryAsyncOperation;
@@ -248,7 +250,7 @@ namespace Naming
             Common::AsyncOperationSPtr const & parent);
 
         NamingConfig const & namingConfig_;
-        GatewayPropertiesUPtr properties_;        
+        GatewayPropertiesSPtr properties_;        
 
         std::wstring listenAddress_;
         std::map<std::wstring, ProcessRequestHandler> requestHandlers_;

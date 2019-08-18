@@ -12,18 +12,19 @@ using namespace Data::Utilities;
 
 ILoggingReplicator::SPtr Factory::Create(
     __in PartitionedReplicaId const & traceId,
-    __in TxnReplicator::IRuntimeFolders const & runtimeFolders,
+    __in IRuntimeFolders const & runtimeFolders,
     __in KString const & logDirectory,
     __in IStateReplicator & stateReplicator,
     __in IStateProviderManager & stateManager,
-    __in KWfStatefulServicePartition & partition,
-    __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
-    __in TxnReplicator::SLInternalSettingsSPtr const & ktlLoggerSharedLogConfig,
+    __in IStatefulPartition & partition,
+    __in TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+    __in SLInternalSettingsSPtr const & ktlLoggerSharedLogConfig,
     __in Data::Log::LogManager & logManager,
-    __in TxnReplicator::IDataLossHandler & dataLossHandler,
-    __in TxnReplicator::TRPerformanceCountersSPtr const & perfCounters,
+    __in IDataLossHandler & dataLossHandler,
+    __in TRPerformanceCountersSPtr const & perfCounters,
     __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const & healthClient,
-	__in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+    __in ITransactionalReplicator & transactionalReplicator,
+    __in bool hasPersistedState,
     __in KAllocator& allocator,
     __out IStateProvider::SPtr & stateProvider)
 {
@@ -40,7 +41,8 @@ ILoggingReplicator::SPtr Factory::Create(
         dataLossHandler,
         perfCounters,
         healthClient,
-		transactionalReplicator,
+        transactionalReplicator,
+        hasPersistedState,
         allocator,
         stateProvider);
     

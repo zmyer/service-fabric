@@ -11,9 +11,10 @@ using namespace Data::StateManager;
 NTSTATUS Factory::Create(
     __in PartitionedReplicaId const & traceId, 
     __in TxnReplicator::IRuntimeFolders & runtimeFolders, 
-    __in KWfStatefulServicePartition & partition, 
+    __in IStatefulPartition & partition, 
     __in IStateProvider2Factory & stateProviderFactory, 
     __in TxnReplicator::TRInternalSettingsSPtr const & transactionalReplicatorConfig,
+    __in bool hasPersistedState,
     __in KAllocator & allocator, 
     __out IStateManager::SPtr & stateManager)
 {
@@ -24,6 +25,7 @@ NTSTATUS Factory::Create(
         partition, 
         stateProviderFactory, 
         transactionalReplicatorConfig,
+        hasPersistedState,
         allocator, 
         tmpStateManager);
 

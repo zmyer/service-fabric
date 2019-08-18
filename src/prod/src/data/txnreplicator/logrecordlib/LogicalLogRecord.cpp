@@ -69,10 +69,15 @@ void LogicalLogRecord::UpdateApproximateDiskSize()
     ApproximateSizeOnDisk = ApproximateSizeOnDisk + DiskSpaceUsed;
 }
 
+std::wstring LogicalLogRecord::ToString() const
+{
+    return __super::ToString();
+}
+
 OperationData::CSPtr LogicalLogRecord::SerializeLogicalData()
 {
     OperationData::SPtr operationData = OperationData::Create(GetThisAllocator());
-    Write(replicatedDataBinaryWriter_, *operationData, false);
+    Write(replicatedDataBinaryWriter_, *operationData, false, false);
 
     OperationData::CSPtr returnData(operationData.RawPtr());
 
@@ -115,9 +120,10 @@ void LogicalLogRecord::ReadLogical(
 void LogicalLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite,
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
 
     if (replicatedData_ == nullptr)
     {

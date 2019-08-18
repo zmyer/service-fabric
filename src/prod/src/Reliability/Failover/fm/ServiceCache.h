@@ -95,6 +95,8 @@ namespace Reliability
                 uint64 updateId,
                 ApplicationCapacityDescription const& applicationCapacity,
                 ServiceModel::ServicePackageResourceGovernanceMap const& rgDescription,
+                ServiceModel::CodePackageContainersImagesMap const& cpContainersImages,
+                Common::StringCollection networks,
                 Common::AsyncCallback const& callback,
                 Common::AsyncOperationSPtr const& state);
 
@@ -298,6 +300,7 @@ namespace Reliability
                 uint64 updateId,
                 ApplicationCapacityDescription const& capacityDescription,
                 ServiceModel::ServicePackageResourceGovernanceMap const& rgDescription,
+                ServiceModel::CodePackageContainersImagesMap const& cpContainersImages,
                 __out LockedApplicationInfo & lockedApplication,
                 __out bool & isNewApplication);
 

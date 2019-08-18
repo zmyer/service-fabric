@@ -20,6 +20,11 @@ namespace HttpGateway
 
         Common::ErrorCode Initialize();
 
+        static Common::ErrorCode GetApplicationQueryDescription(
+            Common::AsyncOperationSPtr const& thisSPtr,
+            bool includeApplicationName,
+            __out ServiceModel::ApplicationQueryDescription & queryDescription);
+
     private:
 
         //
@@ -32,11 +37,6 @@ namespace HttpGateway
 
         void GetApplicationById(Common::AsyncOperationSPtr const& thisSPtr);
         void OnGetApplicationByIdComplete(Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
-
-        void GetApplicationQueryDescription(
-            Common::AsyncOperationSPtr const& thisSPtr,
-            bool includeApplicationName,
-            __out ServiceModel::ApplicationQueryDescription & queryDescription);
 
         void GetPartitionByPartitionId(Common::AsyncOperationSPtr const& thisSPtr);
 
@@ -173,6 +173,9 @@ namespace HttpGateway
         void PerformBackupRestoreOperation(Common::AsyncOperationSPtr const& thisSPtr);
         void OnPerformBackupRestoreOperationComplete(Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
 #endif
+
+        void GetAllApplicationNetworks(Common::AsyncOperationSPtr const& thisSPtr);
+        void OnGetAllApplicationNetworksComplete(Common::AsyncOperationSPtr const& operation, __in bool expectedCompletedSynchronously);
 
         class CreateServiceFromTemplateData : public Common::IFabricJsonSerializable
         {

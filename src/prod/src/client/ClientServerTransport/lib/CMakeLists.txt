@@ -29,11 +29,17 @@ set( LINUX_SOURCES
   ../StartNodeRequestMessageBody.cpp
   ../TokenValidationServiceTcpMessage.cpp
   ../UpgradeOrchestrationServiceTcpMessage.cpp
+  ../CentralSecretServiceMessage.cpp
+  ../ResourceManagerMessage.cpp
   ../UploadRequest.cpp
   ../createuploadsessionrequest.cpp
   ../deleteuploadsessionrequest.cpp
   ../uploadchunkrequest.cpp
+  ../UploadChunkContentRequest.cpp
   ../uploadsessionrequest.cpp
+  ../VolumeOperationTcpMessage.cpp
+  ../FileUploadCreateRequestHeader.cpp
+  ../GatewayResourceManagerTcpMessage.cpp
 )
 
 include_directories("..")

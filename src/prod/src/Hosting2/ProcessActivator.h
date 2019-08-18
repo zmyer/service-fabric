@@ -42,6 +42,10 @@ namespace Hosting2
 
         Common::ErrorCode Terminate(IProcessActivationContextSPtr const & activationContext, UINT uExitCode);
 
+        Common::ErrorCode UpdateRGPolicy(
+            IProcessActivationContextSPtr & activationContext,
+            ProcessDescriptionUPtr & processDescription);
+
         Common::ErrorCode Test_QueryJobObject(IProcessActivationContext const & activationContext, uint64 & cpuRate, uint64 & memoryLimit) const;
 
         static UINT ProcessDeactivateExitCode;
@@ -51,6 +55,11 @@ namespace Hosting2
         Common::ErrorCode EnsureSeDebugPrivilege();
         Common::ErrorCode EnsureAssignPrimaryTokenPrivilege();
         Common::ErrorCode IsSystemAccount(bool & isSystem);
+
+        Common::ErrorCode CreateJobObjectImpl(HANDLE & handle, wstring const & jobObjectName = L"");
+        void SetupCpuSetCpusLimit(JOBOBJECT_EXTENDED_LIMIT_INFORMATION & limitInfo, std::wstring cpusetCpus);
+        void SetupMemoryLimit(JOBOBJECT_EXTENDED_LIMIT_INFORMATION & limitInfo, UINT memoryInMB, UINT memorySwapInMB, bool isHostedService = false);
+        void SetupCpuSharesLimit(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION & cpuRateInfo, UINT cpuShares, bool isHostedService = false);
 
         Common::ErrorCode Cleanup(IProcessActivationContextSPtr const & activationContext, bool terminateProcess, UINT uExitCode);
 

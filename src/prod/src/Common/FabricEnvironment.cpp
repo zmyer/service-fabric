@@ -22,6 +22,9 @@ GlobalWString FabricEnvironment::SettingsConfigStoreEnvironmentVariable = make_g
 GlobalWString FabricEnvironment::RemoveNodeConfigurationEnvironmentVariable = make_global<wstring>(L"RemoveNodeConfiguration");
 GlobalWString FabricEnvironment::WindowsFabricRemoveNodeConfigurationRegValue = make_global<wstring>(L"RemoveNodeConfiguration");
 GlobalWString FabricEnvironment::FabricDnsServerIPAddressEnvironmentVariable = make_global<wstring>(L"FabricDnsServerIPAddress");
+GlobalWString FabricEnvironment::FabricIsolatedNetworkInterfaceNameEnvironmentVariable = make_global<wstring>(L"FabricIsolatedNetworkInterfaceName");
+GlobalWString FabricEnvironment::FabricHostServicePathEnvironmentVariable = make_global<wstring>(L"FabricHostServicePath");
+GlobalWString FabricEnvironment::UpdaterServicePathEnvironmentVariable = make_global<wstring>(L"UpdaterServicePath");
 
 #if defined(PLATFORM_UNIX)
 LinuxPackageManagerType::Enum FabricEnvironment::packageManagerType_ = LinuxPackageManagerType::Enum::Unknown;
@@ -376,6 +379,37 @@ ErrorCode FabricEnvironment::GetFabricDnsServerIPAddress(LPCWSTR machineName, __
     return GetRegistryKeyHelper(FabricConstants::FabricDnsServerIPAddressRegKeyName, FabricDnsServerIPAddressEnvironmentVariable, ErrorCodeValue::DnsServerIPAddressNotFound, machineName, dnsServerIPAddress);
 }
 
+ErrorCode FabricEnvironment::GetFabricIsolatedNetworkInterfaceName(__out std::wstring & isolatedNetworkInterfaceName)
+{
+    return GetFabricIsolatedNetworkInterfaceName(NULL, isolatedNetworkInterfaceName);
+}
+
+ErrorCode FabricEnvironment::GetFabricIsolatedNetworkInterfaceName(LPCWSTR machineName, __out std::wstring & isolatedNetworkInterfaceName)
+{
+    return GetRegistryKeyHelper(FabricConstants::FabricIsolatedNetworkInterfaceRegKeyName, FabricIsolatedNetworkInterfaceNameEnvironmentVariable, 
+        ErrorCodeValue::IsolatedNetworkInterfaceNameNotFound, machineName, isolatedNetworkInterfaceName);
+}
+
+ErrorCode FabricEnvironment::GetFabricHostServicePath(__out wstring & fabricHostServicePath)
+{
+    return GetFabricHostServicePath(NULL, fabricHostServicePath);
+}
+
+ErrorCode FabricEnvironment::GetFabricHostServicePath(LPCWSTR machineName, __out wstring & fabricHostServicePath)
+{
+    return GetRegistryKeyHelper(FabricConstants::FabricHostServicePathRegKeyName, FabricHostServicePathEnvironmentVariable, ErrorCodeValue::FabricHostServicePathNotFound, machineName, fabricHostServicePath);
+}
+
+ErrorCode FabricEnvironment::GetUpdaterServicePath(__out wstring & updaterServicePath)
+{
+    return GetUpdaterServicePath(NULL, updaterServicePath);
+}
+
+ErrorCode FabricEnvironment::GetUpdaterServicePath(LPCWSTR machineName, __out wstring & updaterServicePath)
+{
+    return GetRegistryKeyHelper(FabricConstants::UpdaterServicePathRegKeyName, UpdaterServicePathEnvironmentVariable, ErrorCodeValue::UpdaterServicePathNotFound, machineName, updaterServicePath);
+}
+
 ErrorCode FabricEnvironment::GetRegistryKeyHelper(const wstring & name, const wstring & environmentVariable, ErrorCode valueNotFound, LPCWSTR machineName, __out wstring & value)
 {
     if (machineName == NULL || machineName[0] == 0)
@@ -598,6 +632,41 @@ ErrorCode FabricEnvironment::SetEnableCircularTraceSession(BOOLEAN enableCircula
 {
     return SetRegistryKeyHelper(FabricConstants::EnableCircularTraceSessionRegKeyName, enableCircularTraceSession, machineName);
 }
+
+ErrorCode FabricEnvironment::SetEnableUnsupportedPreviewFeatures(BOOLEAN enableUnsupportedPreviewFeatures, LPCWSTR machineName)
+{
+    return SetRegistryKeyHelper(FabricConstants::EnableUnsupportedPreviewFeaturesRegKeyName, enableUnsupportedPreviewFeatures, machineName);
+}
+
+ErrorCode FabricEnvironment::GetEnableUnsupportedPreviewFeatures(bool & enableUnsupportedPreviewFeatures)
+{
+    // Default to false and ignore if not present
+    DWORD val = 0;
+    auto err = GetRegistryKeyHelper(FabricConstants::EnableUnsupportedPreviewFeaturesRegKeyName, FabricConstants::EnableUnsupportedPreviewFeaturesRegKeyName, ErrorCodeValue::Success, NULL, val);
+    enableUnsupportedPreviewFeatures = val != 0;
+    return err;
+}
+
+ErrorCode FabricEnvironment::SetIsSFVolumeDiskServiceEnabled(BOOLEAN isSFVolumeDiskServiceEnabled, LPCWSTR machineName)
+{
+    return SetRegistryKeyHelper(FabricConstants::IsSFVolumeDiskServiceEnabledRegKeyName, isSFVolumeDiskServiceEnabled, machineName);
+}
+
+ErrorCode FabricEnvironment::GetIsSFVolumeDiskServiceEnabled(bool & isSFVolumeDiskServiceEnabled)
+{
+    // Default to false and ignore if not present
+    DWORD val = 0;
+    auto err = GetRegistryKeyHelper(FabricConstants::IsSFVolumeDiskServiceEnabledRegKeyName, FabricConstants::IsSFVolumeDiskServiceEnabledRegKeyName, ErrorCodeValue::Success, NULL, val);
+    isSFVolumeDiskServiceEnabled = val != 0;
+    return err;
+}
+
+#if defined(PLATFORM_UNIX)
+ErrorCode FabricEnvironment::SetSfInstalledMoby(LPCWSTR fileContents)
+{
+    return SetRegistryKeyHelper(FabricConstants::SfInstalledMobyRegKeyName, fileContents, NULL);
+}
+#endif
 
 ErrorCode FabricEnvironment::SetRegistryKeyHelper(const wstring & name, const wstring & value, LPCWSTR machineName)
 {

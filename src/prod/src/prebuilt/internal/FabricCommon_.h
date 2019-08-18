@@ -1,8 +1,3 @@
-// ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.  All rights reserved.
-// Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
-// ------------------------------------------------------------
-
 
 
 /* this ALWAYS GENERATED file contains the definitions for the interfaces */
@@ -225,6 +220,10 @@ extern "C"{
 /* interface __MIDL_itf_fabriccommon__0000_0000 */
 /* [local] */ 
 
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
+// ------------------------------------------------------------
 #if ( _MSC_VER >= 1020 )
 #pragma once
 #endif
@@ -2653,6 +2652,9 @@ EXTERN_C const IID IID_IFabricStringMapResult;
     /* [in] */ USHORT level,
     /* [in] */ __RPC__in LPCWSTR text);
 
+/* [entry] */ HRESULT WriteManagedStructuredTrace( 
+    /* [in] */ __RPC__in const FABRIC_ETW_TRACE_EVENT_PAYLOAD *eventPayload);
+
 /* [entry] */ HRESULT VerifyFileSignature( 
     /* [in] */ __RPC__in LPCWSTR filename,
     /* [out] */ __RPC__out BOOLEAN *isValid);
@@ -2661,8 +2663,22 @@ EXTERN_C const IID IID_IFabricStringMapResult;
     /* [in] */ BOOLEAN enableCircularTraceSession,
     /* [in] */ __RPC__in LPCWSTR machineName);
 
-/* [entry] */ HRESULT FabricSetEnableCircularTraceSession( 
+/* [entry] */ HRESULT FabricSetEnableCircularTraceSession(
     /* [in] */ BOOLEAN enableCircularTraceSession);
+
+/* [entry] */ HRESULT FabricSetEnableUnsupportedPreviewFeatures2(
+    /* [in] */ BOOLEAN enableUnsupportedPreviewFeatures,
+    /* [in] */ __RPC__in LPCWSTR machineName);
+
+/* [entry] */ HRESULT FabricSetEnableUnsupportedPreviewFeatures(
+    /* [in] */ BOOLEAN enableUnsupportedPreviewFeatures);
+
+/* [entry] */ HRESULT FabricSetIsSFVolumeDiskServiceEnabled2(
+    /* [in] */ BOOLEAN isSFVolumeDiskServiceEnabled,
+    /* [in] */ __RPC__in LPCWSTR machineName);
+
+/* [entry] */ HRESULT FabricSetIsSFVolumeDiskServiceEnabled( 
+    /* [in] */ BOOLEAN isSFVolumeDiskServiceEnabled);
 
 /* [entry] */ HRESULT FabricGetEnableCircularTraceSession2( 
     /* [in] */ __RPC__in LPCWSTR machineName,
@@ -2671,11 +2687,14 @@ EXTERN_C const IID IID_IFabricStringMapResult;
 /* [entry] */ HRESULT FabricGetEnableCircularTraceSession( 
     /* [retval][out] */ __RPC__out BOOLEAN *enableCircularTraceSession);
 
-/* [entry] */ void FabricSetCrashLeasingApplicationCallback( 
+/* [entry] */ void FabricSetCrashLeasingApplicationCallback(
     /* [in] */ __RPC__in void *callback);
 
-/* [entry] */ void FabricGetCrashLeasingApplicationCallback( 
+/* [entry] */ void FabricGetCrashLeasingApplicationCallback(
     /* [retval][out] */ __RPC__deref_out_opt void **callback);
+
+/* [entry] */ HRESULT FabricSetSfInstalledMoby(
+    /* [in] */ __RPC__in LPCWSTR fileContents);
 
 #endif /* __FabricCommonInternalModule_MODULE_DEFINED__ */
 #endif /* __FabricCommonInternalLib_LIBRARY_DEFINED__ */

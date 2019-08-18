@@ -39,6 +39,8 @@ void Reliability::LoadBalancingComponent::WriteToTextWriter(Common::TextWriter &
             w << "ScaleoutCount"; return;
         case IConstraint::ApplicationCapacity:
             w << "ApplicationCapacity"; return;
+        case IConstraint::Throttling:
+            w << "Throttling"; return;
         default:
             Common::Assert::CodingError("Unknown Constraint Type {0}", val);
     }
@@ -60,7 +62,7 @@ void ISubspace::GetTargetNodesForReplicas(
         // Node:        N0            N1
         // Replicas:   [P/LI/+1]    [P,S]
         if (replicas.size() > 1 &&
-            replica->Partition->Service->TargetReplicaSetSize == 1 &&
+            replica->Partition->TargetReplicaSetSize == 1 &&
             !replica->IsNew &&
             (Type == IConstraint::ReplicaExclusionStatic ||
                 Type == IConstraint::ReplicaExclusionDynamic))
@@ -163,7 +165,7 @@ bool ISubspace::FilterCandidateNodesForCapacityConstraints(
         // capacity for a set of replicas, the ones that are already placed should be excluded,
         // to avoid double load counting
         if (replicas.size() > 1 &&
-            replicaService->IsTargetOne &&
+            replica->Partition->IsTargetOne &&
             !replica->IsNew &&
             replica->Node == node &&
             (replica->Partition->Service->HasAffinityAssociatedSingletonReplicaInUpgrade ||
@@ -395,7 +397,7 @@ ConstraintCheckResult IStaticConstraint::CheckSolutionAndGenerateSubspace(
         }
     }
 
-    return ConstraintCheckResult(make_unique<StaticSubspace>(this), move(invalidReplicas));
+    return ConstraintCheckResult(make_unique<StaticSubspace>(this, relaxed), move(invalidReplicas));
 }
 
 bool IStaticConstraint::AllowedPlacementOnDeactivatedNode(
@@ -430,7 +432,7 @@ bool IStaticConstraint::AllowedPlacementOnDeactivatedNode(
     {
         ServiceEntry const* service = replica->Partition->Service;
 
-        if (service->IsTargetOne && solution.OriginalPlacement->IsSingletonReplicaMoveAllowedDuringUpgrade)
+        if (replica->Partition->IsTargetOne && solution.OriginalPlacement->IsSingletonReplicaMoveAllowedDuringUpgrade)
         {
             // New replicas for stateful volatile services with only one replica should not be created on deactivating nodes
             if (find(deactivatingNodesAllowPlacement.begin(),
@@ -501,6 +503,12 @@ PlacementReplicaSet IStaticConstraint::GetInvalidReplicas(
     return invalidReplicas;
 }
 
+StaticSubspace::StaticSubspace(IStaticConstraint const* constraint, bool relaxed)
+    : constraint_(constraint),
+      relaxed_(relaxed)
+{
+}
+
 void StaticSubspace::GetTargetNodes(
     TempSolution const& tempSolution,
     PlacementReplica const* replica,
@@ -510,6 +518,17 @@ void StaticSubspace::GetTargetNodes(
 {
     UNREFERENCED_PARAMETER(useNodeBufferCapacity);
     UNREFERENCED_PARAMETER(nodeToConstraintDiagnosticsDataMapSPtr);
+
+    // NodeBlocklistConstraint should allow the replica to return to original node when relaxed.
+    // If this is not done, then we can fix either all violations or none.
+    // In case when throttling is enabled, or when there is no capacity then we will not allow partial fix.
+    bool allowReturnToOriginalNode = false;
+    NodeEntry const* baseNode = tempSolution.BaseSolution.GetReplicaLocation(replica);
+
+    if (relaxed_ && constraint_->Type == IConstraint::Enum::PlacementConstraint && baseNode != nullptr)
+    {
+        allowReturnToOriginalNode = candidateNodes.Check(baseNode);
+    }
 
     if (!replica->IsNew)
     {
@@ -521,7 +540,7 @@ void StaticSubspace::GetTargetNodes(
     {
         ServiceEntry const* service = replica->Partition->Service;
 
-        if (service->IsTargetOne && tempSolution.OriginalPlacement->IsSingletonReplicaMoveAllowedDuringUpgrade)
+        if (replica->Partition->IsTargetOne && tempSolution.OriginalPlacement->IsSingletonReplicaMoveAllowedDuringUpgrade)
         {
             // New replicas for stateful volatile services with only one replica should not be created on deactivating nodes
             candidateNodes.DeleteNodeVecWithIndex(tempSolution.OriginalPlacement->BalanceCheckerObj->DeactivatingNodesAllowPlacement);
@@ -536,6 +555,11 @@ void StaticSubspace::GetTargetNodes(
     }
 
     constraint_->GetTargetNodes(tempSolution, replica, candidateNodes);
+
+    if (allowReturnToOriginalNode)
+    {
+        candidateNodes.Add(baseNode);
+    }
 }
 
 bool StaticSubspace::PromoteSecondary(TempSolution const& tempSolution, PartitionEntry const* partition, NodeSet & candidateNodes) const

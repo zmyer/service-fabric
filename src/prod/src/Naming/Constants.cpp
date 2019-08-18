@@ -67,4 +67,6 @@ namespace Naming
     // File Transfer Gateway
     // -------------------------------
     Common::GlobalWString Constants::FileTransferGatewayDirectory = Common::make_global<std::wstring>(L"FileTransfer");
+    double const Constants::ChunkFileLockAcquireTimeoutInSeconds = 5.0;
+    Common::GlobalWString Constants::FileStoreServiceSingletonPartitionGuid = Common::make_global<std::wstring>(L"00000000-0000-0000-0000-000000003000");
 }

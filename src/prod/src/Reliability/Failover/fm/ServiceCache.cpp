@@ -903,6 +903,24 @@ AsyncOperationSPtr ServiceCache::BeginDeleteApplication(
     int64 plbDuration;
     PLBDeleteApplication(newAppInfo->ApplicationName, plbDuration);
 
+    if (Management::NetworkInventoryManager::NetworkInventoryManagerConfig::IsNetworkInventoryManagerEnabled())
+    {
+        // Disassociate the network from the app in case of failure
+        auto appInfo = lockedAppInfo.Entry->Get();
+        for( auto networkName : appInfo->Networks)
+        {        
+            ManualResetEvent completedEvent(false);
+
+            fm_.NIS.BeginNetworkDissociation(
+                networkName,
+                newAppInfo->ApplicationName.ToString(),
+                [&completedEvent](AsyncOperationSPtr const&) { completedEvent.Set(); },
+                state);
+
+            completedEvent.WaitOne();
+        }
+    }
+
     auto newApplicationInfoPtr = newAppInfo.get();
 
     return fmStore_.BeginUpdateData(
@@ -1011,11 +1029,19 @@ void ServiceCache::InternalUpdateServiceInfoCache(LockedServiceInfo & lockedServ
     {
         fm_.ServiceEvents.ServiceDeleted(name, newServiceInfo->Instance);
 
+        // Push data into Event Store.
         fm_.ServiceEvents.ServiceDeletedOperational(
+            Common::Guid::NewGuid(),
+            newServiceInfo->Name,
+            newServiceInfo->ServiceDescription.Type.ServiceTypeName,
             newServiceInfo->ServiceDescription.ApplicationName,
             newServiceInfo->ServiceDescription.ApplicationId.ApplicationTypeName,
-            newServiceInfo->Name,
-            newServiceInfo->ServiceDescription.Type.ServiceTypeName);
+            newServiceInfo->ServiceDescription.Instance,
+            newServiceInfo->ServiceDescription.IsStateful,
+            newServiceInfo->ServiceDescription.PartitionCount,
+            newServiceInfo->ServiceDescription.TargetReplicaSetSize,
+            newServiceInfo->ServiceDescription.MinReplicaSetSize,
+            wformatString(newServiceInfo->ServiceDescription.PackageVersion));
     }
 
     lockedServiceInfo.Commit(move(newServiceInfo));
@@ -1247,22 +1273,56 @@ AsyncOperationSPtr ServiceCache::BeginCreateApplication(
     uint64 updateId,
     ApplicationCapacityDescription const & capacityDescription,
     ServiceModel::ServicePackageResourceGovernanceMap const& rgDescription,
+    ServiceModel::CodePackageContainersImagesMap const& cpContainersImages,
+    StringCollection networks,
     AsyncCallback const & callback,
     AsyncOperationSPtr const & state)
 {
+     ErrorCode error(ErrorCodeValue::Success);
+
+    if (Management::NetworkInventoryManager::NetworkInventoryManagerConfig::IsNetworkInventoryManagerEnabled())
+    {
+        // Associate the application to requested networks.
+        for( auto networkName : networks) 
+        {
+            ManualResetEvent completedEvent(false);
+            fm_.NIS.BeginNetworkAssociation(
+                networkName,
+                applicationName.ToString(),
+                [this, &completedEvent, &error](AsyncOperationSPtr const & contextSPtr) mutable -> void
+                {
+                    error = fm_.NIS.EndNetworkAssociation(contextSPtr);
+                    completedEvent.Set();
+                },
+                state);
+
+            completedEvent.WaitOne();
+            if (!error.IsSuccess())
+            {
+                break;
+            }
+        }
+    }
+
+    if (!error.IsSuccess())
+    {
+        return AsyncOperation::CreateAndStart<CompletedAsyncOperation>(error, callback, state);
+    }
+
     LockedApplicationInfo lockedAppInfo;
     bool isNewApplication;
-    auto error = CreateOrGetLockedApplication(
+    error = CreateOrGetLockedApplication(
         applicationId,
         applicationName,
         instanceId,
         updateId,
         capacityDescription,
         rgDescription,
+        cpContainersImages,
         lockedAppInfo,
         isNewApplication);
 
-    if (!isNewApplication)
+    if (!error.IsSuccess() || !isNewApplication)
     {
         return AsyncOperation::CreateAndStart<CompletedAsyncOperation>(ErrorCodeValue::ApplicationAlreadyExists, callback, state);
     }
@@ -1282,6 +1342,7 @@ AsyncOperationSPtr ServiceCache::BeginCreateApplication(
         return AsyncOperation::CreateAndStart<CompletedAsyncOperation>(error, callback, state);
     }
 
+    appInfo->Networks = networks;
     pair<LockedApplicationInfo, int64> context(move(lockedAppInfo), move(plbDuration));
 
     return fm_.Store.BeginUpdateData(
@@ -1315,6 +1376,23 @@ ErrorCode ServiceCache::EndCreateApplication(AsyncOperationSPtr const& operation
             // In case of failure, delete application from PLB (forced)
             PLBDeleteApplication(appInfo->ApplicationName, revertPlbDuration, true);
             plbDuration += revertPlbDuration;
+
+            if (Management::NetworkInventoryManager::NetworkInventoryManagerConfig::IsNetworkInventoryManagerEnabled())
+            {
+                // Disassociate the network from the app in case of failure
+                for( auto networkName : appInfo->Networks)
+                {        
+                    ManualResetEvent completedEvent(false);
+
+                    fm_.NIS.BeginNetworkDissociation(
+                        networkName,
+                        appInfo->ApplicationName.ToString(),
+                        [&completedEvent](AsyncOperationSPtr const&) { completedEvent.Set(); },
+                        fm_.CreateAsyncOperationRoot());
+
+                    completedEvent.WaitOne();
+                }
+            }
 
             RemoveApplicationCommitJobItemUPtr commitJobItem = make_unique<RemoveApplicationCommitJobItem>(move(lockedAppInfo), commitDuration, plbDuration);
             fm_.CommitQueue.Enqueue(move(commitJobItem));
@@ -1877,6 +1955,38 @@ void ServiceCache::UpdateUpgradeProgressAsync(
 
         if (isUpgradeComplete)
         {
+            if (Management::NetworkInventoryManager::NetworkInventoryManagerConfig::IsNetworkInventoryManagerEnabled())
+            {
+                // Disassociate the networks that are not part of the app anymore.
+                auto associatedNetworks = fm_.NIS.GetApplicationNetworkList(lockedAppInfo->ApplicationName.ToString());
+                for (const auto & net1 : associatedNetworks)
+                {
+                    bool found = false;
+                    for (const auto & net2 : newUpgrade->Description.Specification.Networks)
+                    {
+                        if (StringUtility::Compare(net1.NetworkName, net2) == 0) 
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        ManualResetEvent completedEvent(false);
+
+                        fm_.NIS.BeginNetworkDissociation(
+                            net1.NetworkName,
+                            lockedAppInfo->ApplicationName.ToString(),
+                            [&completedEvent](AsyncOperationSPtr const&) { completedEvent.Set(); },
+                            fm_.CreateAsyncOperationRoot());
+
+                        completedEvent.WaitOne();
+                    }
+                }
+            }
+
+            lockedAppInfo.Entry->Get()->Networks = newUpgrade->Description.Specification.Networks;
+
             CompleteUpgradeAsync(lockedAppInfo);
         }
         else if (isCurrentDomainComplete || isUpdated)
@@ -1900,9 +2010,11 @@ void ServiceCache::CompleteUpgradeAsync(LockedApplicationInfo & lockedAppInfo)
         ApplicationUpgradeUPtr const& upgrade = lockedAppInfo->Upgrade;
         //we need to update the new rg settings once the upgrade is done
         auto const & upgradedRGSettings = upgrade->Description.Specification.UpgradedRGSettings;
+        auto const & upgradedContainersImages = upgrade->Description.Specification.UpgradedCPContainersImages;
 
         ApplicationInfoSPtr newAppInfo = make_shared<ApplicationInfo>(*lockedAppInfo, nullptr, nullptr);
         newAppInfo->ResourceGovernanceDescription = upgradedRGSettings;
+        newAppInfo->CodePackageContainersImages = upgradedContainersImages;
 
         UpdateApplicationAsync(move(lockedAppInfo), move(newAppInfo), true);
     }
@@ -2038,7 +2150,11 @@ ErrorCode ServiceCache::CreateOrGetLockedService(
 
     if (entry)
     {
-        return entry->Lock(entry, lockedServiceInfo);
+        ErrorCode error = entry->Lock(entry, lockedServiceInfo);
+        if (!error.IsError(ErrorCodeValue::FMServiceDoesNotExist))
+        {
+            return error;
+        }
     }
 
     AcquireWriteLock grab(lock_);
@@ -2102,7 +2218,11 @@ ErrorCode ServiceCache::CreateOrGetLockedServiceType(
 
     if (entry)
     {
-        return entry->Lock(entry, lockedServiceType);
+        ErrorCode error = entry->Lock(entry, lockedServiceType);
+        if (!error.IsError(ErrorCodeValue::ServiceTypeNotFound))
+        {
+            return error;
+        }
     }
 
     AcquireWriteLock grab(lock_);
@@ -2150,6 +2270,7 @@ ErrorCode ServiceCache::CreateOrGetLockedApplication(
     uint64 updateId,
     ApplicationCapacityDescription const& capacityDescription,
     ServiceModel::ServicePackageResourceGovernanceMap const& rgDescription,
+    ServiceModel::CodePackageContainersImagesMap const& cpContainersImages,
     __out LockedApplicationInfo & lockedApplication,
     __out bool & isNewApplication)
 {
@@ -2170,7 +2291,11 @@ ErrorCode ServiceCache::CreateOrGetLockedApplication(
 
     if (entry)
     {
-        return entry->Lock(entry, lockedApplication);
+        ErrorCode error = entry->Lock(entry, lockedApplication);
+        if (!error.IsError(ErrorCodeValue::ApplicationNotFound))
+        {
+            return error;
+        }
     }
 
     AcquireWriteLock grab(lock_);
@@ -2185,7 +2310,8 @@ ErrorCode ServiceCache::CreateOrGetLockedApplication(
             instanceId,
             updateId,
             capacityDescription,
-            rgDescription);
+            rgDescription,
+            cpContainersImages);
         entry = make_shared<CacheEntry<ApplicationInfo>>(move(applicationInfo));
         it = applications_.insert(make_pair(applicationId, move(entry))).first;
 
@@ -2295,30 +2421,38 @@ void ServiceCache::AddServiceContexts() const
         {
             ServiceInfoSPtr serviceInfo = it->second->Get();
 
-            if (serviceInfo->IsToBeDeleted)
+            if (serviceInfo->IsDeleted || serviceInfo->Name == Constants::TombstoneServiceName)
             {
-                toBeDeletedServices[serviceInfo->Name] = serviceInfo->Instance;
+                continue;
             }
-            else if (serviceInfo->OperationLSN > 0 && // LSN of zero implies that the service has not been persisted yet
-                !serviceInfo->IsDeleted &&
-                serviceInfo->Name != Constants::TombstoneServiceName &&
-                serviceInfo->FailoverUnitIds.size() != serviceInfo->ServiceDescription.PartitionCount &&
-                !serviceInfo->RepartitionInfo)
+
+            bool partitionCountsDoNotMatch = serviceInfo->FailoverUnitIds.size() != serviceInfo->ServiceDescription.PartitionCount;
+
+            // LSN of zero implies that the service has not been persisted yet
+            bool shouldAddToPartitionMapContext = partitionCountsDoNotMatch && serviceInfo->OperationLSN > 0 && !serviceInfo->RepartitionInfo;
+
+            if (partitionCountsDoNotMatch)
             {
                 fm_.WriteWarning(
                     Constants::ServiceSource, serviceInfo->Name,
                     "Size of FailoverUnitIds {0} does not match the partition count {1}: {2}",
                     serviceInfo->FailoverUnitIds.size(), serviceInfo->ServiceDescription.PartitionCount, *serviceInfo);
+            }
 
+            if (shouldAddToPartitionMapContext)
+            {
                 fm_.BackgroundManagerObj.AddThreadContext(
                     make_unique<ServiceToPartitionMapContext>(serviceInfo->Name, serviceInfo->Instance));
-
                 contextCounts.ServiceToPartitionMapContexts++;
             }
+            
+            if (serviceInfo->IsToBeDeleted && (!partitionCountsDoNotMatch || serviceInfo->IsForceDelete))
+            {
+                toBeDeletedServices[serviceInfo->Name] = serviceInfo->Instance;
+            } 
             else if (serviceInfo->IsServiceUpdateNeeded)
             {
                 fm_.BackgroundManagerObj.AddThreadContext(make_unique<UpdateServiceContext>(serviceInfo));
-
                 contextCounts.UpdateServiceContexts++;
             }
         }

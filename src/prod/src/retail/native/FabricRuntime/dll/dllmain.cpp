@@ -5,6 +5,24 @@
 
 #include "stdafx.h"
 
+BOOLEAN FabricRuntimeKInvariantCallout(
+    __in LPCSTR Condition,
+    __in LPCSTR File,
+    __in ULONG Line
+    )
+{
+    KDbgPrintfInformational("KInvariant(%s) failure at file %s line %d\n",
+              Condition,
+              File,
+              Line);
+    
+    //
+    // Default behavior is to assert or crash system
+    //
+    return(TRUE);
+}
+
+
 BOOL APIENTRY DllMain(
     HMODULE module,
     DWORD reason,
@@ -16,9 +34,17 @@ BOOL APIENTRY DllMain(
     switch (reason)
     {
     case DLL_PROCESS_ATTACH:
+    {
+        EventRegisterMicrosoft_Windows_KTL();
+        SetKInvariantCallout(FabricRuntimeKInvariantCallout);
+        break;
+    }
+    case DLL_PROCESS_DETACH:
+    {
+        EventUnregisterMicrosoft_Windows_KTL();
+    }
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
-    case DLL_PROCESS_DETACH:
         break;
     }
     return TRUE;
@@ -349,15 +375,14 @@ Api::IClientFactoryPtr GetGlobalClientFactory()
     return Hosting2::ApplicationHostContainer::FabricGetNodeContext(nodeContext);
 }
 
-#if !defined(PLATFORM_UNIX)
 /* [entry] */ HRESULT FabricGetRuntimeDllVersion( 
     /* [out] */ __RPC__deref_out_opt IFabricStringResult **runtimeDllVersion)
 {
     Common::DllConfig::GetConfig();
 
     std::wstring result;
-    auto error = Common::Environment::GetCurrentModuleFileVersion2(result);
-
+    auto error = Common::FabricEnvironment::GetFabricVersion(result);
+    
     if(error.IsSuccess())
     {
         return Common::ComStringResult::ReturnStringResult(result, runtimeDllVersion);
@@ -367,7 +392,6 @@ Api::IClientFactoryPtr GetGlobalClientFactory()
         return Common::ComUtility::OnPublicApiReturn(error.ToHResult());
     }
 }
-#endif
 
 /* [entry] */ HRESULT FabricLoadReplicatorSettings(
     /* [in] */ __RPC__in IFabricCodePackageActivationContext const * codePackageActivationContext,
@@ -606,6 +630,35 @@ void FabricDisableIpcLeasing(void)
     return Hosting2::ApplicationHostContainer::FabricCreateBackupRestoreAgent(riid, backupRestoreAgent);
 }
 
+/* [entry] */ HRESULT FabricBeginGetCodePackageActivator(
+    /* [in] */ __RPC__in REFIID riid,
+    /* [in] */ DWORD timeoutMilliseconds,
+    /* [in] */ __RPC__in_opt IFabricAsyncOperationCallback *callback,
+    /* [retval][out] */ __RPC__deref_out_opt IFabricAsyncOperationContext **context)
+{
+    Common::DllConfig::GetConfig();
+
+    return Hosting2::ApplicationHostContainer::FabricBeginGetCodePackageActivator(riid, timeoutMilliseconds, callback, context);
+}
+
+/* [entry] */ HRESULT FabricEndGetCodePackageActivator(
+    /* [in] */ __RPC__in_opt IFabricAsyncOperationContext *context,
+    /* [retval][out] */ __RPC__deref_out_opt void **activator)
+{
+    Common::DllConfig::GetConfig();
+
+    return Hosting2::ApplicationHostContainer::FabricEndGetCodePackageActivator(context, activator);
+}
+
+/* [entry] */ HRESULT FabricGetCodePackageActivator(
+    /* [in] */ __RPC__in REFIID riid,
+    /* [retval][out] */ __RPC__deref_out_opt void **activator)
+{
+    Common::DllConfig::GetConfig();
+
+    return Hosting2::ApplicationHostContainer::FabricGetCodePackageActivator(riid, activator);
+}
+
 struct ReliableCollectionApis;
 void GetReliableCollectionImplApiTable(ReliableCollectionApis* reliableCollectionApis);
 void GetReliableCollectionMockApiTable(ReliableCollectionApis* reliableCollectionApis);
@@ -616,10 +669,16 @@ extern "C" HRESULT FabricGetReliableCollectionApiTable(uint16_t apiVersion, Reli
     wstring env;
 
     if (apiVersion > 0x100)
+    {
+        Trace.WriteError("FabricRuntime", "[FabricGetReliableCollectionApiTable] Unsupported api version {0}", apiVersion);
         return E_NOTIMPL;
+    }
 
     if (reliableCollectionApis == nullptr)
+    {
+        Trace.WriteError("FabricRuntime", "[FabricGetReliableCollectionApiTable] required out param reliableCollectionApis is null");
         return E_INVALIDARG;
+    }
 
     if (Environment::GetEnvironmentVariable(L"SF_RELIABLECOLLECTION_MOCK", env, NOTHROW()))
         GetReliableCollectionMockApiTable(reliableCollectionApis);

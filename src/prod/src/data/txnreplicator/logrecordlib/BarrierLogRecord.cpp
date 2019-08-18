@@ -127,9 +127,10 @@ void BarrierLogRecord::ReadLogical(
 void BarrierLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite, 
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
 
     if (replicatedData_ == nullptr)
     {
@@ -182,6 +183,17 @@ void BarrierLogRecord::ReadPrivate(
 ULONG BarrierLogRecord::GetSizeOnWire() const
 {
     return __super::GetSizeOnWire() + SizeOnWireIncrement;
+}
+
+std::wstring BarrierLogRecord::ToString() const
+{
+    std::wstring logRecordString = Constants::CompEndlJSON;
+
+    logRecordString += L"Last Stable LSN" + Constants::DivisionJSON +
+        std::to_wstring(lastStableLsn_) + Constants::Quote;
+    logRecordString += Constants::CloseJSON;
+
+    return __super::ToString() + logRecordString;
 }
 
 bool BarrierLogRecord::Test_Equals(__in LogRecord const & other) const

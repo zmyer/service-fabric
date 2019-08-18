@@ -13,8 +13,8 @@ using namespace Data::Utilities;
 
 LoggingReplicatorImpl::LoggingReplicatorImpl(
     __in PartitionedReplicaId const & traceId,
-    __in TxnReplicator::IRuntimeFolders const & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IRuntimeFolders const & runtimeFolders,
+    __in IStatefulPartition & partition,
     __in IStateReplicator & stateReplicator,
     __in InvalidLogRecords & invalidLogRecords,
     __in IStateProviderManager & stateManager,
@@ -29,7 +29,8 @@ LoggingReplicatorImpl::LoggingReplicatorImpl(
     __in IDataLossHandler & dataLossHandler,
     __in TRPerformanceCountersSPtr const & perfCounters,
     __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const & healthClient,
-	__in ITransactionalReplicator & transactionalReplicator,
+    __in ITransactionalReplicator & transactionalReplicator,
+    __in bool hasPersistedState,
     __out IStateProvider::SPtr & stateProvider)
     : ILoggingReplicator()
     , KObject()
@@ -62,13 +63,18 @@ LoggingReplicatorImpl::LoggingReplicatorImpl(
     , primaryStatus_(PrimaryElectionStatus::None)
     , flushWaitLock_()
     , primaryStatusLock_()
+    , changeHandlerLock_()
     , primaryTransactionsAbortingTask_(nullptr)
     , primaryTransactionsAbortingCts_(nullptr)
+    , changeHandlerCache_(nullptr)
     , waitingStreams_(GetThisAllocator())
     , perfCounters_(perfCounters)
     , logRecoveryWatch_()
     , stateManagerRecoveryWatch_()
     , healthClient_(healthClient)
+    , iStateReplicator_(&stateReplicator)
+    , iTransactionalReplicator_(transactionalReplicator)
+    , hasPersistedState_(hasPersistedState)
 {
     EventSource::Events->Ctor(
         TracePartitionId,
@@ -80,8 +86,6 @@ LoggingReplicatorImpl::LoggingReplicatorImpl(
     THROW_ON_CONSTRUCTOR_FAILURE(waitingStreams_);
 
     KAllocator & allocator = GetThisAllocator();
-
-    TransactionMap::SPtr transactionMap = TransactionMap::Create(traceId, allocator);
 
     logTruncationManager_ = LogTruncationManager::Create(
         traceId,
@@ -100,75 +104,12 @@ LoggingReplicatorImpl::LoggingReplicatorImpl(
         invalidLogRecords,
         GetThisAllocator());
 
-    checkpointManager_ = CheckpointManager::Create(
-        traceId,
-        *logTruncationManager_,
-        *recoveredOrCopiedCheckpointState_,
-        *replicatedLogManager_,
-        *transactionMap,
-        *stateManager_,
-        *backupManager_,
-        transactionalReplicatorConfig,
-        *invalidLogRecords_,
-        perfCounters,
-        healthClient_,
-        allocator);
-        
-    operationProcessor_ = OperationProcessor::Create(
-        traceId,
-        *recoveredOrCopiedCheckpointState_,
-        *roleContextDrainState_,
-        *versionManager_,
-        *checkpointManager_,
-        *stateManager_,
-        *backupManager_,
-        *invalidLogRecords_,
-        transactionalReplicatorConfig,
-		transactionalReplicator,
-		allocator);
-
-    logRecordsDispatcher_ = LogRecordsDispatcher::Create(
-        traceId,
-        *operationProcessor_,
-        transactionalReplicatorConfig_,
-        allocator);
-
-    ReplicatedLogManager::AppendCheckpointCallback callback(checkpointManager_.RawPtr(), &CheckpointManager::CheckpointIfNecessary);
-    replicatedLogManager_->SetCheckpointCallback(callback);
-
-    transactionManager_ = TransactionManager::Create(
-        traceId,
-        *recoveredOrCopiedCheckpointState_,
-        *transactionMap,
-        *checkpointManager_,
-        *replicatedLogManager_,
-        *operationProcessor_,
-        *invalidLogRecords_,
-        transactionalReplicatorConfig_,
-        perfCounters,
-        allocator);
-
     recoveryManager_ = RecoveryManager::Create(
         traceId,
         *logManager_,
         *logFlushCallbackManager_,
         *invalidLogRecords_,
         GetThisAllocator());
-
-    secondaryDrainManager_ = SecondaryDrainManager::Create(
-        traceId,
-        *recoveredOrCopiedCheckpointState_,
-        *roleContextDrainState_,
-        *operationProcessor_,
-        stateReplicator,
-        *checkpointManager_,
-        *transactionManager_,
-        *replicatedLogManager_,
-        *stateManager_,
-        *recoveryManager_,
-        transactionalReplicatorConfig_,
-        *invalidLogRecords_,
-        allocator);
 
     stateProvider_ = StateProvider::Create(
         *this,
@@ -190,8 +131,8 @@ LoggingReplicatorImpl::~LoggingReplicatorImpl()
 
 LoggingReplicatorImpl::SPtr LoggingReplicatorImpl::Create(
     __in PartitionedReplicaId const & traceId,
-    __in TxnReplicator::IRuntimeFolders const & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IRuntimeFolders const & runtimeFolders,
+    __in IStatefulPartition & partition,
     __in IStateReplicator & stateReplicator,
     __in IStateProviderManager & stateManager,
     __in KString const & logDirectory,
@@ -201,7 +142,8 @@ LoggingReplicatorImpl::SPtr LoggingReplicatorImpl::Create(
     __in IDataLossHandler & dataLossHandler,
     __in TRPerformanceCountersSPtr const & perfCounters,
     __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const & healthClient,
-	__in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+    __in ITransactionalReplicator & transactionalReplicator,
+    __in bool hasPersistedState,
     __in KAllocator & allocator,
     __out IStateProvider::SPtr & stateProvider)
 {
@@ -216,7 +158,16 @@ LoggingReplicatorImpl::SPtr LoggingReplicatorImpl::Create(
 
     LogManager::SPtr logManager;
 
-    if (transactionalReplicatorConfig->Test_LoggingEngine.compare(Constants::Test_Ktl_LoggingEngine) == 0)
+    if (hasPersistedState == false)
+    {
+        logManager = up_cast<LogManager, MemoryLogManager>(MemoryLogManager::Create(
+            traceId,
+            perfCounters,
+            healthClient,
+            transactionalReplicatorConfig,
+            allocator));
+    }
+    else if (transactionalReplicatorConfig->Test_LoggingEngine.compare(Constants::Test_Ktl_LoggingEngine) == 0)
     {
         KLogManager::SPtr ktlLogManager = KLogManager::Create(
             traceId,
@@ -273,21 +224,19 @@ LoggingReplicatorImpl::SPtr LoggingReplicatorImpl::Create(
         dataLossHandler,
         perfCounters,
         healthClient,
-		transactionalReplicator,
+        transactionalReplicator,
+        hasPersistedState,
         stateProvider);
-
-    // This should be done after constructing the LoggingReplicatorImpl object as it tries to get a weak reference.
-    // Doing it in the constructor asserts as the ref count is still 0
-    result->logFlushCallbackManager_->FlushCallbackProcessor = *result;
-    result->checkpointManager_->CompletedRecordsProcessor = *result;
-
     THROW_ON_ALLOCATION_FAILURE(result);
-
-    result->backupManager_->Initialize(*result, *result->checkpointManager_, *result->operationProcessor_);
-    versionManager->Initialize(*result);
 
     return Ktl::Move(result);
 }
+
+bool LoggingReplicatorImpl::get_HasPersistedState() const
+{
+    return hasPersistedState_;
+}
+
 
 Awaitable<NTSTATUS> LoggingReplicatorImpl::OpenAsync(__out RecoveryInformation & recoveryInformation) noexcept
 {
@@ -309,6 +258,8 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::OpenAsync(
     // Start measuring log recovery
     logRecoveryWatch_.Start();
 
+    CreateAllManagers();
+
     NTSTATUS status = co_await logManager_->InitializeAsync(*logDirectory_);
     CO_RETURN_ON_FAILURE(status);
 
@@ -319,6 +270,7 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::OpenAsync(
         CO_RETURN_ON_FAILURE(status);
 
         Reuse();
+        CreateAllManagers();
 
         status = co_await logManager_->InitializeAsync(*logDirectory_);
         CO_RETURN_ON_FAILURE(status);
@@ -435,6 +387,9 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::CloseAsync() noexcept
 
     NTSTATUS status = STATUS_SUCCESS;
 
+    // Prevent further timer events from firing
+    checkpointManager_->CancelPeriodicCheckpointTimer();
+
     // Do not log any more after changing role to none as the log file could have been deleted
     if (roleContextDrainState_->ReplicaRole != FABRIC_REPLICA_ROLE_NONE &&
         !recoveryManager_->IsRemovingStateAfterOpen &&
@@ -500,18 +455,18 @@ NTSTATUS LoggingReplicatorImpl::GetLastCommittedSequenceNumber(__out LONG64 & ls
     return STATUS_SUCCESS;
 }
 
-NTSTATUS LoggingReplicatorImpl::RequestCheckpointAfterNextTransaction() noexcept
-{
-    logTruncationManager_->ForceCheckpoint();
-
-    return STATUS_SUCCESS;
-}
-
 Awaitable<NTSTATUS> LoggingReplicatorImpl::BackupAsync(
     __in IBackupCallbackHandler & backupCallbackHandler,
     __out BackupInfo & result) noexcept
 {
     KShared$ApiEntry();
+
+    if (hasPersistedState_ == false)
+    {
+        result = {};
+        // Currently, backup/restore is not supported for in-memory stack
+        co_return STATUS_NOT_SUPPORTED;
+    }
 
     NTSTATUS status = ErrorIfNoWriteStatus();
 
@@ -519,7 +474,8 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::BackupAsync(
 
     try
     {
-        result = co_await backupManager_->BackupAsync(backupCallbackHandler);
+        result = co_await backupManager_->BackupAsync(
+            backupCallbackHandler);
     }
     catch (Exception const e)
     {
@@ -534,9 +490,16 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::BackupAsync(
     __in FABRIC_BACKUP_OPTION backupOption,
     __in Common::TimeSpan const & timeout,
     __in CancellationToken const & cancellationToken,
-    __out TxnReplicator::BackupInfo & result) noexcept
+    __out BackupInfo & result) noexcept
 {
     KShared$ApiEntry();
+
+    if (hasPersistedState_ == false)
+    {
+        result = {};
+        // Currently, backup/restore is not supported for in-memory stack
+        co_return STATUS_NOT_SUPPORTED;
+    }
 
     NTSTATUS status = ErrorIfNoWriteStatus();
 
@@ -544,7 +507,11 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::BackupAsync(
 
     try
     {
-        result = co_await backupManager_->BackupAsync(backupCallbackHandler, backupOption, timeout, cancellationToken);
+        result = co_await backupManager_->BackupAsync(
+            backupCallbackHandler, 
+            backupOption, 
+            timeout, 
+            cancellationToken);
     }
     catch (Exception const e)
     {
@@ -558,6 +525,12 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::RestoreAsync(
     __in KString const & backupFolder) noexcept
 {
     KShared$ApiEntry();
+
+    if (hasPersistedState_ == false)
+    {
+        // Currently, restore is not supported for in-memory stack
+        co_return STATUS_NOT_SUPPORTED;
+    }
 
     NTSTATUS status = STATUS_SUCCESS;
     
@@ -580,6 +553,12 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::RestoreAsync(
     __in CancellationToken const & cancellationToken) noexcept
 {
     KShared$ApiEntry();
+
+    if (hasPersistedState_ == false)
+    {
+        // Currently, restore is not supported for in-memory stack
+        co_return STATUS_NOT_SUPPORTED;
+    }
 
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -1664,6 +1643,7 @@ Awaitable<NTSTATUS> LoggingReplicatorImpl::UpdateEpochAsync(
         copyContext,
         *copyStageBuffers_,
         transactionalReplicatorConfig_,
+        hasPersistedState_,
         GetThisAllocator());
     
     result = IOperationDataStream::SPtr(stream.RawPtr());
@@ -1862,18 +1842,237 @@ void LoggingReplicatorImpl::Reuse()
     primaryStatus_ = PrimaryElectionStatus::None;
     primaryTransactionsAbortingCts_.Put(nullptr);
     primaryTransactionsAbortingTask_.Put(nullptr);
+    versionManager_->Reuse();
     secondaryDrainManager_->Reuse();
 }
 
-NTSTATUS LoggingReplicatorImpl::RegisterTransactionChangeHandler(
-	__in ITransactionChangeHandler & transactionChangeHandler) noexcept
+void LoggingReplicatorImpl::CreateAllManagers()
 {
-	NTSTATUS status = operationProcessor_->RegisterTransactionChangeHandler(transactionChangeHandler);
-	return status;
+    EventSource::Events->CreateAllManagers(
+        TracePartitionId,
+        ReplicaId);
+
+    TransactionMap::SPtr transactionMap = TransactionMap::Create(
+        *PartitionedReplicaIdentifier,
+        GetThisAllocator());
+
+    checkpointManager_ = CheckpointManager::Create(
+        *PartitionedReplicaIdentifier,
+        *logTruncationManager_,
+        *recoveredOrCopiedCheckpointState_,
+        *replicatedLogManager_,
+        *transactionMap,
+        *stateManager_,
+        *backupManager_,
+        transactionalReplicatorConfig_,
+        *invalidLogRecords_,
+        perfCounters_,
+        healthClient_,
+        GetThisAllocator());
+
+    CreateOperationProcessor();
+
+    if (transactionalReplicatorConfig_->DispatchingMode.compare(Constants::SerialDispatchingMode) == 0)
+    {
+        logRecordsDispatcher_ = SerialLogRecordsDispatcher::Create(
+            *PartitionedReplicaIdentifier,
+            *operationProcessor_,
+            transactionalReplicatorConfig_,
+            GetThisAllocator());
+    }
+    else
+    {
+        logRecordsDispatcher_ = ParallelLogRecordsDispatcher::Create(
+            *PartitionedReplicaIdentifier,
+            *operationProcessor_,
+            transactionalReplicatorConfig_,
+            GetThisAllocator());
+    }
+
+    transactionManager_ = TransactionManager::Create(
+        *PartitionedReplicaIdentifier,
+        *recoveredOrCopiedCheckpointState_,
+        *transactionMap,
+        *checkpointManager_,
+        *replicatedLogManager_,
+        *operationProcessor_,
+        *invalidLogRecords_,
+        transactionalReplicatorConfig_,
+        perfCounters_,
+        GetThisAllocator());
+
+    secondaryDrainManager_ = SecondaryDrainManager::Create(
+        *PartitionedReplicaIdentifier,
+        *recoveredOrCopiedCheckpointState_,
+        *roleContextDrainState_,
+        *operationProcessor_,
+        *iStateReplicator_,
+        *backupManager_,
+        *checkpointManager_,
+        *transactionManager_,
+        *replicatedLogManager_,
+        *stateManager_,
+        *recoveryManager_,
+        transactionalReplicatorConfig_,
+        *invalidLogRecords_,
+        GetThisAllocator());
+
+    // Update the dependencies of several components.
+    ReplicatedLogManager::AppendCheckpointCallback callback(checkpointManager_.RawPtr(), &CheckpointManager::CheckpointIfNecessary);
+    replicatedLogManager_->SetCheckpointCallback(callback);
+
+    logFlushCallbackManager_->FlushCallbackProcessor = *this;
+    checkpointManager_->CompletedRecordsProcessor = *this;
+    backupManager_->Initialize(*this, *checkpointManager_, *operationProcessor_);
+    versionManager_->Initialize(*this);
 }
 
+void LoggingReplicatorImpl::CreateOperationProcessor()
+{
+    K_LOCK_BLOCK(changeHandlerLock_)
+    {
+        // Create the operationProcessor: it might be the first time to create operationProcessor or recreate, in the 
+        // recreate case, we need to save the handler and re-register to the operationProcessor.
+        // Possible case:
+        //      OperationProcessor == nullptr && Cache == nullptr: create OperationProcessor
+        //      OperationProcessor == nullptr && Cache != nullptr: create OperationProcessor, register the handler and reset cache to nullptr
+        //      OperationProcessor != nullptr && handlerRegistred && Cache == nullptr: save the handler, recreate the operationProcessor and re-register the handler
+        //      OperationProcessor != nullptr && !handlerRegistred && Cache == nullptr: create OperationProcessor
+        // Invariant:
+        //      OperationProcessor != nullptr && handlerRegistred && Cache != nullptr: If OperationProcessor not nullptr, cache must be clean
+        //      OperationProcessor != nullptr && !handlerRegistred && Cache != nullptr: If OperationProcessor not nullptr, cache must be clean
+        ITransactionChangeHandler::SPtr eventHandler = changeHandlerCache_;
+
+        ASSERT_IF(
+            operationProcessor_ != nullptr && eventHandler != nullptr,
+            "{0}: CreateAllManagers: If OperationProcessor not nullptr, cache must be clean",
+            TraceId);
+
+        if (operationProcessor_ != nullptr)
+        {
+            changeHandlerCache_ = operationProcessor_->ChangeHandler;
+        }
+
+        operationProcessor_ = OperationProcessor::Create(
+            *PartitionedReplicaIdentifier,
+            *recoveredOrCopiedCheckpointState_,
+            *roleContextDrainState_,
+            *versionManager_,
+            *checkpointManager_,
+            *stateManager_,
+            *backupManager_,
+            *invalidLogRecords_,
+            transactionalReplicatorConfig_,
+            iTransactionalReplicator_,
+            GetThisAllocator());
+
+        eventHandler = changeHandlerCache_;
+        if (eventHandler != nullptr)
+        {
+            NTSTATUS status = operationProcessor_->RegisterTransactionChangeHandler(*eventHandler);
+            ASSERT_IFNOT(
+                NT_SUCCESS(status),
+                "{0}: RegisterTransactionChangeHandler from cache failed with status {1}",
+                TraceId,
+                status);
+            changeHandlerCache_ = nullptr;
+        }
+    }
+
+    return;
+}
+
+// Function used to register the change handler to operation processor.
+// Possible case:
+//      OperationProcessor == nullptr && Cache == nullptr: save the handler to cache
+//      OperationProcessor == nullptr && Cache != nullptr: replace the handler in the cache
+//      OperationProcessor != nullptr && Cache == nullptr: register the handler to operation processor
+// Invariant:
+//      OperationProcessor != nullptr && Cache != nullptr: Creation of operation processor will set cache to nullptr
+NTSTATUS LoggingReplicatorImpl::RegisterTransactionChangeHandler(
+    __in ITransactionChangeHandler & transactionChangeHandler) noexcept
+{
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+
+    K_LOCK_BLOCK(changeHandlerLock_)
+    {
+        ITransactionChangeHandler::SPtr eventHandler = changeHandlerCache_;
+
+        ASSERT_IF(
+            operationProcessor_ != nullptr && eventHandler != nullptr,
+            "{0}: RegisterTransactionChangeHandler: Creation of operation processor will set cache to nullptr",
+            TraceId);
+
+        if (operationProcessor_ != nullptr)
+        {
+            status = operationProcessor_->RegisterTransactionChangeHandler(transactionChangeHandler);
+            return status;
+        }
+        
+        changeHandlerCache_ = &transactionChangeHandler;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+// Function used to un-register the change handler from operation processor.
+// Possible case:
+//      OperationProcessor == nullptr && Cache != nullptr: reset the cache to nullptr
+//      OperationProcessor == nullptr && Cache == nullptr: reset the cache to nullptr
+//      OperationProcessor != nullptr && Cache == nullptr: un-register the handler from operation processor
+// Invariant:
+//      OperationProcessor != nullptr && Cache != nullptr: only put handler to cache if OperationProcessor is nullptr
 NTSTATUS LoggingReplicatorImpl::UnRegisterTransactionChangeHandler() noexcept
 {
-	NTSTATUS status = operationProcessor_->UnRegisterTransactionChangeHandler();
-	return status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+
+    K_LOCK_BLOCK(changeHandlerLock_)
+    {
+        ITransactionChangeHandler::SPtr eventHandler = changeHandlerCache_;
+
+        ASSERT_IF(
+            operationProcessor_ != nullptr && eventHandler != nullptr,
+            "{0}: UnRegisterTransactionChangeHandler: Only put handler to cache if OperationProcessor is nullptr",
+            TraceId);
+
+        if (operationProcessor_ == nullptr)
+        {
+            changeHandlerCache_ = nullptr;
+            status = STATUS_SUCCESS;
+        }
+
+        status = operationProcessor_->UnRegisterTransactionChangeHandler();
+    }
+
+    return status;
+}
+
+NTSTATUS LoggingReplicatorImpl::Test_RequestCheckpointAfterNextTransaction() noexcept
+{
+    logTruncationManager_->ForceCheckpoint();
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS LoggingReplicatorImpl::Test_GetPeriodicCheckpointAndTruncationTimestampTicks(
+    __out LONG64 & lastPeriodicCheckpointTimeTicks,
+    __out LONG64 & lastPeriodicTruncationTimeTicks) noexcept
+{
+    if (checkpointManager_ == nullptr)
+    {
+        return SF_STATUS_OBJECT_CLOSED;
+    }
+
+    if (replicatedLogManager_->LastCompletedBeginCheckpointRecord->PeriodicCheckpointTimeTicks < checkpointManager_->LastPeriodicCheckpointTime.Ticks)
+    {
+        lastPeriodicCheckpointTimeTicks = replicatedLogManager_->LastCompletedBeginCheckpointRecord->PeriodicCheckpointTimeTicks;
+    }
+    else
+    {
+        lastPeriodicCheckpointTimeTicks = checkpointManager_->LastPeriodicCheckpointTime.Ticks;
+    }
+
+    lastPeriodicTruncationTimeTicks = checkpointManager_->LastPeriodicTruncationTime.Ticks;
+
+    return STATUS_SUCCESS;
 }

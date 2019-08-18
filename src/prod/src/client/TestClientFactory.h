@@ -15,7 +15,7 @@ namespace ClientTest
         , public Common::ComponentRoot
     {
         DENY_COPY(TestClientFactory)
-    public: 
+    public:
         TestClientFactory();
         virtual ~TestClientFactory() {};
 
@@ -44,6 +44,11 @@ namespace ClientTest
         Common::ErrorCode CreateInternalTokenValidationServiceClient(__out Api::IInternalTokenValidationServiceClientPtr &);
         Common::ErrorCode CreateRepairManagementClient(__out Api::IRepairManagementClientPtr &);
         Common::ErrorCode CreateComposeManagementClient(__out Api::IComposeManagementClientPtr &);
+        Common::ErrorCode CreateSecretStoreClient(__out Api::ISecretStoreClientPtr &);
+        Common::ErrorCode CreateResourceManagerClient(__out Api::IResourceManagerClientPtr &);
+        Common::ErrorCode CreateResourceManagementClient(__out Api::IResourceManagementClientPtr &);
+        Common::ErrorCode CreateNetworkManagementClient(__out Api::INetworkManagementClientPtr &);
+        Common::ErrorCode CreateGatewayResourceManagerClient(__out Api::IGatewayResourceManagerClientPtr &);
 
     private:
         TestClientFactory(__in Common::FabricNodeConfigSPtr config);

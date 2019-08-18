@@ -18,6 +18,7 @@
 #include "BalanceCheckerCreator.h"
 #include "ApplicationReservedLoads.h"
 #include "ServicePackageNode.h"
+#include "InBuildCountPerNode.h"
 
 using namespace std;
 using namespace Common;
@@ -198,6 +199,23 @@ void PlacementCreator::CreateApplicationReservedLoads()
     }
 }
 
+void PlacementCreator::PrepareNodes()
+{
+    auto nodeIBCounts = serviceDomain_.InBuildCountPerNode;
+    for (auto nodeCount : nodeIBCounts)
+    {
+        if (nodeCount.first >= balanceChecker_->Nodes.size())
+        {
+            serviceDomain_.plb_.Trace.InternalError(wformatString(
+                "PlacementCreator::PrepareNodes() Node with index {0} not found.",
+                nodeCount.first));
+            continue;
+        }
+        NodeEntry const* node = &(balanceChecker_->Nodes[nodeCount.first]);
+        inBuildCountPerNode_.SetCount(node, nodeCount.second);
+    }
+}
+
 void PlacementCreator::CreateServicePackageEntries()
 {
     servicePackageEntries_.reserve(partitionClosure_->ServicePackages.size());
@@ -208,8 +226,9 @@ void PlacementCreator::CreateServicePackageEntries()
 
         if (itServicePackage != plb_.servicePackageToIdMap_.end())
         {
-            TESTASSERT_IF(servicePackage->Description.RequiredResources.size() == 0,
-                "Service Package {0} should have some resources defined or it should not be in closure.",
+            TESTASSERT_IF(servicePackage->Description.RequiredResources.size() == 0 &&
+                servicePackage->Description.ContainersImages.size() == 0,
+                "Service Package {0} should have some resources defined or some container images or it should not be in closure.",
                 servicePackage->Description);
             LoadEntry resources(balanceChecker_->TotalMetricCount);
             for (auto requiredResource : servicePackage->Description.CorrectedRequiredResources)
@@ -222,10 +241,18 @@ void PlacementCreator::CreateServicePackageEntries()
                 }
                 else
                 {
-                    TESTASSERT_IF(itMetricNameToIndex == metricNameToGlobalIndex_.end(), "Metric {0} not found in the name to index mapping", requiredResource.first);
+                    TESTASSERT_IF(itMetricNameToIndex == metricNameToGlobalIndex_.end(),
+                        "Metric {0} not found in the name to index mapping", requiredResource.first);
                 }
             }
-            servicePackageEntries_.push_back(ServicePackageEntry(servicePackage->Description.Name, move(resources)));
+
+            // Get all container images for this SP
+            auto containerImages = servicePackage->Description.ContainersImages;
+
+            servicePackageEntries_.push_back(ServicePackageEntry(
+                servicePackage->Description.Name,
+                move(resources),
+                move(containerImages)));
             servicePackageDict_.insert(make_pair(itServicePackage->second, &(servicePackageEntries_.back())));
 
             //we setup the initial replica counts on the nodes
@@ -300,23 +327,27 @@ void PlacementCreator::CreateServiceEntries()
         //    "Number of FD nodes {0} and number of UD nodes {1} for the service {2} should match",
         //    fdNodeCount, udNodeCount, serviceDesc.Name);
 
-        // Calculating if switch from '+1' to quorum based logic should be done (cases when '+1' logic is too strict and new nodes can't be utilized)
+        // If auto-scaling is turned on, then service will always respect quorum based FD/UD distribution.
+        // Otherwise, calculating if switch from '+1' to quorum based logic should be done (cases when '+1' logic is too strict and new nodes can't be utilized)
         // Calculation is determined by formula: 
         //     target replica set size is divisible by both number of FDs/UDs and number of FD/UD nodes is less than a product of number of FDs/UDs
         bool autoSwitchToQuorumBasedLogic = 
-            plb_.Settings.QuorumBasedLogicAutoSwitch &&
-            fdDomainCount != 0 && udDomainCount != 0 &&
-            fdNodeCount != 0 && udNodeCount != 0 &&
-            serviceDesc.TargetReplicaSetSize != 0 &&
-            serviceDesc.TargetReplicaSetSize % fdDomainCount == 0 &&
-            serviceDesc.TargetReplicaSetSize % udDomainCount == 0 &&
-            fdNodeCount <= fdDomainCount * udDomainCount &&
-            udNodeCount <= fdDomainCount * udDomainCount;
+            serviceDesc.IsAutoScalingDefined ||
+                (plb_.Settings.QuorumBasedLogicAutoSwitch &&
+                fdDomainCount != 0 && udDomainCount != 0 &&
+                fdNodeCount != 0 && udNodeCount != 0 &&
+                serviceDesc.TargetReplicaSetSize != 0 &&
+                serviceDesc.TargetReplicaSetSize % fdDomainCount == 0 &&
+                serviceDesc.TargetReplicaSetSize % udDomainCount == 0 &&
+                fdNodeCount <= fdDomainCount * udDomainCount &&
+                udNodeCount <= fdDomainCount * udDomainCount);
 
         if (autoSwitchToQuorumBasedLogic ||
-            plb_.Settings.QuorumBasedReplicaDistributionPerFaultDomains || plb_.Settings.QuorumBasedReplicaDistributionPerUpgradeDomains)
+            plb_.Settings.QuorumBasedReplicaDistributionPerFaultDomains ||
+            plb_.Settings.QuorumBasedReplicaDistributionPerUpgradeDomains)
         {
             quorumBasedServicesCount_++;
+            quorumBasedServicesTempCache_.insert(serviceDesc.ServiceId);
         }
 
         ApplicationEntry const* applicationEntry = nullptr;
@@ -466,6 +497,7 @@ void PlacementCreator::CreatePartitionEntries()
 
         vector<PlacementReplica *> replicas;
         replicas.reserve(fuDesc.Replicas.size());
+        size_t upReplicaCount = 0;
         vector<PlacementReplica *> partitionStandBy;
         vector<NodeEntry const*> standByLocations;
         NodeEntry const* primarySwapOutLocation = nullptr;
@@ -475,6 +507,9 @@ void PlacementCreator::CreatePartitionEntries()
 
         bool isPartitionInUpgrade = false;
         bool isSwapPrimary = false;
+        // Children in affinity relationship cannot be throttled.
+        // Only stateful services can be throttled.
+        bool canBeThrottled = service.ServiceDesc.AffinitizedService == L"" && service.ServiceDesc.IsStateful;
 
         for (ReplicaDescription const& replica : fuDesc.Replicas)
         {
@@ -487,6 +522,11 @@ void PlacementCreator::CreatePartitionEntries()
                 {
                     bool isReplicaInUpgrade = false;
                     bool isReplicaToBeDropped = replica.IsToBeDropped;
+
+                    if (replica.IsUp)
+                    {
+                        ++upReplicaCount;
+                    }
 
                     // The current replica node may already be de-activated, the nodeResult would be 1
                     if (replica.IsPrimaryToBeSwappedOut && replica.CurrentRole == ReplicaRole::Enum::Primary)
@@ -537,7 +577,8 @@ void PlacementCreator::CreatePartitionEntries()
                             replica.IsMoveInProgress,
                             isReplicaToBeDropped,
                             isReplicaInUpgrade,
-                            false));
+                            false,
+                            canBeThrottled));
                         partitionStandBy.push_back(standByReplicas_.back().get());
                     }
                     else
@@ -584,7 +625,8 @@ void PlacementCreator::CreatePartitionEntries()
                             replica.IsMoveInProgress,
                             isReplicaToBeDropped,
                             isReplicaInUpgrade,
-                            isSingletonReplicaMovableDuringUpgrade));
+                            isSingletonReplicaMovableDuringUpgrade,
+                            canBeThrottled));
 
                         if (currentRole == ReplicaRole::Primary)
                         {
@@ -664,7 +706,23 @@ void PlacementCreator::CreatePartitionEntries()
         }
 
         int replicaDiff = failoverUnit.ActualReplicaDifference;
-        if (INT_MAX == replicaDiff)
+        
+        bool isScaledToEveryNode = false;
+        int minInstanceCount = 0;
+
+        if (service.ServiceDesc.IsAutoScalingDefined 
+            && service.ServiceDesc.AutoScalingPolicy.IsPartitionScaled()
+            && service.ServiceDesc.AutoScalingPolicy.Mechanism->Kind == ScalingMechanismKind::PartitionInstanceCount)
+        {
+            InstanceCountScalingMechanismSPtr mechanism = static_pointer_cast<InstanceCountScalingMechanism>(service.ServiceDesc.AutoScalingPolicy.Mechanism);
+            if (mechanism->MaximumInstanceCount == -1)
+            {
+                isScaledToEveryNode = true;
+            }
+            minInstanceCount = mechanism->MinimumInstanceCount;
+        }
+
+        if (INT_MAX == replicaDiff || isScaledToEveryNode && replicaDiff == 0)
         {
             int numReplicasOnBlocklistedNodes = 0;
             NodeSet nodes(static_cast<int>(plb_.nodes_.size()));
@@ -679,42 +737,52 @@ void PlacementCreator::CreatePartitionEntries()
                 nodes.Add(*downIt);
             }
 
-            serviceEntry->BlockList.ForEach([&](size_t nodeIndex) -> void
+            // replicaDiff should be recalculated for FTs with target -1, and for FT's that have maxInstanceCount -1 and target is above nonBlocklisted node count
+            // If target is below nonBlocklisted node count, replicas on blocklisted nodes should be moved in Constraint check phase.
+            if (INT_MAX == replicaDiff || failoverUnit.FuDescription.TargetReplicaSetSize > static_cast<int>(plb_.nodes_.size()) - nodes.GetTotalOneCount())
             {
-                nodes.Add(static_cast<int>(nodeIndex));
-            });
-
-            for (auto rIt = replicas.begin(); rIt != replicas.end(); ++rIt)
-            {
-                if (serviceEntry->IsNodeInBlockList((*rIt)->Node))
+                serviceEntry->BlockList.ForEach([&](size_t nodeIndex) -> void
                 {
-                    numReplicasOnBlocklistedNodes++;
+                    nodes.Add(static_cast<int>(nodeIndex));
+                });
+
+                for (auto rIt = replicas.begin(); rIt != replicas.end(); ++rIt)
+                {
+                    if (serviceEntry->IsNodeInBlockList((*rIt)->Node))
+                    {
+                        numReplicasOnBlocklistedNodes++;
+                    }
+
+                    nodes.Add((*rIt)->Node);
                 }
 
-                nodes.Add((*rIt)->Node);
-            }
+                replicaDiff = static_cast<int>(plb_.nodes_.size()) - nodes.GetTotalOneCount();
 
-            replicaDiff = static_cast<int>(plb_.nodes_.size()) - nodes.GetTotalOneCount();
+                // Do not place more replicas if we are already over scaleout count
+                if (serviceEntry->Application != nullptr
+                    && serviceEntry->Application->ScaleoutCount > 0
+                    && serviceEntry->Application->ScaleoutCount <= replicas.size())
+                {
+                    replicaDiff = 0;
+                }
 
-            // Do not place more replicas if we are already over scaleout count
-            if (serviceEntry->Application != nullptr
-                && serviceEntry->Application->ScaleoutCount > 0
-                && serviceEntry->Application->ScaleoutCount <= replicas.size())
-            {
-                replicaDiff = 0;
-            }
+                if (replicaDiff < 0)
+                {
+                    TESTASSERT_IF(replicaDiff < 0, "The calculated replicaDiff {0} shouldn't be less than 0", replicaDiff);
+                    serviceDomain_.plb_.Trace.PlacementReplicaDiffError(fuDesc.FUId, replicaDiff);
+                    replicaDiff = 0;
+                }
 
-            if (replicaDiff < 0)
-            {
-                TESTASSERT_IF(replicaDiff < 0, "The calculated replicaDiff {0} shouldn't be less than 0", replicaDiff);
-                serviceDomain_.plb_.Trace.PlacementReplicaDiffError(fuDesc.FUId, replicaDiff);
-                replicaDiff = 0;
-            }
+                if (0 == replicaDiff)
+                {
+                    // Drop replicas that are on blocklisted nodes
+                    replicaDiff = -numReplicasOnBlocklistedNodes;
 
-            if (0 == replicaDiff)
-            {
-                // Drop replicas that are on blocklisted nodes
-                replicaDiff = -numReplicasOnBlocklistedNodes;
+                    if (isScaledToEveryNode)
+                    {
+                        replicaDiff = max(replicaDiff, minInstanceCount - (int)replicas.size());
+                    }
+                }
             }
         }
 
@@ -743,7 +811,18 @@ void PlacementCreator::CreatePartitionEntries()
 
                 if (!havingPrimary)
                 {
-                    allReplicas_.push_back(make_unique<PlacementReplica>(replicaIndex++, ReplicaRole::Primary));
+                    // Primary build cannot be throttled if there are no replicas in the configuration.
+                    bool canPrimaryBeThrottled = canBeThrottled &&
+                        any_of(failoverUnit.FuDescription.Replicas.begin(),
+                            failoverUnit.FuDescription.Replicas.end(),
+                            [](ReplicaDescription const& r) {
+                                if (r.CurrentRole == ReplicaRole::Primary || r.CurrentRole == ReplicaRole::Secondary)
+                                {
+                                    return true;
+                                }
+                                return false;
+                            });
+                    allReplicas_.push_back(make_unique<PlacementReplica>(replicaIndex++, ReplicaRole::Primary, canPrimaryBeThrottled));
                     replicas.push_back(allReplicas_.back().get());
                     replicaDiff--;
                 }
@@ -751,7 +830,7 @@ void PlacementCreator::CreatePartitionEntries()
 
             while (replicaDiff > 0)
             {
-                allReplicas_.push_back(make_unique<PlacementReplica>(replicaIndex++, ReplicaRole::Secondary));
+                allReplicas_.push_back(make_unique<PlacementReplica>(replicaIndex++, ReplicaRole::Secondary, service.ServiceDesc.IsStateful));
                 replicas.push_back(allReplicas_.back().get());
                 replicaDiff--;
             }
@@ -772,7 +851,8 @@ void PlacementCreator::CreatePartitionEntries()
         ServiceEntry const* dependedServiceEntry = serviceEntry->DependedService;
         while (dependedServiceEntry != nullptr)
         {
-            ++order;
+            // This is a child service, needs to be sorted after parent
+            order += 2;
             // Set parent flag for upgrade as well, hence proper initialization is done,
             // in scenarios when only child partition is in upgrade
             if ((isSingletonReplicaUpgrade ||
@@ -782,6 +862,16 @@ void PlacementCreator::CreatePartitionEntries()
                 const_cast<ServiceEntry*>(dependedServiceEntry)->HasAffinityAssociatedSingletonReplicaInUpgrade = true;
             }
             dependedServiceEntry = dependedServiceEntry->DependedService;
+        }
+
+        if (upReplicaCount >= failoverUnit.FuDescription.TargetReplicaSetSize)
+        {
+            // If up replica count is not at target, "prioritize" this replica.
+            // Final order number will be:
+            //  0 - parent not on target, 1 - parent on target, 2 - child not on target, 3 - child on target
+            // "Prioritization" is done in searcher, by placing lower order first.
+            // Optimization for later: do better ordering (i.e. parents with children on target to the back).
+            ++order;
         }
 
         vector<int64> primaryEntry(failoverUnit.PrimaryEntries.begin(), failoverUnit.PrimaryEntries.end());
@@ -826,7 +916,8 @@ void PlacementCreator::CreatePartitionEntries()
             extraReplicaCount,
             failoverUnit.SecondaryEntriesMap,
             move(partitionStandBy),
-            balanceChecker_->Settings));
+            balanceChecker_->Settings,
+            failoverUnit.TargetReplicaSetSize));
     }
 }
 
@@ -972,6 +1063,7 @@ PlacementUPtr PlacementCreator::Create(int randomSeed)
     CreateServiceEntries();
     CreatePartitionEntries();
     CreateApplicationReservedLoads();
+    PrepareNodes();
 
     return make_unique<Placement>(
         move(balanceChecker_),
@@ -982,6 +1074,7 @@ PlacementUPtr PlacementCreator::Create(int randomSeed)
         move(allReplicas_),
         move(standByReplicas_),
         move(reservationLoads_),
+        move(inBuildCountPerNode_),
         partitionsInUpgradeCount_,
         plb_.isSingletonReplicaMoveAllowedDuringUpgradeEntry_.GetValue(),
         randomSeed,
@@ -990,5 +1083,6 @@ PlacementUPtr PlacementCreator::Create(int randomSeed)
         partitionClosure_->PartialClosureFailoverUnits,
         move(servicePackagePlacement_),
         quorumBasedServicesCount_,
-        quorumBasedPartitionsCount_);
+        quorumBasedPartitionsCount_,
+        move(quorumBasedServicesTempCache_));
 }

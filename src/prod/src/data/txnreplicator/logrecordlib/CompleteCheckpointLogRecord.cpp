@@ -72,6 +72,13 @@ CompleteCheckPointLogRecord::SPtr CompleteCheckPointLogRecord::Create(
     return CompleteCheckPointLogRecord::SPtr(pointer);
 }
 
+std::wstring CompleteCheckPointLogRecord::ToString() const
+{
+    std::wstring logRecordString = Constants::CloseJSON;
+
+    return __super::ToString() + logRecordString;
+}
+
 void CompleteCheckPointLogRecord::UpdateApproximateDiskSize()
 {
     ApproximateSizeOnDisk = ApproximateSizeOnDisk + DiskSpaceUsed;
@@ -102,9 +109,10 @@ void CompleteCheckPointLogRecord::Read(
 void CompleteCheckPointLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite,
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
     ULONG32 startingPosition = binaryWriter.Position;
 
     // Metadata size

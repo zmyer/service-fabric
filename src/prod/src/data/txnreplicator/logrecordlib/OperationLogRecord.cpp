@@ -133,6 +133,19 @@ OperationLogRecord::SPtr OperationLogRecord::Create(
     return OperationLogRecord::SPtr(pointer);
 }
 
+std::wstring OperationLogRecord::ToString() const
+{
+    wstring boolean = isRedoOnly_ ? L"true" : L"false"; 
+
+    std::wstring logRecordString = Constants::CompEndlJSON;
+
+    logRecordString += L"Redo Only" + Constants::DivisionBoolJSON + boolean;
+    logRecordString += Constants::CloseJSON;;
+
+    return __super::ToString() + logRecordString;
+}
+
+
 void OperationLogRecord::UpdateApproximateDiskSize()
 {
     ApproximateSizeOnDisk = ApproximateSizeOnDisk + DiskSpaceUsed;
@@ -182,7 +195,10 @@ void OperationLogRecord::Read(
 
     if (isRedoOnly_)
     {
-        transactionBase_ = AtomicRedoOperation::CreateTransaction(transactionBase_->TransactionId, false, GetThisAllocator());
+        transactionBase_ = AtomicRedoOperation::CreateAtomicRedoOperation(
+            transactionBase_->TransactionId,
+            false,
+            GetThisAllocator()).RawPtr();
     }
 
     metaData_ = OperationData::DeSerialize(binaryReader, GetThisAllocator());
@@ -223,8 +239,10 @@ void OperationLogRecord::ReadLogical(
 
     if (isRedoOnly_)
     {
-
-        transactionBase_ = AtomicRedoOperation::CreateTransaction(transactionBase_->TransactionId, false, GetThisAllocator());
+        transactionBase_ = AtomicRedoOperation::CreateAtomicRedoOperation(
+            transactionBase_->TransactionId,
+            false,
+            GetThisAllocator()).RawPtr();
     }
 
     metaData_ = OperationData::DeSerialize(operationData, index, GetThisAllocator());
@@ -241,9 +259,10 @@ void OperationLogRecord::ReadLogical(
 void OperationLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite,
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
 
     if (replicatedData_ == nullptr)
     {

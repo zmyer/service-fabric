@@ -248,7 +248,8 @@ Common::ErrorCode ApplicationEntity::EvaluateHealth(
     vector<wstring> const & upgradeDomains,
     HealthStatisticsUPtr const & healthStats,
     __out FABRIC_HEALTH_STATE & aggregatedHealthState,
-    __inout ServiceModel::HealthEvaluationList & unhealthyEvaluations)
+    __inout ServiceModel::HealthEvaluationList & unhealthyEvaluations,
+    bool isDeployedChildrenPrecedent)
 {
     aggregatedHealthState = FABRIC_HEALTH_STATE_UNKNOWN;
 
@@ -264,11 +265,20 @@ Common::ErrorCode ApplicationEntity::EvaluateHealth(
 
     auto servicesFilter = make_unique<ServiceHealthStatesFilter>(FABRIC_HEALTH_STATE_FILTER_NONE);
     std::vector<ServiceAggregatedHealthState> serviceHealthStates;
-    EvaluateServices(activityId, *healthPolicy, servicesFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, serviceHealthStates);
 
     std::vector<DeployedApplicationAggregatedHealthState> deployedApplicationHealthStates;
     auto deployedApplicationsFilter = make_unique<DeployedApplicationHealthStatesFilter>(FABRIC_HEALTH_STATE_FILTER_NONE);
-    EvaluateDeployedApplications(activityId, *healthPolicy, upgradeDomains, deployedApplicationsFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, deployedApplicationHealthStates);
+
+    if (isDeployedChildrenPrecedent)
+    {
+        EvaluateDeployedApplications(activityId, *healthPolicy, upgradeDomains, deployedApplicationsFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, deployedApplicationHealthStates);
+        EvaluateServices(activityId, *healthPolicy, servicesFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, serviceHealthStates);
+    }
+    else
+    {
+        EvaluateServices(activityId, *healthPolicy, servicesFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, serviceHealthStates);
+        EvaluateDeployedApplications(activityId, *healthPolicy, upgradeDomains, deployedApplicationsFilter, healthStats, aggregatedHealthState, unhealthyEvaluations, deployedApplicationHealthStates);
+    }
     return ErrorCode::Success();
 }
 
@@ -300,6 +310,7 @@ Common::ErrorCode ApplicationEntity::GetServicesAggregatedHealthStates(
     // - ConsiderWarningAsError
     // - ServiceType specific health policy
     ListPager<ServiceAggregatedHealthState> pager;
+    pager.SetMaxResults(context.MaxResults);
     for (auto it = services.begin(); it != services.end(); ++it)
     {
         auto & service = it->second;
@@ -310,15 +321,17 @@ Common::ErrorCode ApplicationEntity::GetServicesAggregatedHealthStates(
         if (error.IsSuccess())
         {
             error = pager.TryAdd(ServiceAggregatedHealthState(move(it->first), serviceHealthState));
-            if (error.IsError(ErrorCodeValue::EntryTooLarge))
+
+            bool benignError;
+            bool hasError;
+            CheckListPagerErrorAndTrace(error, this->EntityIdString, context.ActivityId, service->EntityIdString, hasError, benignError);
+            if (hasError && benignError)
             {
-                HMEvents::Trace->Query_MaxMessageSizeReached(
-                    this->EntityIdString,
-                    context.ActivityId,
-                    service->EntityIdString,
-                    error,
-                    error.Message);
                 break;
+            }
+            else if (hasError && !benignError)
+            {
+                return error;
             }
         }
         else

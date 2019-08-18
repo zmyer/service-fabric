@@ -10,15 +10,16 @@ using namespace Common;
 using namespace ServiceModel;
 using namespace Transport;
 using namespace Hosting2;
+using namespace Reliability;
 
 StringLiteral const TraceType_ActivatorClient("FabricActivatorClient");
 
 class FabricActivatorClient::OpenAsyncOperation : public AsyncOperation
 {
 public:
-    OpenAsyncOperation( FabricActivatorClient & owner,
+    OpenAsyncOperation(FabricActivatorClient & owner,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -51,7 +52,7 @@ protected:
 private:
     void OpenIPC(AsyncOperationSPtr const & thisSPtr)
     {
-        if(owner_.ipcClient_)
+        if (owner_.ipcClient_)
         {
             SecuritySettings ipcClientSecuritySettings;
             auto error = SecuritySettings::CreateNegotiateClient(SecurityConfig::GetConfig().FabricHostSpn, ipcClientSecuritySettings);
@@ -79,7 +80,7 @@ private:
                 owner_.Root.TraceId,
                 "IPC Client Open: ErrorCode={0}",
                 error);
-            if(!error.IsSuccess())
+            if (!error.IsSuccess())
             {
                 TryComplete(thisSPtr, error);
                 return;
@@ -106,14 +107,14 @@ private:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeout,
-            [this](AsyncOperationSPtr const & operation){ OnRegistrationCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnRegistrationCompleted(operation, false); },
             thisSPtr);
         OnRegistrationCompleted(operation, true);
     }
 
     void OnRegistrationCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -122,9 +123,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(RegisterFabricActivatorClient): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(RegisterFabricActivatorClient): ErrorCode={0}",
                 error);
             TryComplete(operation->Parent, error);
             return;
@@ -144,13 +145,13 @@ private:
             TryComplete(operation->Parent, error);
             return;
         }
-        if(replyBody.Error.IsError(ErrorCodeValue::AlreadyExists) &&
+        if (replyBody.Error.IsError(ErrorCodeValue::AlreadyExists) &&
             !timeoutHelper_.IsExpired)
         {
             WriteInfo(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "Retrying register fabricActivatorClient: timeout {0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "Retrying register fabricActivatorClient: timeout {0}",
                 timeoutHelper_.GetRemainingTime());
             RegisterClientWithActivator(operation->Parent);
         }
@@ -159,10 +160,10 @@ private:
             error = error = replyBody.Error;
             WriteTrace(
                 error.ToLogLevel(),
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "Register fabricActivatorClient completed with error {0}: timeout {1}", 
-                replyBody.Error, 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "Register fabricActivatorClient completed with error {0}: timeout {1}",
+                replyBody.Error,
                 timeoutHelper_.GetRemainingTime());
             TryComplete(operation->Parent, replyBody.Error);
         }
@@ -171,7 +172,7 @@ private:
 
     MessageUPtr CreateRegisterClientRequest()
     {
-        RegisterFabricActivatorClientRequest registerRequest(owner_.processId_, owner_.nodeId_);
+        RegisterFabricActivatorClientRequest registerRequest(owner_.processId_, owner_.nodeId_, owner_.nodeInstanceId_);
 
         MessageUPtr request = make_unique<Message>(registerRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -193,7 +194,7 @@ public:
     CloseAsyncOperation(
         __in FabricActivatorClient & owner,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -211,7 +212,7 @@ public:
 protected:
     void OnStart(AsyncOperationSPtr const & thisSPtr)
     {
-        if(owner_.ipcClient_)
+        if (owner_.ipcClient_)
         {
             UnregisterFabricActivatorClient(thisSPtr);
         }
@@ -233,14 +234,14 @@ private:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnUnregisterCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnUnregisterCompleted(operation, false); },
             thisSPtr);
         OnUnregisterCompleted(operation, true);
     }
 
     void OnUnregisterCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -249,9 +250,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(RegisterFabricActivatorClient): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(RegisterFabricActivatorClient): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -276,7 +277,7 @@ private:
         owner_.UnregisterIpcMessageHandler();
 
         error = owner_.ipcClient_->Close();
-        if(!error.IsSuccess())
+        if (!error.IsSuccess())
         {
             WriteWarning(
                 TraceType_ActivatorClient,
@@ -297,7 +298,7 @@ private:
 class FabricActivatorClient::ActivateProcessAsyncOperation : public AsyncOperation
 {
 public:
-    ActivateProcessAsyncOperation( 
+    ActivateProcessAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & applicationId,
         wstring const & appServiceId,
@@ -306,7 +307,7 @@ public:
         bool isContainerHost,
         ContainerDescriptionUPtr && containerDescription,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -325,7 +326,7 @@ public:
     {
         auto thisPtr = AsyncOperation::End<ActivateProcessAsyncOperation>(operation);
 
-        if(thisPtr->Error.IsSuccess())
+        if (thisPtr->Error.IsSuccess())
         {
             processId = thisPtr->processId_;
         }
@@ -346,7 +347,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnActivateProcessCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnActivateProcessCompleted(operation, false); },
             thisSPtr);
         OnActivateProcessCompleted(operation, true);
     }
@@ -355,7 +356,7 @@ private:
 
     void OnActivateProcessCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -365,9 +366,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ActivateApplicationProcess): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ActivateApplicationProcess): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -385,11 +386,11 @@ private:
                 "GetBody<ActivateProcessReply> failed: Message={0}, ErrorCode={1}",
                 *reply,
                 error);
-          
+
             TryComplete(operation->Parent, error);
             return;
         }
-        if(replyBody.Error.IsSuccess())
+        if (replyBody.Error.IsSuccess())
         {
             this->processId_ = replyBody.ProcessId;
             TryComplete(operation->Parent, replyBody.Error);
@@ -453,10 +454,17 @@ public:
     ConfigureContainerGroupAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & servicePackageId,
-        wstring const & assignedIp,
-        wstring const & appfolder,
-        wstring const & appId,
+        wstring const & partitionId,
+        wstring const & servicePackageActivationId,
+        ServiceModel::NetworkType::Enum networkType,
+        wstring const & openNetworkAssignedIp,
+        std::map<std::wstring, std::wstring> const & overlayNetworkResources,
+        std::vector<std::wstring> const & dnsServers,
+        AppInfo appInfo,
         ServiceModel::ServicePackageResourceGovernanceDescription const & spRg,
+#if defined(PLATFORM_UNIX)
+        ContainerPodDescription const & podDesc,
+#endif
         bool cleanup,
         TimeSpan const timeout,
         AsyncCallback const & callback,
@@ -464,13 +472,22 @@ public:
         : AsyncOperation(callback, parent),
         owner_(owner),
         servicePackageId_(servicePackageId),
-        assignedIp_(assignedIp),
-        appId_(appId),
-        appfolder_(appfolder),
+        partitionId_(partitionId),
+        servicePackageActivationId_(servicePackageActivationId),
+        networkType_(networkType),
+        openNetworkAssignedIp_(openNetworkAssignedIp),
+        overlayNetworkResources_(overlayNetworkResources),
+        dnsServers_(dnsServers),
+        appName_(appInfo.appName_),
+        appId_(appInfo.appId_),
+        appfolder_(appInfo.appFolder_),
         cleanup_(cleanup),
         timeoutHelper_(timeout),
         containerName_(),
         spRg_(spRg)
+#if defined(PLATFORM_UNIX)
+        , podDescription_(podDesc)
+#endif
     {
     }
 
@@ -487,7 +504,6 @@ public:
 protected:
     void OnStart(AsyncOperationSPtr const & thisSPtr)
     {
-
         if (cleanup_)
         {
             auto operation = owner_.BeginDeactivateProcess(
@@ -502,7 +518,6 @@ protected:
         }
         else
         {
-
             WriteNoise(
                 TraceType_ActivatorClient,
                 owner_.Root.TraceId,
@@ -513,7 +528,7 @@ protected:
             auto operation = owner_.Client.BeginRequest(
                 move(request),
                 timeoutHelper_.GetRemainingTime(),
-                [this](AsyncOperationSPtr const & operation){ OnConfigureGroupCompleted(operation, false); },
+                [this](AsyncOperationSPtr const & operation) { OnConfigureGroupCompleted(operation, false); },
                 thisSPtr);
             OnConfigureGroupCompleted(operation, true);
         }
@@ -585,14 +600,45 @@ private:
                 err = ErrorCode(err.ReadValue(),
                     move(msg));
             }
-           
+
             TryComplete(operation->Parent, err);
         }
     }
 
     MessageUPtr CreateConfigureContainerGroupRequest()
     {
-        SetupContainerGroupRequest setupRequest(servicePackageId_, appId_, appfolder_, owner_.nodeId_, assignedIp_, timeoutHelper_.GetRemainingTime().Ticks, spRg_);
+#if !defined(PLATFORM_UNIX)
+        SetupContainerGroupRequest setupRequest(
+            servicePackageId_,
+            appId_,
+            appName_,
+            appfolder_,
+            owner_.nodeId_,
+            partitionId_,
+            servicePackageActivationId_,
+            networkType_,
+            openNetworkAssignedIp_,
+            overlayNetworkResources_,
+            dnsServers_,
+            timeoutHelper_.GetRemainingTime().Ticks,
+            spRg_);
+#else
+        SetupContainerGroupRequest setupRequest(
+            servicePackageId_,
+            appId_,
+            appName_,
+            appfolder_,
+            owner_.nodeId_,
+            partitionId_,
+            servicePackageActivationId_,
+            networkType_,
+            openNetworkAssignedIp_,
+            overlayNetworkResources_,
+            dnsServers_,
+            timeoutHelper_.GetRemainingTime().Ticks,
+            podDescription_,
+            spRg_);
+#endif
 
         MessageUPtr request = make_unique<Message>(setupRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -603,15 +649,23 @@ private:
         return move(request);
     }
 
-
 private:
     TimeoutHelper timeoutHelper_;
     FabricActivatorClient & owner_;
     wstring servicePackageId_;
     wstring appId_;
     wstring appfolder_;
-    wstring assignedIp_;
+    wstring appName_;
+    wstring partitionId_;
+    wstring servicePackageActivationId_;
+    ServiceModel::NetworkType::Enum networkType_;
+    wstring openNetworkAssignedIp_;
+    std::map<std::wstring, std::wstring> overlayNetworkResources_;
+    std::vector<std::wstring> dnsServers_;
     ServicePackageResourceGovernanceDescription const & spRg_;
+#if defined(PLATFORM_UNIX)
+    ContainerPodDescription podDescription_;
+#endif
     bool cleanup_;
     wstring containerName_;
 };
@@ -623,7 +677,7 @@ public:
         __in FabricActivatorClient & owner,
         wstring const & appServiceId,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -652,7 +706,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnDeactivateProcessCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnDeactivateProcessCompleted(operation, false); },
             thisSPtr);
         OnDeactivateProcessCompleted(operation, true);
     }
@@ -661,7 +715,7 @@ private:
 
     void OnDeactivateProcessCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -671,9 +725,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(DeactivateApplicationProcess): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(DeactivateProcess): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -727,7 +781,7 @@ public:
         __in FabricActivatorClient & owner,
         HostedServiceParameters const & params,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -756,7 +810,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnActivateHostedServiceCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnActivateHostedServiceCompleted(operation, false); },
             thisSPtr);
 
         OnActivateHostedServiceCompleted(operation, true);
@@ -764,21 +818,21 @@ protected:
 
     void OnActivateHostedServiceCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
 
         MessageUPtr message;
         ErrorCode error;
-        
-        error= owner_.Client.EndRequest(operation, message);
-        if (! error.IsSuccess())
+
+        error = owner_.Client.EndRequest(operation, message);
+        if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ActivateHostedService): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ActivateHostedService): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -833,7 +887,7 @@ public:
         __in FabricActivatorClient & owner,
         wstring const & serviceName,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -862,7 +916,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnDeactivateHostedServiceCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnDeactivateHostedServiceCompleted(operation, false); },
             thisSPtr);
 
         OnDeactivateHostedServiceCompleted(operation, true);
@@ -870,21 +924,21 @@ protected:
 
     void OnDeactivateHostedServiceCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
 
         MessageUPtr message;
         ErrorCode error;
-        
-        error= owner_.Client.EndRequest(operation, message);
-        if (! error.IsSuccess())
+
+        error = owner_.Client.EndRequest(operation, message);
+        if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(DeactivateHostedService): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(DeactivateHostedService): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -892,7 +946,7 @@ protected:
         }
 
         FabricHostOperationReply reply;
-        if (! message->GetBody(reply))
+        if (!message->GetBody(reply))
         {
             error = ErrorCodeValue::InvalidMessage;
             WriteWarning(
@@ -936,7 +990,7 @@ public:
     TerminateProcessAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & appServiceId,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -971,13 +1025,13 @@ private:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             requestTimeout_,
-            [this](AsyncOperationSPtr const & operation){ OnDeactivateProcessCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnDeactivateProcessCompleted(operation, false); },
             thisSPtr);
         OnDeactivateProcessCompleted(operation, true);
     }
     void OnDeactivateProcessCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -986,14 +1040,14 @@ private:
         auto error = owner_.Client.EndRequest(operation, reply);
         if (!error.IsSuccess())
         {
-            if(error.IsError(ErrorCodeValue::Timeout))
+            if (error.IsError(ErrorCodeValue::Timeout))
             {
-                if(timeoutHelper_.GetRemainingTime() >= requestTimeout_)
+                if (timeoutHelper_.GetRemainingTime() >= requestTimeout_)
                 {
                     WriteInfo(
-                        TraceType_ActivatorClient, 
-                        owner_.Root.TraceId, 
-                        "Fabric timed out while communicating with FabricHost, retrying with timeout {0}", 
+                        TraceType_ActivatorClient,
+                        owner_.Root.TraceId,
+                        "Fabric timed out while communicating with FabricHost, retrying with timeout {0}",
                         timeoutHelper_.GetRemainingTime());
                     SendTerminateRequest(operation->Parent);
                     return;
@@ -1001,9 +1055,9 @@ private:
                 else
                 {
                     WriteError(
-                        TraceType_ActivatorClient, 
-                        owner_.Root.TraceId, 
-                        "Fabric failed to communicate with FabricHost with : ErrorCode={0}", 
+                        TraceType_ActivatorClient,
+                        owner_.Root.TraceId,
+                        "Fabric failed to communicate with FabricHost with : ErrorCode={0}",
                         error);
                     ::ExitProcess((uint)ErrorCodeValue::Timeout);
                 }
@@ -1011,9 +1065,9 @@ private:
             else
             {
                 WriteWarning(
-                    TraceType_ActivatorClient, 
-                    owner_.Root.TraceId, 
-                    "End(TerminateApplicationProcess): ErrorCode={0}", 
+                    TraceType_ActivatorClient,
+                    owner_.Root.TraceId,
+                    "End(TerminateApplicationProcess): ErrorCode={0}",
                     error);
 
                 TryComplete(operation->Parent, error);
@@ -1049,7 +1103,7 @@ private:
 class FabricActivatorClient::ConfigureSecurityPrincipalsAsyncOperation : public AsyncOperation
 {
 public:
-    ConfigureSecurityPrincipalsAsyncOperation( 
+    ConfigureSecurityPrincipalsAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & applicationId,
         ULONG applicationPackageCounter,
@@ -1058,7 +1112,7 @@ public:
         bool const configureForNode,
         bool const updateExisting,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -1077,7 +1131,7 @@ public:
         __out PrincipalsProviderContextUPtr & principalsContext)
     {
         auto thisPtr = AsyncOperation::End<ConfigureSecurityPrincipalsAsyncOperation>(operation);
-        if(thisPtr->Error.IsSuccess())
+        if (thisPtr->Error.IsSuccess())
         {
             principalsContext = move(thisPtr->principalsContext_);
         }
@@ -1097,7 +1151,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnConfigureSecurityPrincipalsCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnConfigureSecurityPrincipalsCompleted(operation, false); },
             thisSPtr);
         OnConfigureSecurityPrincipalsCompleted(operation, true);
     }
@@ -1106,7 +1160,7 @@ private:
 
     void OnConfigureSecurityPrincipalsCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -1116,9 +1170,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ConfigureSecurityPrincipals): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ConfigureSecurityPrincipals): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -1139,9 +1193,9 @@ private:
             TryComplete(operation->Parent, error);
             return;
         }
-        if(replyBody.Error.IsSuccess())
+        if (replyBody.Error.IsSuccess())
         {
-            this->principalsContext_ = make_unique<PrincipalsProviderContext> ();
+            this->principalsContext_ = make_unique<PrincipalsProviderContext>();
             this->principalsContext_->AddSecurityPrincipals(replyBody.PrincipalInformation);
         }
         TryComplete(operation->Parent, replyBody.Error);
@@ -1183,12 +1237,12 @@ private:
 class FabricActivatorClient::CleanupSecurityPrincipalsAsyncOperation : public AsyncOperation
 {
 public:
-    CleanupSecurityPrincipalsAsyncOperation( 
+    CleanupSecurityPrincipalsAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & applicationId,
         bool const cleanupForNode,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -1218,7 +1272,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnCleanupSecurityPrincipalsCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnCleanupSecurityPrincipalsCompleted(operation, false); },
             thisSPtr);
         OnCleanupSecurityPrincipalsCompleted(operation, true);
     }
@@ -1227,7 +1281,7 @@ private:
 
     void OnCleanupSecurityPrincipalsCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -1237,9 +1291,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ConfigureSecurityPrincipals): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ConfigureSecurityPrincipals): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -1275,7 +1329,7 @@ private:
         MessageUPtr request = make_unique<Message>(cleanupRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
         request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::CleanupSecurityPrincipalRequest));
-        
+
         WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "CreateCleanupSecurityPrincipalsRequest: Message={0}, Body={1}", *request, cleanupRequest);
 
         return move(request);
@@ -1327,7 +1381,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnCleanupSecurityPrincipalsCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnCleanupSecurityPrincipalsCompleted(operation, false); },
             thisSPtr);
         OnCleanupSecurityPrincipalsCompleted(operation, true);
     }
@@ -1383,7 +1437,7 @@ private:
         MessageUPtr request = make_unique<Message>(cleanupRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
         request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::CleanupApplicationLocalGroup));
-       
+
         WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "CreateApplicationLocalGroupsRequest: Message={0}, Body={1}", *request, cleanupRequest);
 
         return move(request);
@@ -1402,16 +1456,16 @@ class FabricActivatorClient::DeleteApplicationFoldersAsyncOperation : public Asy
 {
 public:
     DeleteApplicationFoldersAsyncOperation(
-            __in FabricActivatorClient & owner,
-            vector<wstring> const & appFolders,
-            TimeSpan const timeout,
-            AsyncCallback const & callback,
-            AsyncOperationSPtr const & parent)
-            : AsyncOperation(callback, parent),
-              owner_(owner),
-              appFolders_(appFolders),
-              deletedAppFolders_(),
-              timeoutHelper_(timeout)
+        __in FabricActivatorClient & owner,
+        vector<wstring> const & appFolders,
+        TimeSpan const timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        appFolders_(appFolders),
+        deletedAppFolders_(),
+        timeoutHelper_(timeout)
     {
     }
 
@@ -1427,17 +1481,17 @@ protected:
     {
 
         WriteNoise(
-                TraceType_ActivatorClient,
-                owner_.Root.TraceId,
-                "FabricActivatorClient: Sending delete application folder message to FabricActivator service. {0}",
-                timeoutHelper_.GetRemainingTime());
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "FabricActivatorClient: Sending delete application folder message to FabricActivator service. {0}",
+            timeoutHelper_.GetRemainingTime());
 
         MessageUPtr request = CreateDeleteFoldersRequest();
         auto operation = owner_.Client.BeginRequest(
-                move(request),
-                timeoutHelper_.GetRemainingTime(),
-                [this](AsyncOperationSPtr const & operation){ OnDeleteFoldersCompleted(operation, false); },
-                thisSPtr);
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnDeleteFoldersCompleted(operation, false); },
+            thisSPtr);
         OnDeleteFoldersCompleted(operation, true);
     }
 
@@ -1455,10 +1509,10 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                    TraceType_ActivatorClient,
-                    owner_.Root.TraceId,
-                    "End(DeleteFolders): ErrorCode={0}",
-                    error);
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(DeleteFolders): ErrorCode={0}",
+                error);
 
             TryComplete(operation->Parent, error);
             return;
@@ -1470,11 +1524,11 @@ private:
         {
             error = ErrorCode::FromNtStatus(reply->Status);
             WriteWarning(
-                    TraceType_ActivatorClient,
-                    owner_.Root.TraceId,
-                    "GetBody<DeleteApplicationFoldersReply> failed: Message={0}, ErrorCode={1}",
-                    *reply,
-                    error);
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<DeleteApplicationFoldersReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
             TryComplete(operation->Parent, error);
             return;
         }
@@ -1485,8 +1539,8 @@ private:
     MessageUPtr CreateDeleteFoldersRequest()
     {
         DeleteFolderRequest deleteRequest(
-                owner_.nodeId_,
-                appFolders_);
+            owner_.nodeId_,
+            appFolders_);
 
         MessageUPtr request = make_unique<Message>(deleteRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -1510,13 +1564,13 @@ private:
 class FabricActivatorClient::ConfigureCrashDumpsAsyncOperation : public AsyncOperation
 {
 public:
-    ConfigureCrashDumpsAsyncOperation( 
+    ConfigureCrashDumpsAsyncOperation(
         __in FabricActivatorClient & owner,
         bool enable,
         wstring const & servicePackageId,
         vector<wstring> const & exeNames,
         TimeSpan const timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -1547,7 +1601,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnConfigureCrashDumpCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnConfigureCrashDumpCompleted(operation, false); },
             thisSPtr);
         OnConfigureCrashDumpCompleted(operation, true);
     }
@@ -1556,7 +1610,7 @@ private:
 
     void OnConfigureCrashDumpCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -1566,9 +1620,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteError(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ConfigureCrashDump): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ConfigureCrashDump): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -1619,8 +1673,8 @@ private:
 
 class FabricActivatorClient::ConfigureEndpointSecurityAsyncOperation : public AsyncOperation
 {
-public: 
-    ConfigureEndpointSecurityAsyncOperation( 
+public:
+    ConfigureEndpointSecurityAsyncOperation(
         __in FabricActivatorClient & owner,
         wstring const & principalSid,
         UINT port,
@@ -1629,7 +1683,7 @@ public:
         wstring const & prefix,
         wstring const & servicePackageId,
         bool isSharedPort,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -1663,7 +1717,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnConfigureEndpointSecurityCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnConfigureEndpointSecurityCompleted(operation, false); },
             thisSPtr);
         OnConfigureEndpointSecurityCompleted(operation, true);
     }
@@ -1672,7 +1726,7 @@ private:
 
     void OnConfigureEndpointSecurityCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -1682,9 +1736,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ConfigureEndpointSecurity): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ConfigureEndpointSecurity): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -1729,7 +1783,7 @@ private:
 
         MessageUPtr request = make_unique<Message>(configureRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
-        if(cleanupAcls_)
+        if (cleanupAcls_)
         {
             request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::CleanupPortSecurity));
         }
@@ -1824,7 +1878,7 @@ private:
             WriteWarning(
                 TraceType_ActivatorClient,
                 owner_.Root.TraceId,
-                "End(ConfigureEndpointBinding): ErrorCode={0}",
+                "End(ConfigureEndpointBindingAndFirewallPolicy): ErrorCode={0}",
                 error);
 
             CleanupTimer();
@@ -1874,7 +1928,8 @@ private:
             bindings_,
             cleanup_,
             cleanupFirewallPolicy_,
-            firewallPorts_);
+            firewallPorts_,
+            owner_.nodeInstanceId_);
 
         MessageUPtr request = make_unique<Message>(configureRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -1987,9 +2042,9 @@ protected:
             move(request),
             timeoutHelper_.GetRemainingTime(),
             [this](AsyncOperationSPtr const & operation)
-            { 
-                OnConfigureContainerCertificateExportCompleted(operation, false); 
-            },
+        {
+            OnConfigureContainerCertificateExportCompleted(operation, false);
+        },
             thisSPtr);
         OnConfigureContainerCertificateExportCompleted(operation, true);
     }
@@ -2000,7 +2055,7 @@ private:
     {
         if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
-             return;
+            return;
         }
 
         MessageUPtr reply;
@@ -2011,16 +2066,16 @@ private:
                 TraceType_ActivatorClient,
                 owner_.Root.TraceId,
                 "End(ConfigureContainerCertificateExport): ErrorCode={0}",
-                 error);
+                error);
 
             TryComplete(operation->Parent, error);
             return;
         }
 
-       // process the reply
-       ConfigureContainerCertificateExportReply replyBody;
-       if (!reply->GetBody<ConfigureContainerCertificateExportReply>(replyBody))
-       {
+        // process the reply
+        ConfigureContainerCertificateExportReply replyBody;
+        if (!reply->GetBody<ConfigureContainerCertificateExportReply>(replyBody))
+        {
             error = ErrorCode::FromNtStatus(reply->Status);
             WriteWarning(
                 TraceType_ActivatorClient,
@@ -2028,13 +2083,13 @@ private:
                 "GetBody<ConfigureContainerCertificateExport> failed: Message={0}, ErrorCode={1}",
                 *reply,
                 error);
-           TryComplete(operation->Parent, error);
-           return;
-       }
+            TryComplete(operation->Parent, error);
+            return;
+        }
 
-       certificatePaths_ = move(replyBody.CertificatePaths);
-       certificatePasswordPaths_ = move(replyBody.CertificatePasswordPaths);
-       TryComplete(operation->Parent, replyBody.Error);
+        certificatePaths_ = move(replyBody.CertificatePaths);
+        certificatePasswordPaths_ = move(replyBody.CertificatePasswordPaths);
+        TryComplete(operation->Parent, replyBody.Error);
     }
 
     MessageUPtr CreateConfigureContainerCertificateExportRequest()
@@ -2058,7 +2113,7 @@ private:
     std::map<std::wstring, std::vector<ServiceModel::ContainerCertificateDescription>> certificateRef_;
     std::wstring workDirectoryPath_;
     std::map<std::wstring, std::wstring> certificatePaths_;
-    std::map<std::wstring,  std::wstring> certificatePasswordPaths_;
+    std::map<std::wstring, std::wstring> certificatePasswordPaths_;
 };
 
 class FabricActivatorClient::CleanupContainerCertificateExportAsyncOperation : public AsyncOperation
@@ -2113,7 +2168,7 @@ private:
     {
         if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
-             return;
+            return;
         }
 
         MessageUPtr reply;
@@ -2128,7 +2183,7 @@ private:
 
             TryComplete(operation->Parent, error);
             return;
-       }
+        }
 
         // process the reply
         FabricHostOperationReply replyBody;
@@ -2173,12 +2228,12 @@ private:
 class FabricActivatorClient::CreateSymbolicLinkAsyncOperation : public AsyncOperation
 {
 public:
-    CreateSymbolicLinkAsyncOperation( 
+    CreateSymbolicLinkAsyncOperation(
         __in FabricActivatorClient & owner,
         vector<ArrayPair<wstring, wstring>> const & symbolicLinks,
         DWORD flags,
         TimeSpan const & timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -2207,7 +2262,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnCreateSymbolicLinkCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnCreateSymbolicLinkCompleted(operation, false); },
             thisSPtr);
         OnCreateSymbolicLinkCompleted(operation, true);
     }
@@ -2216,7 +2271,7 @@ private:
 
     void OnCreateSymbolicLinkCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -2226,9 +2281,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(CreateSymbolicLink): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(CreateSymbolicLink): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -2311,7 +2366,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnRequestCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnRequestCompleted(operation, false); },
             thisSPtr);
         OnRequestCompleted(operation, true);
     }
@@ -2420,7 +2475,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnRequestCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnRequestCompleted(operation, false); },
             thisSPtr);
         OnRequestCompleted(operation, true);
     }
@@ -2429,14 +2484,14 @@ private:
 
     void OnRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
 
         MessageUPtr reply;
         auto error = owner_.Client.EndRequest(operation, reply);
-        if(!error.IsSuccess())
+        if (!error.IsSuccess())
         {
             WriteWarning(
                 TraceType_ActivatorClient,
@@ -2450,7 +2505,7 @@ private:
 
         // process the reply
         FabricHostOperationReply replyBody;
-        if(!reply->GetBody<FabricHostOperationReply>(replyBody))
+        if (!reply->GetBody<FabricHostOperationReply>(replyBody))
         {
             error = ErrorCode::FromNtStatus(reply->Status);
             WriteWarning(
@@ -2487,7 +2542,7 @@ private:
 private:
     TimeoutHelper timeoutHelper_;
     FabricActivatorClient & owner_;
-    
+
     vector<std::wstring> sidPrincipals_;
     DWORD accessMask_;
     wstring localFullPath_;
@@ -2539,7 +2594,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnIpAssignmentRequestCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnIpAssignmentRequestCompleted(operation, false); },
             thisSPtr);
         OnIpAssignmentRequestCompleted(operation, true);
     }
@@ -2613,21 +2668,605 @@ private:
     bool cleanup_;
 };
 
+class FabricActivatorClient::ManageOverlayNetworkResourcesAsyncOperation : public AsyncOperation
+{
+public:
+    ManageOverlayNetworkResourcesAsyncOperation(
+        __in FabricActivatorClient & owner,
+        wstring const & nodeName,
+        wstring const & nodeIpAddress,
+        wstring const & servicePackageId,
+        map<wstring, vector<wstring>> const & codePackageNetworkNames,
+        ManageOverlayNetworkAction::Enum const action,
+        TimeSpan const & timeSpan,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        nodeName_(nodeName),
+        nodeIpAddress_(nodeIpAddress),
+        servicePackageId_(servicePackageId),
+        codePackageNetworkNames_(codePackageNetworkNames),
+        timeoutHelper_(timeSpan),
+        action_(action)
+    {
+    }
+
+    static ErrorCode ManageOverlayNetworkResourcesAsyncOperation::End(
+        AsyncOperationSPtr const & operation,
+        __out std::map<wstring, std::map<std::wstring, std::wstring>> & assignedOverlayNetworkResources)
+    {
+        auto thisPtr = AsyncOperation::End<ManageOverlayNetworkResourcesAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            assignedOverlayNetworkResources = move(thisPtr->assignedOverlayNetworkResources_);
+        }
+        return thisPtr->Error;
+    }
+
+protected:
+
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        wstring actionStr(ManageOverlayNetworkAction::ToString(action_));
+        StringUtility::ToLower(actionStr);
+
+        WriteNoise(
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "FabricActivatorClient: Sending {0} overlay network resource request FabricActivator service. {1}",
+            actionStr,
+            timeoutHelper_.GetRemainingTime());
+
+        MessageUPtr request = CreateManageOverlayNetworkResourceRequest();
+        auto operation = owner_.Client.BeginRequest(
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnOverlayNetworkResourceManagementRequestCompleted(operation, false); },
+            thisSPtr);
+        OnOverlayNetworkResourceManagementRequestCompleted(operation, true);
+    }
+
+private:
+
+    void OnOverlayNetworkResourceManagementRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.Client.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ManageOverlayNetworkResourcesRequest): ErrorCode={0}",
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // process the reply
+        ManageOverlayNetworkResourcesReply replyBody;
+        if (!reply->GetBody<ManageOverlayNetworkResourcesReply>(replyBody))
+        {
+            error = ErrorCode::FromNtStatus(reply->Status);
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<ManageOverlayNetworkResourcesReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // re-hydrate original data structure
+        for (auto const & nr : replyBody.AssignedNetworkResources)
+        {
+            wstring codePackageName;
+            wstring networkName;
+            StringUtility::SplitOnce(nr.first, codePackageName, networkName, L",");
+
+            auto cpIter = assignedOverlayNetworkResources_.find(codePackageName);
+            if (cpIter == assignedOverlayNetworkResources_.end())
+            {
+                assignedOverlayNetworkResources_.insert(make_pair(codePackageName, std::map<std::wstring, std::wstring>()));
+                cpIter = assignedOverlayNetworkResources_.find(codePackageName);
+            }
+
+            auto networkIter = cpIter->second.find(networkName);
+            if (networkIter == cpIter->second.end())
+            {
+                cpIter->second[networkName] = nr.second;
+            }
+            else
+            {
+                networkIter->second = nr.second;
+            }
+        }
+
+        TryComplete(operation->Parent, replyBody.Error);
+    }
+
+    MessageUPtr CreateManageOverlayNetworkResourceRequest()
+    {
+        ManageOverlayNetworkResourcesRequest configureRequest(
+            owner_.nodeId_,
+            nodeName_,
+            nodeIpAddress_,
+            servicePackageId_,
+            codePackageNetworkNames_,
+            action_);
+
+        MessageUPtr request = make_unique<Message>(configureRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::ManageOverlayNetworkResources));
+
+        WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "Manage overlay network resources request: Message={0}, Body={1}", *request, configureRequest);
+
+        return move(request);
+    }
+
+private:
+
+    TimeoutHelper timeoutHelper_;
+    FabricActivatorClient & owner_;
+    wstring nodeName_;
+    wstring nodeIpAddress_;
+    wstring servicePackageId_;
+    map<wstring, vector<wstring>> codePackageNetworkNames_;
+    std::map<wstring, std::map<std::wstring, std::wstring>> assignedOverlayNetworkResources_;
+    ManageOverlayNetworkAction::Enum action_;
+};
+
+class FabricActivatorClient::UpdateOverlayNetworkRoutesAsyncOperation : public AsyncOperation
+{
+public:
+    UpdateOverlayNetworkRoutesAsyncOperation(
+        __in FabricActivatorClient & owner,
+        wstring const & networkName,
+        wstring const & nodeIpAddress,
+        wstring const & instanceID,
+        int64 const & sequenceNumber,
+        bool const & isDelta,
+        std::vector<Management::NetworkInventoryManager::NetworkAllocationEntrySPtr> const & networkMappingTable,
+        TimeSpan const & timeSpan,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        networkName_(networkName),
+        nodeIpAddress_(nodeIpAddress),
+        instanceID_(instanceID),
+        sequenceNumber_(sequenceNumber),
+        isDelta_(isDelta),
+        networkMappingTable_(networkMappingTable),
+        timeoutHelper_(timeSpan)
+    {
+    }
+
+    static ErrorCode UpdateOverlayNetworkRoutesAsyncOperation::End(AsyncOperationSPtr const & operation)
+    {
+        auto thisPtr = AsyncOperation::End<UpdateOverlayNetworkRoutesAsyncOperation>(operation);
+        return thisPtr->Error;
+    }
+
+protected:
+
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        WriteNoise(
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "FabricActivatorClient: Sending update overlay network routes request FabricActivator service. {0}",
+            timeoutHelper_.GetRemainingTime());
+
+        MessageUPtr request = CreateUpdateOverlayNetworkRoutesRequest();
+        auto operation = owner_.Client.BeginRequest(
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnUpdateOverlayNetworkRoutesRequestCompleted(operation, false); },
+            thisSPtr);
+
+        OnUpdateOverlayNetworkRoutesRequestCompleted(operation, true);
+    }
+
+private:
+
+    void OnUpdateOverlayNetworkRoutesRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.Client.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(UpdateOverlayNetworkRoutesRequest): ErrorCode={0}",
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // process the reply
+        UpdateOverlayNetworkRoutesReply replyBody;
+        if (!reply->GetBody<UpdateOverlayNetworkRoutesReply>(replyBody))
+        {
+            error = ErrorCode::FromNtStatus(reply->Status);
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<UpdateOverlayNetworkRoutesReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        TryComplete(operation->Parent, replyBody.Error);
+    }
+
+    MessageUPtr CreateUpdateOverlayNetworkRoutesRequest()
+    {
+        UpdateOverlayNetworkRoutesRequest configureRequest(
+            this->networkName_,
+            this->nodeIpAddress_,
+            this->instanceID_,
+            this->sequenceNumber_,
+            this->isDelta_,
+            this->networkMappingTable_);
+
+        MessageUPtr request = make_unique<Message>(configureRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::UpdateOverlayNetworkRoutes));
+
+        WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "Update overlay network routes request: Message={0}, Body={1}", *request, configureRequest);
+
+        return move(request);
+    }
+
+private:
+
+    TimeoutHelper timeoutHelper_;
+    FabricActivatorClient & owner_;
+    wstring networkName_;
+    wstring nodeIpAddress_;
+    wstring instanceID_;
+    int64 sequenceNumber_;
+    bool isDelta_;
+    std::vector<Management::NetworkInventoryManager::NetworkAllocationEntrySPtr> networkMappingTable_;
+};
+
+class FabricActivatorClient::GetNetworkDeployedPackagesAsyncOperation : public AsyncOperation
+{
+public:
+    GetNetworkDeployedPackagesAsyncOperation(
+        __in FabricActivatorClient & owner,
+        std::vector<std::wstring> const & servicePackageIds,
+        std::wstring const & codePackageName,
+        std::wstring const & networkName,
+        std::wstring const & nodeId,
+        std::map<std::wstring, std::wstring> const & codePackageInstanceAppHostMap,
+        TimeSpan const & timeSpan,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        servicePackageIds_(servicePackageIds),
+        codePackageName_(codePackageName),
+        networkName_(networkName),
+        nodeId_(nodeId),
+        codePackageInstanceAppHostMap_(codePackageInstanceAppHostMap),
+        networkReservedCodePackages_(),
+        timeoutHelper_(timeSpan)
+    {
+    }
+
+    static ErrorCode GetNetworkDeployedPackagesAsyncOperation::End(
+        AsyncOperationSPtr const & operation,
+        __out std::map<std::wstring, std::map<std::wstring, std::vector<std::wstring>>> & networkReservedCodePackages,
+        __out std::map<std::wstring, std::map<std::wstring, std::wstring>> & codePackageInstanceIdentifierContainerInfoMap)
+    {
+        auto thisPtr = AsyncOperation::End<GetNetworkDeployedPackagesAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            networkReservedCodePackages = move(thisPtr->networkReservedCodePackages_);
+            codePackageInstanceIdentifierContainerInfoMap = move(thisPtr->codePackageInstanceIdentifierContainerInfoMap_);
+        }
+        return thisPtr->Error;
+    }
+
+protected:
+
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        WriteNoise(
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "FabricActivatorClient: Sending get network deployed packages request FabricActivator service. {0}",
+            timeoutHelper_.GetRemainingTime());
+
+        MessageUPtr request = CreateGetNetworkDeployedPackagesRequest();
+        auto operation = owner_.Client.BeginRequest(
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnGetNetworkDeployedPackagesRequestCompleted(operation, false); },
+            thisSPtr);
+
+        OnGetNetworkDeployedPackagesRequestCompleted(operation, true);
+    }
+
+private:
+
+    void OnGetNetworkDeployedPackagesRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.Client.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(GetNetworkDeployedPackagesRequest): ErrorCode={0}",
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // process the reply
+        GetNetworkDeployedPackagesReply replyBody;
+        if (!reply->GetBody<GetNetworkDeployedPackagesReply>(replyBody))
+        {
+            error = ErrorCode::FromNtStatus(reply->Status);
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<GetNetworkDeployedPackagesReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        RehydrateNetworkReservedCodePackages(replyBody);
+
+        RehydrateCodePackageInstanceIdentifierContainerInfoMap(replyBody);
+
+        TryComplete(operation->Parent, ErrorCode(ErrorCodeValue::Success));
+    }
+
+    void RehydrateNetworkReservedCodePackages(GetNetworkDeployedPackagesReply const & replyBody)
+    {
+        for (auto const & nr : replyBody.NetworkDeployedPackages)
+        {
+            wstring networkName;
+            wstring servicePackageId;
+            StringUtility::SplitOnce(nr.first, networkName, servicePackageId, L",");
+
+            auto networkIter = networkReservedCodePackages_.find(networkName);
+            if (networkIter == networkReservedCodePackages_.end())
+            {
+                networkReservedCodePackages_.insert(make_pair(networkName, std::map<std::wstring, std::vector<std::wstring>>()));
+                networkIter = networkReservedCodePackages_.find(networkName);
+            }
+
+            auto serviceIter = networkIter->second.find(servicePackageId);
+            if (serviceIter == networkIter->second.end())
+            {
+                networkIter->second[servicePackageId] = nr.second;
+            }
+            else
+            {
+                serviceIter->second = nr.second;
+            }
+        }
+    }
+
+    void RehydrateCodePackageInstanceIdentifierContainerInfoMap(GetNetworkDeployedPackagesReply const & replyBody)
+    {
+        for (auto const & cp : replyBody.CodePackageInstanceIdentifierContainerInfoMap)
+        {
+            wstring codePackageInstanceIdentifier;
+            wstring containerId;
+            StringUtility::SplitOnce(cp.first, codePackageInstanceIdentifier, containerId, L",");
+
+            auto cpIter = codePackageInstanceIdentifierContainerInfoMap_.find(codePackageInstanceIdentifier);
+            if (cpIter == codePackageInstanceIdentifierContainerInfoMap_.end())
+            {
+                codePackageInstanceIdentifierContainerInfoMap_.insert(make_pair(codePackageInstanceIdentifier, std::map<std::wstring, std::wstring>()));
+                cpIter = codePackageInstanceIdentifierContainerInfoMap_.find(codePackageInstanceIdentifier);
+            }
+
+            auto containerIter = cpIter->second.find(containerId);
+            if (containerIter == cpIter->second.end())
+            {
+                cpIter->second[containerId] = cp.second;
+            }
+            else
+            {
+                containerIter->second = cp.second;
+            }
+        }
+    }
+
+    MessageUPtr CreateGetNetworkDeployedPackagesRequest()
+    {
+        GetNetworkDeployedPackagesRequest packagesRequest(
+            this->servicePackageIds_,
+            this->codePackageName_,
+            this->networkName_,
+            this->nodeId_,
+            this->codePackageInstanceAppHostMap_);
+
+        MessageUPtr request = make_unique<Message>(packagesRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::GetNetworkDeployedCodePackages));
+
+        WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "Get network deployed packages request: Message={0}, Body={1}", *request, packagesRequest);
+
+        return move(request);
+    }
+
+private:
+
+    TimeoutHelper timeoutHelper_;
+    FabricActivatorClient & owner_;
+    vector<wstring> servicePackageIds_;
+    wstring codePackageName_;
+    wstring networkName_;
+    wstring nodeId_;
+    std::map<std::wstring, std::wstring> codePackageInstanceAppHostMap_;
+    std::map<std::wstring, std::map<std::wstring, std::vector<std::wstring>>> networkReservedCodePackages_;
+    std::map<std::wstring, std::map<std::wstring, std::wstring>> codePackageInstanceIdentifierContainerInfoMap_;
+};
+
+class FabricActivatorClient::GetDeployedNetworksAsyncOperation : public AsyncOperation
+{
+public:
+    GetDeployedNetworksAsyncOperation(
+        __in FabricActivatorClient & owner,
+        NetworkType::Enum networkType,
+        TimeSpan const & timeSpan,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        networkType_(networkType),
+        timeoutHelper_(timeSpan)
+    {
+    }
+
+    static ErrorCode GetDeployedNetworksAsyncOperation::End(
+        AsyncOperationSPtr const & operation,
+        __out std::vector<std::wstring> & networkNames)
+    {
+        auto thisPtr = AsyncOperation::End<GetDeployedNetworksAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            networkNames = move(thisPtr->networkNames_);
+        }
+        return thisPtr->Error;
+    }
+
+protected:
+
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        WriteNoise(
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "FabricActivatorClient: Sending get deployed networks request FabricActivator service. {0}",
+            timeoutHelper_.GetRemainingTime());
+
+        MessageUPtr request = CreateGetDeployedNetworksRequest();
+        auto operation = owner_.Client.BeginRequest(
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnGetDeployedNetworksRequestCompleted(operation, false); },
+            thisSPtr);
+
+        OnGetDeployedNetworksRequestCompleted(operation, true);
+    }
+
+private:
+
+    void OnGetDeployedNetworksRequestCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.Client.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(GetDeployedNetworksRequest): ErrorCode={0}",
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // process the reply
+        GetDeployedNetworksReply replyBody;
+        if (!reply->GetBody<GetDeployedNetworksReply>(replyBody))
+        {
+            error = ErrorCode::FromNtStatus(reply->Status);
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<GetDeployedNetworksReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        networkNames_ = replyBody.NetworkNames;
+
+        TryComplete(operation->Parent, ErrorCode(ErrorCodeValue::Success));
+    }
+
+    MessageUPtr CreateGetDeployedNetworksRequest()
+    {
+        GetDeployedNetworksRequest networksRequest(networkType_);
+
+        MessageUPtr request = make_unique<Message>(networksRequest);
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::GetDeployedNetworks));
+
+        WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "Get deployed networks request: Message={0}, Body={1}", *request, networksRequest);
+
+        return move(request);
+    }
+
+private:
+
+    TimeoutHelper timeoutHelper_;
+    FabricActivatorClient & owner_;
+    NetworkType::Enum networkType_;
+    std::vector<std::wstring> networkNames_;
+};
+
 class FabricActivatorClient::FabricUpgradeAsyncOperation : public AsyncOperation
 {
 public:
-    FabricUpgradeAsyncOperation( 
+    FabricUpgradeAsyncOperation(
         __in FabricActivatorClient & owner,
         bool const useFabricInstallerService,
         wstring const & programToRun,
         wstring const & arguments,
         wstring const & downloadedFabricPackageLocation,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
         useFabricInstallerService_(useFabricInstallerService),
-        programToRun_(programToRun),    
+        programToRun_(programToRun),
         arguments_(arguments),
         downloadedFabricPackageLocation_(downloadedFabricPackageLocation),
         timeoutHelper_(HostingConfig::GetConfig().FabricUpgradeTimeout)
@@ -2653,7 +3292,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnFabricUpgradeCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnFabricUpgradeCompleted(operation, false); },
             thisSPtr);
         OnFabricUpgradeCompleted(operation, true);
     }
@@ -2662,7 +3301,7 @@ private:
 
     void OnFabricUpgradeCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -2672,9 +3311,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(FabricUpgrade): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(FabricUpgrade): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -2708,7 +3347,7 @@ private:
 
         MessageUPtr request = make_unique<Message>(fabricUpgradeRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
-        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::FabricUpgradeRequest));        
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::FabricUpgradeRequest));
 
         WriteNoise(TraceType_ActivatorClient, owner_.Root.TraceId, "FabricUpgradeRequest: Message={0}, Body={1}", *request, fabricUpgradeRequest);
 
@@ -2720,15 +3359,15 @@ private:
     TimeoutHelper timeoutHelper_;
     FabricActivatorClient & owner_;
     bool const useFabricInstallerService_;
-    wstring const programToRun_;    
-    wstring const arguments_;   
+    wstring const programToRun_;
+    wstring const arguments_;
     wstring const downloadedFabricPackageLocation_;
 };
 
 class FabricActivatorClient::ConfigureResourceACLsAsyncOperation : public AsyncOperation
 {
 public:
-    ConfigureResourceACLsAsyncOperation( 
+    ConfigureResourceACLsAsyncOperation(
         __in FabricActivatorClient & owner,
         vector<wstring> const & sids,
         DWORD accessMask,
@@ -2737,7 +3376,7 @@ public:
         ULONG applicationCounter,
         wstring const & nodeId,
         TimeSpan timeout,
-        AsyncCallback const & callback, 
+        AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         owner_(owner),
@@ -2771,7 +3410,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnConfigureResourceACLsCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnConfigureResourceACLsCompleted(operation, false); },
             thisSPtr);
         OnConfigureResourceACLsCompleted(operation, true);
     }
@@ -2780,7 +3419,7 @@ private:
 
     void OnConfigureResourceACLsCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
     {
-        if(operation->CompletedSynchronously != expectedCompletedSynchronously)
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
         {
             return;
         }
@@ -2790,9 +3429,9 @@ private:
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                owner_.Root.TraceId, 
-                "End(ConfigureResourceACLs): ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(ConfigureResourceACLs): ErrorCode={0}",
                 error);
 
             TryComplete(operation->Parent, error);
@@ -2893,7 +3532,7 @@ protected:
         auto operation = owner_.Client.BeginRequest(
             move(request),
             timeoutHelper_.GetRemainingTime(),
-            [this](AsyncOperationSPtr const & operation){ OnContainerImageDownloadCompleted(operation, false); },
+            [this](AsyncOperationSPtr const & operation) { OnContainerImageDownloadCompleted(operation, false); },
             thisSPtr);
         OnContainerImageDownloadCompleted(operation, true);
     }
@@ -2935,7 +3574,7 @@ private:
             TryComplete(operation->Parent, error);
             return;
         }
-        
+
         auto err = replyBody.Error;
         if (!err.IsSuccess() &&
             retryCount_ < HostingConfig::GetConfig().ContainerImageDownloadRetryCount)
@@ -2999,7 +3638,7 @@ private:
     MessageUPtr CreateDownloadContainerImageRequest()
     {
         DownloadContainerImagesRequest downloadRequest(
-            images_, 
+            images_,
             timeoutHelper_.GetRemainingTime().Ticks);
 
         auto request = make_unique<Message>(downloadRequest);
@@ -3108,7 +3747,7 @@ private:
             owner_.Root.TraceId,
             "DeleteContainerImages returned ErrorCode={0}",
             err);
-        
+
         TryComplete(operation->Parent, err);
     }
 
@@ -3140,6 +3779,7 @@ class FabricActivatorClient::GetContainerInfoAsyncOperation : public AsyncOperat
 public:
     GetContainerInfoAsyncOperation(
         std::wstring const & appServiceId,
+        bool isServicePackageActivationModeExclusive,
         std::wstring const & containerInfoType,
         std::wstring const & containerInfoArgs,
         __in FabricActivatorClient & owner,
@@ -3148,6 +3788,7 @@ public:
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         appServiceId_(appServiceId),
+        isServicePackageActivationModeExclusive_(isServicePackageActivationModeExclusive),
         containerInfoType_(containerInfoType),
         containerInfoArgs_(containerInfoArgs),
         owner_(owner),
@@ -3235,7 +3876,7 @@ private:
 
     MessageUPtr CreateGetContainerInfoRequest()
     {
-        GetContainerInfoRequest getContainerInfoRequest(owner_.nodeId_, appServiceId_, containerInfoType_, containerInfoArgs_);
+        GetContainerInfoRequest getContainerInfoRequest(owner_.nodeId_, appServiceId_, isServicePackageActivationModeExclusive_, containerInfoType_, containerInfoArgs_);
 
         auto request = make_unique<Message>(getContainerInfoRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -3249,6 +3890,7 @@ private:
 
 private:
     wstring appServiceId_;
+    bool isServicePackageActivationModeExclusive_;
     wstring containerInfoType_;
     wstring containerInfoArgs_;
     TimeoutHelper timeoutHelper_;
@@ -3256,19 +3898,123 @@ private:
     wstring containerInfo_;
 };
 
+// GetImages AsyncOperation class implementation
+class FabricActivatorClient::GetImagesAsyncOperation : public AsyncOperation
+{
+public:
+    GetImagesAsyncOperation(
+        __in FabricActivatorClient & owner,
+        TimeSpan timeout,
+        AsyncCallback const & callback,
+        AsyncOperationSPtr const & parent)
+        : AsyncOperation(callback, parent),
+        owner_(owner),
+        images_(),
+        timeoutHelper_(timeout)
+    {
+    }
+
+    static ErrorCode GetImagesAsyncOperation::End(AsyncOperationSPtr const & operation, __out std::vector<wstring>& images)
+    {
+        auto thisPtr = AsyncOperation::End<GetImagesAsyncOperation>(operation);
+        if (thisPtr->Error.IsSuccess())
+        {
+            images = thisPtr->images_;
+        }
+        return thisPtr->Error;
+    }
+
+protected:
+    void OnStart(AsyncOperationSPtr const & thisSPtr)
+    {
+        // Create request for ProcessActivationManager
+        auto request = CreateGetImagesRequest();
+
+        // Send request for images
+        auto operation = owner_.Client.BeginRequest(
+            move(request),
+            timeoutHelper_.GetRemainingTime(),
+            [this](AsyncOperationSPtr const & operation) { OnGetImagesCompleted(operation, false); },
+            thisSPtr);
+        OnGetImagesCompleted(operation, true);
+    }
+
+private:
+    void OnGetImagesCompleted(AsyncOperationSPtr operation, bool expectedCompletedSynchronously)
+    {
+        if (operation->CompletedSynchronously != expectedCompletedSynchronously)
+        {
+            return;
+        }
+
+        MessageUPtr reply;
+        auto error = owner_.Client.EndRequest(operation, reply);
+        if (!error.IsSuccess())
+        {
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "End(GetImages): ErrorCode={0}",
+                error);
+
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        // Read reply
+        GetImagesReply replyBody;
+        if (!reply->GetBody<GetImagesReply>(replyBody))
+        {
+            error = ErrorCode::FromNtStatus(reply->Status);
+            WriteWarning(
+                TraceType_ActivatorClient,
+                owner_.Root.TraceId,
+                "GetBody<GetImagesReply> failed: Message={0}, ErrorCode={1}",
+                *reply,
+                error);
+            TryComplete(operation->Parent, error);
+            return;
+        }
+
+        images_ = replyBody.Images;
+        auto err = replyBody.Error;
+
+        WriteTrace(
+            err.ToLogLevel(),
+            TraceType_ActivatorClient,
+            owner_.Root.TraceId,
+            "GetImages returned ErrorCode={0}",
+            err);
+
+        TryComplete(operation->Parent, err);
+    }
+
+    MessageUPtr CreateGetImagesRequest()
+    {
+        auto request = make_unique<Message>();
+        request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
+        request->Headers.Add(Transport::ActionHeader(Hosting2::Protocol::Actions::GetImages));
+        return move(request);
+    }
+
+private:
+    std::vector<wstring> images_;
+    FabricActivatorClient & owner_;
+    TimeoutHelper timeoutHelper_;
+};
+
+
 class FabricActivatorClient::ConfigureNodeForDnsServiceAsyncOperation : public AsyncOperation
 {
 public:
     ConfigureNodeForDnsServiceAsyncOperation(
         __in FabricActivatorClient & owner,
         bool isDnsServiceEnabled,
-        std::wstring const & sid,
         TimeSpan timeout,
         AsyncCallback const & callback,
         AsyncOperationSPtr const & parent)
         : AsyncOperation(callback, parent),
         isDnsServiceEnabled_(isDnsServiceEnabled),
-        sid_(sid),
         owner_(owner),
         timeoutHelper_(timeout)
     {
@@ -3285,7 +4031,7 @@ protected:
     {
         bool setAsPreferredDns = DNS::DnsServiceConfig::GetConfig().SetAsPreferredDns;
 
-        ConfigureNodeForDnsServiceRequest configureRequest(isDnsServiceEnabled_, setAsPreferredDns, sid_);
+        ConfigureNodeForDnsServiceRequest configureRequest(isDnsServiceEnabled_, setAsPreferredDns);
 
         MessageUPtr request = make_unique<Message>(configureRequest);
         request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -3323,16 +4069,18 @@ private:
 
 private:
     bool isDnsServiceEnabled_;
-    std::wstring sid_;
     TimeoutHelper timeoutHelper_;
     FabricActivatorClient & owner_;
 };
 
 FabricActivatorClient::FabricActivatorClient(
     ComponentRoot const & root,
+    _In_ HostingSubsystem & hosting,
     wstring const & nodeId,
-    wstring const & fabricBinFolder) 
+    wstring const & fabricBinFolder,
+    uint64 nodeInstanceId)
     : RootedObject(root)
+    , hosting_(hosting)
     , fabricBinFolder_(fabricBinFolder)
     , nodeId_(nodeId)
     , ipcClient_()
@@ -3340,19 +4088,21 @@ FabricActivatorClient::FabricActivatorClient(
     , clientId_()
     , processTerminationEvent_()
     , containerHealthStatusChangeEvent_()
+    , containerRootDiedEvent_()
+    , nodeInstanceId_(nodeInstanceId)
 {
     wstring activatorAddress;
 
-    if(Environment::GetEnvironmentVariable(Constants::FabricActivatorAddressEnvVariable, activatorAddress, NOTHROW()))
+    if (Environment::GetEnvironmentVariable(Constants::FabricActivatorAddressEnvVariable, activatorAddress, NOTHROW()))
     {
         WriteInfo(TraceType_ActivatorClient,
             root.TraceId,
             "FabricHost address retrieved {0}",
             activatorAddress);
-        
+
         clientId_ = Guid::NewGuid().ToString();
 
-        auto ipcClient = make_unique<IpcClient>(this->Root, 
+        auto ipcClient = make_unique<IpcClient>(this->Root,
             clientId_,
             activatorAddress,
             false /* disallow use of unreliable transport */,
@@ -3381,7 +4131,7 @@ Common::AsyncOperationSPtr FabricActivatorClient::OnBeginOpen(
         *this,
         timeout,
         callback,
-        parent);  
+        parent);
 }
 
 Common::ErrorCode FabricActivatorClient::OnEndOpen(Common::AsyncOperationSPtr const & operation)
@@ -3394,7 +4144,7 @@ Common::AsyncOperationSPtr FabricActivatorClient::OnBeginClose(
     Common::AsyncCallback const & callback,
     Common::AsyncOperationSPtr const & parent)
 {
-    return AsyncOperation::CreateAndStart<CloseAsyncOperation>(*this, timeout, callback, parent);  
+    return AsyncOperation::CreateAndStart<CloseAsyncOperation>(*this, timeout, callback, parent);
 }
 
 Common::ErrorCode FabricActivatorClient::OnEndClose(Common::AsyncOperationSPtr const & operation)
@@ -3404,7 +4154,7 @@ Common::ErrorCode FabricActivatorClient::OnEndClose(Common::AsyncOperationSPtr c
 
 void FabricActivatorClient::OnAbort()
 {
-    if(this->ipcClient_)
+    if (this->ipcClient_)
     {
         this->UnregisterFabricActivatorClient();
         this->UnregisterIpcMessageHandler();
@@ -3414,7 +4164,7 @@ void FabricActivatorClient::OnAbort()
 
 MessageUPtr FabricActivatorClient::CreateUnregisterClientRequest()
 {
-    RegisterFabricActivatorClientRequest registerRequest(processId_, nodeId_);
+    RegisterFabricActivatorClientRequest registerRequest(processId_, nodeId_, nodeInstanceId_);
 
     MessageUPtr request = make_unique<Message>(registerRequest);
     request->Headers.Add(Transport::ActorHeader(Actor::FabricActivator));
@@ -3439,9 +4189,9 @@ void FabricActivatorClient::UnregisterFabricActivatorClient()
         if (!error.IsSuccess())
         {
             WriteWarning(
-                TraceType_ActivatorClient, 
-                Root.TraceId, 
-                "Failed UnregisterFabricActivatorClient: ErrorCode={0}", 
+                TraceType_ActivatorClient,
+                Root.TraceId,
+                "Failed UnregisterFabricActivatorClient: ErrorCode={0}",
                 error);
         }
         cleanupWaiter->SetError(error);
@@ -3449,7 +4199,7 @@ void FabricActivatorClient::UnregisterFabricActivatorClient()
     },
         this->Root.CreateAsyncOperationRoot());
 
-    if(cleanupWaiter->WaitOne(timeout))
+    if (cleanupWaiter->WaitOne(timeout))
     {
         auto error = cleanupWaiter->GetError();
         WriteTrace(
@@ -3472,7 +4222,7 @@ void FabricActivatorClient::RegisterIpcMessageHandler()
     auto root = this->Root.CreateComponentRoot();
     ipcClient_->RegisterMessageHandler(
         Actor::FabricActivatorClient,
-        [this, root] (MessageUPtr & message, IpcReceiverContextUPtr & context)
+        [this, root](MessageUPtr & message, IpcReceiverContextUPtr & context)
     {
         this->IpcMessageHandler(*message, context);
     },
@@ -3504,6 +4254,16 @@ void FabricActivatorClient::RemoveContainerHealthCheckStatusChangeHandler(HHandl
     containerHealthStatusChangeEvent_.Remove(handler);
 }
 
+HHandler FabricActivatorClient::AddRootContainerTerminationHandler(EventHandler const & handler)
+{
+    return containerRootDiedEvent_.Add(handler);
+}
+
+void FabricActivatorClient::RemoveRootContainerTerminationHandler(HHandler const & handler)
+{
+    containerRootDiedEvent_.Remove(handler);
+}
+
 void FabricActivatorClient::IpcMessageHandler(__in Message & message, __in IpcReceiverContextUPtr & context)
 {
     WriteNoise(TraceType_ActivatorClient, Root.TraceId, "Received message: actor={0}, action={1}", message.Actor, message.Action);
@@ -3523,24 +4283,41 @@ void FabricActivatorClient::ProcessIpcMessage(__in Message & message, __in IpcRe
     if (message.Action == Hosting2::Protocol::Actions::ServiceTerminatedNotificationRequest)
     {
         ProcessApplicationServiceTerminatedRequest(message, context);
-        return;
     }
     else if (message.Action == Hosting2::Protocol::Actions::ContainerHealthCheckStatusChangeNotificationRequest)
     {
         ProcessContainerHealthCheckStatusChangeRequest(message, context);
+    }
+    else if (message.Action == Hosting2::Protocol::Actions::DockerProcessTerminatedNotificationRequest)
+    {
+        ProcessDockerProcessTerminatedRequest(message, context);
+    }
+    else if (message.Action == Hosting2::Protocol::Actions::GetOverlayNetworkDefinition)
+    {
+        ProcessGetOverlayNetworkDefinitionRequest(message, context);
+        return;
+    }
+    else if (message.Action == Hosting2::Protocol::Actions::DeleteOverlayNetworkDefinition)
+    {
+        ProcessDeleteOverlayNetworkDefinitionRequest(message, context);
+        return;
+    }
+    else if (message.Action == Hosting2::Protocol::Actions::PublishNetworkTablesRequest)
+    {
+        ProcessPublishNetworkTablesRequest(message, context);
         return;
     }
 }
 
 AsyncOperationSPtr FabricActivatorClient::BeginActivateProcess(
     wstring const & applicationId,
-    wstring const & appServiceId, 
+    wstring const & appServiceId,
     ProcessDescriptionUPtr const & processDescription,
     wstring const & runasUserId,
     bool isContainerHost,
     ContainerDescriptionUPtr && containerDescription,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -3552,8 +4329,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginActivateProcess(
         runasUserId,
         isContainerHost,
         move(containerDescription),
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3563,17 +4340,17 @@ ErrorCode FabricActivatorClient::EndActivateProcess(Common::AsyncOperationSPtr c
 }
 
 AsyncOperationSPtr FabricActivatorClient::BeginDeactivateProcess(
-    wstring const & appServiceId, 
+    wstring const & appServiceId,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
     return AsyncOperation::CreateAndStart<DeactivateProcessAsyncOperation>(
         *this,
         appServiceId,
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3586,7 +4363,7 @@ ErrorCode FabricActivatorClient::EndDeactivateProcess(Common::AsyncOperationSPtr
 AsyncOperationSPtr FabricActivatorClient::BeginActivateHostedService(
     HostedServiceParameters const & params,
     TimeSpan const timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -3621,7 +4398,7 @@ void FabricActivatorClient::ProcessApplicationServiceTerminatedRequest(
 {
     ServiceTerminatedNotification notification;
 
-    if(!message.GetBody<ServiceTerminatedNotification>(notification))
+    if (!message.GetBody<ServiceTerminatedNotification>(notification))
     {
         auto error = ErrorCode::FromNtStatus(message.Status);
         WriteWarning(
@@ -3633,7 +4410,14 @@ void FabricActivatorClient::ProcessApplicationServiceTerminatedRequest(
     }
     for (auto it = notification.ApplicationServiceIds.begin(); it != notification.ApplicationServiceIds.end(); it++)
     {
-        processTerminationEvent_.Fire(ApplicationHostTerminatedEventArgs(*it, notification.ExitCode));
+        if (notification.IsContainerRoot)
+        {
+            containerRootDiedEvent_.Fire(ApplicationHostTerminatedEventArgs(notification.ActivityDescription, *it, notification.ExitCode));
+        }
+        else
+        {
+            processTerminationEvent_.Fire(ApplicationHostTerminatedEventArgs(notification.ActivityDescription, *it, notification.ExitCode));
+        }
     }
     //Just return message to ack reception
     MessageUPtr response = make_unique<Message>(notification);
@@ -3655,7 +4439,7 @@ void FabricActivatorClient::ProcessContainerHealthCheckStatusChangeRequest(
             Root.TraceId,
             "Invalid message received: {0}, dropping",
             message);
-        
+
         return;
     }
 
@@ -3666,15 +4450,154 @@ void FabricActivatorClient::ProcessContainerHealthCheckStatusChangeRequest(
     context->Reply(move(response));
 }
 
+void FabricActivatorClient::ProcessDockerProcessTerminatedRequest(
+    __in Message & message,
+    __in IpcReceiverContextUPtr & context)
+{
+    //Report Health on Node saying docker crashed with ttl of default 1 minute.
+    DockerProcessTerminatedNotification notification;
+
+    if (!message.GetBody<DockerProcessTerminatedNotification>(notification))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+
+        WriteWarning(
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    hosting_.HealthManagerObj->ReportHealthWithTTL(
+        L"DockerProcessManager",
+        SystemHealthReportCode::Hosting_DockerDaemonUnhealthy,
+        wformatString("Docker daemon terminated with exit code:{0}, ContinuousFailureCount: {1}, NextStartTime: {2} seconds",
+            notification.ExitCode,
+            notification.ContinuousFailureCount,
+            notification.NextStartTime.TotalSeconds()),
+        SequenceNumber::GetNext(),
+        HostingConfig::GetConfig().DockerHealthReportTTL);
+
+    //Just return message to ack reception
+    MessageUPtr response = make_unique<Message>();
+    context->Reply(move(response));
+}
+
+void FabricActivatorClient::ProcessGetOverlayNetworkDefinitionRequest(
+    __in Message & message,
+    __in IpcReceiverContextUPtr & context)
+{
+    Management::NetworkInventoryManager::NetworkAllocationRequestMessage request;
+    if (!message.GetBody<Management::NetworkInventoryManager::NetworkAllocationRequestMessage>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    hosting_.NetworkInventoryAgent->BeginSendAllocationRequestMessage(
+        request,
+        HostingConfig::GetConfig().RequestTimeout,
+        [this, ctx = context.release()](AsyncOperationSPtr const & operation)
+    {
+        Management::NetworkInventoryManager::NetworkAllocationResponseMessage networkAllocationResponse;
+        auto error = hosting_.NetworkInventoryAgent->EndSendAllocationRequestMessage(operation, networkAllocationResponse);
+
+        if (!error.IsSuccess())
+        {
+            networkAllocationResponse.ErrorCode.ReadValue();
+            networkAllocationResponse.ErrorCode = error;
+        }
+
+        MessageUPtr response = make_unique<Message>(networkAllocationResponse);
+        ctx->Reply(move(response));
+    });
+}
+
+void FabricActivatorClient::ProcessDeleteOverlayNetworkDefinitionRequest(
+    __in Message & message,
+    __in IpcReceiverContextUPtr & context)
+{
+    Management::NetworkInventoryManager::NetworkRemoveRequestMessage request;
+    if (!message.GetBody<Management::NetworkInventoryManager::NetworkRemoveRequestMessage>(request))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    hosting_.NetworkInventoryAgent->BeginSendDeallocationRequestMessage(
+        request,
+        HostingConfig::GetConfig().RequestTimeout,
+        [this, ctx = context.release()](AsyncOperationSPtr const & operation)
+    {
+        Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage networkRemoveResponse;
+        auto error = hosting_.NetworkInventoryAgent->EndSendDeallocationRequestMessage(operation, networkRemoveResponse);
+
+        if (!error.IsSuccess())
+        {
+            networkRemoveResponse.ErrorCode.ReadValue();
+            networkRemoveResponse.ErrorCode = error;
+        }
+
+        MessageUPtr response = make_unique<Message>(networkRemoveResponse);
+        ctx->Reply(move(response));
+    });
+}
+
+void FabricActivatorClient::ProcessPublishNetworkTablesRequest(
+    __in Message & message,
+    __in IpcReceiverContextUPtr & context)
+{
+    Management::NetworkInventoryManager::PublishNetworkTablesMessageRequest publishNetworkTablesRequest;
+    if (!message.GetBody<Management::NetworkInventoryManager::PublishNetworkTablesMessageRequest>(publishNetworkTablesRequest))
+    {
+        auto error = ErrorCode::FromNtStatus(message.Status);
+        WriteWarning(
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "Invalid message received: {0}, dropping",
+            message);
+        return;
+    }
+
+    hosting_.NetworkInventoryAgent->BeginSendPublishNetworkTablesRequestMessage(
+        publishNetworkTablesRequest,
+        HostingConfig::GetConfig().RequestTimeout,
+        [this, ctx = context.release()](AsyncOperationSPtr const & operation)
+    {
+        Management::NetworkInventoryManager::NetworkErrorCodeResponseMessage publishNetworkTablesResponse;
+        auto error = hosting_.NetworkInventoryAgent->EndSendPublishNetworkTablesRequestMessage(operation, publishNetworkTablesResponse);
+
+        if (!error.IsSuccess())
+        {
+            publishNetworkTablesResponse.ErrorCode.ReadValue();
+            publishNetworkTablesResponse.ErrorCode = error;
+        }
+
+        MessageUPtr response = make_unique<Message>(publishNetworkTablesResponse);
+        ctx->Reply(move(response));
+    });
+}
+
 AsyncOperationSPtr FabricActivatorClient::BeginConfigureSecurityPrincipals(
     wstring const & applicationId,
     ULONG applicationPackageCounter,
     PrincipalsDescription const & principalsDescription,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
-    ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");    
+    ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
     return AsyncOperation::CreateAndStart<ConfigureSecurityPrincipalsAsyncOperation>(
         *this,
         applicationId,
@@ -3683,8 +4606,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureSecurityPrincipals(
         0 /*allowedUserCreationFailureCount*/,
         false /*configureForNode*/,
         false /*updateExisting*/,
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3731,7 +4654,7 @@ ErrorCode FabricActivatorClient::EndConfigureSecurityPrincipalsForNode(
 AsyncOperationSPtr FabricActivatorClient::BeginCleanupSecurityPrincipals(
     wstring const & applicationId,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -3740,8 +4663,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginCleanupSecurityPrincipals(
         *this,
         applicationId,
         false /*cleanupForNode*/,
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3775,23 +4698,23 @@ ErrorCode FabricActivatorClient::EndCleanupApplicationSecurityGroup(
 
 #if defined(PLATFORM_UNIX)
 AsyncOperationSPtr FabricActivatorClient::BeginDeleteApplicationFolder(
-        vector<wstring> const & appFolders,
-        TimeSpan timeout,
-        AsyncCallback const & callback,
-        AsyncOperationSPtr const & parent)
+    vector<wstring> const & appFolders,
+    TimeSpan timeout,
+    AsyncCallback const & callback,
+    AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
     return AsyncOperation::CreateAndStart<DeleteApplicationFoldersAsyncOperation>(
-            *this,
-            appFolders,
-            timeout,
-            callback,
-            parent);
+        *this,
+        appFolders,
+        timeout,
+        callback,
+        parent);
 }
 
 ErrorCode FabricActivatorClient::EndDeleteApplicationFolder(
-        Common::AsyncOperationSPtr const & operation,
-        __out vector<wstring> & deletedAppFolders)
+    Common::AsyncOperationSPtr const & operation,
+    __out vector<wstring> & deletedAppFolders)
 {
     return DeleteApplicationFoldersAsyncOperation::End(operation, deletedAppFolders);
 }
@@ -3801,7 +4724,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureSMBShare(
     std::vector<std::wstring> const & sidPrincipals,
     DWORD accessMask,
     std::wstring const & localFullPath,
-    std::wstring const & shareName,    
+    std::wstring const & shareName,
     TimeSpan timeout,
     AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
@@ -3827,7 +4750,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginCreateSymbolicLink(
     vector<ArrayPair<wstring, wstring>> const & symbolicLinks,
     DWORD flags,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -3835,8 +4758,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginCreateSymbolicLink(
         *this,
         symbolicLinks,
         flags,
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3872,7 +4795,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureCrashDumps(
     wstring const & servicePackageId,
     vector<wstring> const & exeNames,
     TimeSpan timeout,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     return AsyncOperation::CreateAndStart<ConfigureCrashDumpsAsyncOperation>(
@@ -3880,8 +4803,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureCrashDumps(
         enable,
         servicePackageId,
         exeNames,
-        timeout, 
-        callback, 
+        timeout,
+        callback,
         parent);
 }
 
@@ -3896,7 +4819,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginFabricUpgrade(
     wstring const & programToRun,
     wstring const & arguments,
     wstring const & downloadedFabricPackageLocation,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     return AsyncOperation::CreateAndStart<FabricUpgradeAsyncOperation>(
@@ -3905,7 +4828,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginFabricUpgrade(
         programToRun,
         arguments,
         downloadedFabricPackageLocation,
-        callback, 
+        callback,
         parent);
 }
 
@@ -3923,7 +4846,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureEndpointSecurity(
     wstring const & prefix,
     wstring const & servicePackageId,
     bool isSharedPort,
-    AsyncCallback const & callback, 
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -3932,11 +4855,11 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureEndpointSecurity(
         principalSid,
         port,
         isHttps,
-        cleanupAcls, 
+        cleanupAcls,
         prefix,
         servicePackageId,
         isSharedPort,
-        callback, 
+        callback,
         parent);
 }
 
@@ -4018,8 +4941,8 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureResourceACLs(
     vector<wstring> const & applicationFolders,
     ULONG applicationCounter,
     wstring const & nodeId,
-    TimeSpan timeout, 
-    AsyncCallback const & callback, 
+    TimeSpan timeout,
+    AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
@@ -4032,7 +4955,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureResourceACLs(
         applicationCounter,
         nodeId,
         timeout,
-        callback, 
+        callback,
         parent);
 }
 
@@ -4044,23 +4967,39 @@ ErrorCode FabricActivatorClient::EndConfigureResourceACLs(
 
 AsyncOperationSPtr FabricActivatorClient::BeginSetupContainerGroup(
     std::wstring const & servicePackageId,
-    std::wstring const & assignedIPAddress,
+    ServiceModel::NetworkType::Enum networkType,
+    std::wstring const & openNetworkAssignedIp,
+    std::map<std::wstring, std::wstring> const & overlayNetworkResources,
+    std::vector<std::wstring> const & dnsServers,
     std::wstring const & appfolder,
     std::wstring const & appId,
+    std::wstring const & appName,
+    std::wstring const & partitionId,
+    std::wstring const & servicePackageActivationId,
     ServiceModel::ServicePackageResourceGovernanceDescription const & spRg,
+#if defined(PLATFORM_UNIX)
+    ContainerPodDescription const & podDescription,
+#endif
     bool isCleanup,
     Common::TimeSpan timeout,
     Common::AsyncCallback const & callback,
     Common::AsyncOperationSPtr const & parent)
 {
-
+    AppInfo appInfo(appfolder, appId, appName);
     return AsyncOperation::CreateAndStart<ConfigureContainerGroupAsyncOperation>(
         *this,
         servicePackageId,
-        assignedIPAddress,
-        appfolder,
-        appId,
+        partitionId,
+        servicePackageActivationId,
+        networkType,
+        openNetworkAssignedIp,
+        overlayNetworkResources,
+        dnsServers,
+        appInfo,
         spRg,
+#if defined(PLATFORM_UNIX)
+        podDescription,
+#endif
         isCleanup,
         timeout,
         callback,
@@ -4097,6 +5036,59 @@ ErrorCode FabricActivatorClient::EndAssignIpAddresses(
     return AssignIpAddressesAsyncOperation::End(operation, assignedIps);
 }
 
+AsyncOperationSPtr FabricActivatorClient::BeginManageOverlayNetworkResources(
+    wstring const & nodeName,
+    wstring const & nodeIpAddress,
+    wstring const & servicePackageInstanceId,
+    map<wstring, vector<wstring>> const & codePackageNetworkNames,
+    ManageOverlayNetworkAction::Enum const action,
+    TimeSpan timeout,
+    AsyncCallback const & callback,
+    AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<ManageOverlayNetworkResourcesAsyncOperation>(
+        *this,
+        nodeName,
+        nodeIpAddress,
+        servicePackageInstanceId,
+        codePackageNetworkNames,
+        action,
+        timeout,
+        callback,
+        parent);
+}
+
+ErrorCode FabricActivatorClient::EndManageOverlayNetworkResources(
+    AsyncOperationSPtr const & operation,
+    __out std::map<wstring, std::map<std::wstring, std::wstring>> & assignedNetworkResources)
+{
+    return ManageOverlayNetworkResourcesAsyncOperation::End(operation, assignedNetworkResources);
+}
+
+Common::AsyncOperationSPtr FabricActivatorClient::BeginUpdateRoutes(
+    Management::NetworkInventoryManager::PublishNetworkTablesRequestMessage const & networkTables,
+    Common::TimeSpan timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<UpdateOverlayNetworkRoutesAsyncOperation>(
+        *this,
+        networkTables.NetworkName,
+        this->hosting_.FabricNodeConfigObj.IPAddressOrFQDN,
+        networkTables.InstanceID,
+        networkTables.SequenceNumber,
+        networkTables.IsDelta,
+        networkTables.NetworkMappingTable,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode FabricActivatorClient::EndUpdateRoutes(Common::AsyncOperationSPtr const & operation)
+{
+    return UpdateOverlayNetworkRoutesAsyncOperation::End(operation);
+}
+
 ErrorCode FabricActivatorClient::ConfigureEndpointSecurity(
     wstring const & principalSid,
     UINT port,
@@ -4127,7 +5119,7 @@ ErrorCode FabricActivatorClient::ConfigureEndpointSecurity(
         this->Root.CreateAsyncOperationRoot());
 
     ErrorCode error;
-    if(operationWaiter->WaitOne(timeout))
+    if (operationWaiter->WaitOne(timeout))
     {
         error = operationWaiter->GetError();
         WriteTrace(
@@ -4188,6 +5180,57 @@ Common::ErrorCode FabricActivatorClient::CleanupAssignedIPs(wstring const & serv
             "AssignIpAddressesAsyncOperation operationWaiter failed on Wait");
         error = ErrorCode(ErrorCodeValue::Timeout);
     }
+
+    return error;
+}
+
+Common::ErrorCode FabricActivatorClient::CleanupAssignedOverlayNetworkResources(
+    std::map<std::wstring, std::vector<std::wstring>> const & codePackageNetworkNames,
+    std::wstring const & nodeName,
+    std::wstring const & nodeIpAddress,
+    std::wstring const & servicePackageId)
+{
+    AsyncOperationWaiterSPtr operationWaiter = make_shared<AsyncOperationWaiter>();
+
+    TimeSpan timeout = HostingConfig::GetConfig().ActivationTimeout;
+
+    auto operation = AsyncOperation::CreateAndStart<ManageOverlayNetworkResourcesAsyncOperation>(
+        *this,
+        nodeName,
+        nodeIpAddress,
+        servicePackageId,
+        codePackageNetworkNames,
+        ManageOverlayNetworkAction::Enum::Unassign,
+        timeout,
+        [operationWaiter](AsyncOperationSPtr const & operation)
+    {
+        std::map<wstring, std::map<std::wstring, std::wstring>> assignedOverlayNetworkResources;
+        auto error = ManageOverlayNetworkResourcesAsyncOperation::End(operation, assignedOverlayNetworkResources);
+        operationWaiter->SetError(error);
+        operationWaiter->Set();
+    },
+        this->Root.CreateAsyncOperationRoot());
+
+    ErrorCode error;
+    if (operationWaiter->WaitOne(timeout))
+    {
+        error = operationWaiter->GetError();
+        WriteTrace(
+            error.ToLogLevel(),
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "ManageOverlayNetworkResourcesAsyncOperation request returned error {0}",
+            error);
+    }
+    else
+    {
+        WriteWarning(
+            TraceType_ActivatorClient,
+            Root.TraceId,
+            "ManageOverlayNetworkResourcesAsyncOperation operationWaiter failed on Wait");
+        error = ErrorCode(ErrorCodeValue::Timeout);
+    }
+
     return error;
 }
 
@@ -4197,20 +5240,20 @@ AsyncOperationSPtr FabricActivatorClient::BeginConfigureContainerCertificateExpo
     TimeSpan timeout,
     AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
-    {
-        ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
-        return AsyncOperation::CreateAndStart<ConfigureContainerCertificateExportAsyncOperation>(
-            *this,
-            certificateRef,
-            workDirectoryPath,
-            timeout,
-            callback,
-            parent);
-    }
+{
+    ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
+    return AsyncOperation::CreateAndStart<ConfigureContainerCertificateExportAsyncOperation>(
+        *this,
+        certificateRef,
+        workDirectoryPath,
+        timeout,
+        callback,
+        parent);
+}
 
 ErrorCode FabricActivatorClient::EndConfigureContainerCertificateExport(
     Common::AsyncOperationSPtr const & operation,
-    __out std::map<std::wstring, std::wstring> & certificatePaths, 
+    __out std::map<std::wstring, std::wstring> & certificatePaths,
     __out std::map<std::wstring, std::wstring> & certificatePasswordPaths)
 {
     return ConfigureContainerCertificateExportAsyncOperation::End(operation, certificatePaths, certificatePasswordPaths);
@@ -4258,7 +5301,7 @@ void FabricActivatorClient::AbortApplicationEnvironment(wstring const & applicat
     },
         this->Root.CreateAsyncOperationRoot());
 
-    if(cleanupWaiter->WaitOne(timeout))
+    if (cleanupWaiter->WaitOne(timeout))
     {
         auto error = cleanupWaiter->GetError();
         WriteTrace(
@@ -4279,7 +5322,7 @@ void FabricActivatorClient::AbortApplicationEnvironment(wstring const & applicat
 
 Common::AsyncOperationSPtr FabricActivatorClient::BeginTerminateProcess(
     std::wstring const & appServiceId,
-    Common::AsyncCallback const & callback, 
+    Common::AsyncCallback const & callback,
     Common::AsyncOperationSPtr const & parent)
 {
     return AsyncOperation::CreateAndStart<TerminateProcessAsyncOperation>(
@@ -4310,7 +5353,7 @@ void FabricActivatorClient::AbortProcess(wstring const & appServiceId)
     },
         this->Root.CreateAsyncOperationRoot());
 
-    if(cleanupWaiter->WaitOne(HostingConfig::GetConfig().FabricHostCommunicationTimeout))
+    if (cleanupWaiter->WaitOne(HostingConfig::GetConfig().FabricHostCommunicationTimeout))
     {
         auto error = cleanupWaiter->GetError();
         WriteTrace(
@@ -4373,6 +5416,7 @@ ErrorCode FabricActivatorClient::EndDeleteContainerImages(
 
 AsyncOperationSPtr FabricActivatorClient::BeginGetContainerInfo(
     wstring const & appServiceId,
+    bool isServicePackageActivationModeExclusive,
     wstring const & containerInfoType,
     wstring const & containerInfoArgs,
     TimeSpan timeout,
@@ -4382,6 +5426,7 @@ AsyncOperationSPtr FabricActivatorClient::BeginGetContainerInfo(
     ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
     return AsyncOperation::CreateAndStart<GetContainerInfoAsyncOperation>(
         appServiceId,
+        isServicePackageActivationModeExclusive,
         containerInfoType,
         containerInfoArgs,
         *this,
@@ -4397,6 +5442,26 @@ ErrorCode FabricActivatorClient::EndGetContainerInfo(
     return GetContainerInfoAsyncOperation::End(operation, containerInfo);
 }
 
+AsyncOperationSPtr FabricActivatorClient::BeginGetImages(
+    TimeSpan timeout,
+    AsyncCallback const &callback,
+    AsyncOperationSPtr const & parent)
+{
+    ASSERT_IFNOT(this->ipcClient_, "IPC client must be initialized for this operation");
+    return AsyncOperation::CreateAndStart<GetImagesAsyncOperation>(
+        *this,
+        timeout,
+        callback,
+        parent);
+}
+
+ErrorCode FabricActivatorClient::EndGetImages(
+    Common::AsyncOperationSPtr const & operation,
+    __out std::vector<wstring> & images)
+{
+    return GetImagesAsyncOperation::End(operation, images);
+}
+
 bool FabricActivatorClient::IsIpcClientInitialized()
 {
     return (bool)ipcClient_;
@@ -4404,17 +5469,67 @@ bool FabricActivatorClient::IsIpcClientInitialized()
 
 Common::AsyncOperationSPtr FabricActivatorClient::BeginConfigureNodeForDnsService(
     bool isDnsServiceEnabled,
-    std::wstring const & sid,
     TimeSpan timeout,
     AsyncCallback const & callback,
     AsyncOperationSPtr const & parent)
 {
     return AsyncOperation::CreateAndStart<ConfigureNodeForDnsServiceAsyncOperation>(
-        *this, isDnsServiceEnabled, sid, timeout, callback, parent);
+        *this, isDnsServiceEnabled, timeout, callback, parent);
 }
 
 Common::ErrorCode FabricActivatorClient::EndConfigureNodeForDnsService(
     Common::AsyncOperationSPtr const & operation)
 {
     return ConfigureNodeForDnsServiceAsyncOperation::End(operation);
+}
+
+Common::AsyncOperationSPtr FabricActivatorClient::BeginGetNetworkDeployedPackages(
+    std::vector<std::wstring> const & servicePackageIds,
+    std::wstring const & codePackageName,
+    std::wstring const & networkName,
+    std::wstring const & nodeId,
+    std::map<std::wstring, std::wstring> const & codePackageInstanceAppHostMap,
+    Common::TimeSpan timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<GetNetworkDeployedPackagesAsyncOperation>(
+        *this,
+        servicePackageIds,
+        codePackageName,
+        networkName,
+        nodeId,
+        codePackageInstanceAppHostMap,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode FabricActivatorClient::EndGetNetworkDeployedPackages(
+    Common::AsyncOperationSPtr const & operation,
+    __out std::map<std::wstring, std::map<std::wstring, std::vector<std::wstring>>> & networkReservedCodePackages,
+    __out std::map<std::wstring, std::map<std::wstring, std::wstring>> & codePackageInstanceIdentifierContainerInfoMap)
+{
+    return GetNetworkDeployedPackagesAsyncOperation::End(operation, networkReservedCodePackages, codePackageInstanceIdentifierContainerInfoMap);
+}
+
+Common::AsyncOperationSPtr FabricActivatorClient::BeginGetDeployedNetworks(
+    ServiceModel::NetworkType::Enum networkType,
+    Common::TimeSpan timeout,
+    Common::AsyncCallback const & callback,
+    Common::AsyncOperationSPtr const & parent)
+{
+    return AsyncOperation::CreateAndStart<GetDeployedNetworksAsyncOperation>(
+        *this,
+        networkType,
+        timeout,
+        callback,
+        parent);
+}
+
+Common::ErrorCode FabricActivatorClient::EndGetDeployedNetworks(
+    Common::AsyncOperationSPtr const & operation,
+    __out std::vector<std::wstring> & networkNames)
+{
+    return GetDeployedNetworksAsyncOperation::End(operation, networkNames);
 }

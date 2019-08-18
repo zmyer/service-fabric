@@ -5,10 +5,12 @@
 
 #include <ktl.h>
 #include <ktrace.h>
-#include <minmax.h>
-#include <KtlPhysicalLog.h>
+#include "minmax.h"
 #include <kinstrumentop.h>
-#include "ktllogger.h"
+
+#include "KtlPhysicalLog.h"
+#include "../inc/ktllogger.h"
+#include "../inc/KLogicalLog.h"
 
 #include "DevIoUmKm.h"
 #include "fileio.h"
@@ -16,7 +18,7 @@
 #include "KtlLogMarshal.h"
 
 #include "MBInfoAccess.h"
-#include "KLogicalLog.h"
+#include "servicewrapper.h"
 #include "GlobalObj.h"
 
 #include "shimkm.h"

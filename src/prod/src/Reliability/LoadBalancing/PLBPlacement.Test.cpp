@@ -55,6 +55,8 @@ namespace PlacementAndLoadBalancingUnitTest
 
         void UseHeuristicDuringPlacementOfHugeBatchTest();
 
+        void PlacementOnNodeWithShouldDisapperLoadTestHelper(wstring const& testName, bool featureSwitch);
+
         shared_ptr<TestFM> fm_;
         Reliability::FailoverUnitFlags::Flags upgradingFlag_;
         Reliability::FailoverUnitFlags::Flags swappingPrimaryFlag_;
@@ -339,7 +341,7 @@ namespace PlacementAndLoadBalancingUnitTest
         //we cannot place the child yet, we are checking that everything works fine when the parent replicas is on a down node
         //as then we do not create the partition entry
         VERIFY_ARE_EQUAL(0u, actionList.size());
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
 
         fm_->Clear();
         fm_->RefreshPLB(now += PLBConfig::GetConfig().MinPlacementInterval);
@@ -1611,14 +1613,14 @@ namespace PlacementAndLoadBalancingUnitTest
 
         fm_->Clear();
         fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval);
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
         actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(0u, actionList.size());
 
         PLBConfigScopeChange(UseDefaultLoadForServiceOnEveryNode, bool, true);
         fm_->Clear();
         fm_->RefreshPLB(Stopwatch::Now() + PLBConfig::GetConfig().MinPlacementInterval + PLBConfig::GetConfig().MinPlacementInterval);
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
         actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add instance 2", value)));
     }
@@ -1646,7 +1648,7 @@ namespace PlacementAndLoadBalancingUnitTest
         fm_->RefreshPLB(Stopwatch::Now());
         auto actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add secondary 2", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
     }
 
     BOOST_AUTO_TEST_CASE(PlacementFaultDomainMultiLevelWithDeactivation)
@@ -1673,7 +1675,7 @@ namespace PlacementAndLoadBalancingUnitTest
         fm_->RefreshPLB(Stopwatch::Now());
         auto actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add secondary 1", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
     }
 
     BOOST_AUTO_TEST_CASE(PlacementWithCapacityTest)
@@ -3778,7 +3780,7 @@ namespace PlacementAndLoadBalancingUnitTest
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, actionList.size());
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add instance 3", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
 
         // Then, update the FM and failover unit
         fm_->Clear();
@@ -3790,7 +3792,7 @@ namespace PlacementAndLoadBalancingUnitTest
         actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, actionList.size());
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 drop instance 0", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
     }
 
     BOOST_AUTO_TEST_CASE(PlacementOnEveryNodeNotNeededWithPausedNode)
@@ -3828,7 +3830,7 @@ namespace PlacementAndLoadBalancingUnitTest
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, actionList.size());
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add instance 3", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
 
         // Then, we update the new FailoverUnit
         fm_->Clear();
@@ -3840,7 +3842,7 @@ namespace PlacementAndLoadBalancingUnitTest
         actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(1, actionList.size());
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 drop instance 0", value)));
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
     }
 
     BOOST_AUTO_TEST_CASE(ServiceOnEveryNodeReplicaDrop)
@@ -5126,13 +5128,13 @@ namespace PlacementAndLoadBalancingUnitTest
 
         fm_->RefreshPLB(Stopwatch::Now());
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
         VERIFY_ARE_EQUAL(0, actionList.size());
 
         // Refresh again and the scheduler action should be CreationWithMove....
         fm_->RefreshPLB(Stopwatch::Now());
         actionList = GetActionListString(fm_->MoveActions);
-        VerifyPLBAction(plb, L"CreationWithMove");
+        VerifyPLBAction(plb, L"NewReplicaPlacementWithMove");
         VERIFY_ARE_EQUAL(0, actionList.size());
 
 
@@ -5140,7 +5142,7 @@ namespace PlacementAndLoadBalancingUnitTest
         fm_->RefreshPLB(Stopwatch::Now());
         fm_->RefreshPLB(Stopwatch::Now());
         actionList = GetActionListString(fm_->MoveActions);
-        VerifyPLBAction(plb, L"CreationWithMove");
+        VerifyPLBAction(plb, L"NewReplicaPlacementWithMove");
         VERIFY_ARE_NOT_EQUAL(0, actionList.size());
 
     }
@@ -5288,7 +5290,7 @@ namespace PlacementAndLoadBalancingUnitTest
         now = max(now, Stopwatch::Now());
         fm_->RefreshPLB(now);
         actionList = GetActionListString(fm_->MoveActions);
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
         VERIFY_ARE_EQUAL(0, actionList.size());
     }
 
@@ -8428,7 +8430,7 @@ namespace PlacementAndLoadBalancingUnitTest
         vector<wstring> actionList = GetActionListString(fm_->MoveActions);
         VERIFY_ARE_EQUAL(actionList.size(), 1u);
         VERIFY_ARE_EQUAL(CountIf(actionList, ActionMatch(L"3 add primary 1", value)), 1u);
-        VerifyPLBAction(plb, L"Creation");
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
     }
 
     BOOST_AUTO_TEST_CASE(PlacementWithAffinityUpgrade1)
@@ -9008,6 +9010,100 @@ namespace PlacementAndLoadBalancingUnitTest
         VERIFY_ARE_EQUAL(3, CountIf(actionList, ActionMatch(L"* add * 32|48", value)));
     }
 
+    BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsInvertedSwap)
+    {
+        //Simple placement test which test if our logic is successfully turned off
+        //by swapping one primary replica, with our logic turned off, it should select
+        //any random secondary replica, but by adding additional replicas to nodes in UDs 0 and 1, PLB should avoid them
+        Trace.WriteInfo("PLBPlacementTestSource", "PlacementWithUpgradeCompletedUDsInvertedSwap");
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        PLBConfigScopeChange(PreferUpgradedUDs, bool, false);
+        for (int i = 0; i < 10; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i, L"", wformatString("UD{0}", int(i / 2))));
+        }
+
+        std::set<std::wstring> completedUDs;
+        completedUDs.insert(L"UD0");
+        completedUDs.insert(L"UD1");
+        plb.UpdateClusterUpgrade(true, move(completedUDs));
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescription(L"TestService", L"TestType", true));
+
+        upgradingFlag_.SetUpgrading(true);
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L"P/0/I,S/1,S/2,S/4,S/8"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L"P/2, S/3"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+
+        //For partition 0, replica should not be placed in UD1 out of 5 UDs since it is in completed UD
+        VERIFY_ARE_EQUAL(actionList.size(), 1u);
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"0 swap primary 2|1", value)));
+
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest1Inverted)
+    {
+        //Simple placement test which test if our logic is successfully turned off
+        //by placing one secondary replica, with our logic turned off, it should select
+        //any random node, but by adding additional replicas to nodes in UDs 0 and 1, PLB should avoid them
+        Trace.WriteInfo("PLBPlacementTestSource", "PlacementWithUpgradeCompletedUDsTest1Inverted");
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+        PLBConfigScopeChange(PreferUpgradedUDs, bool, false);
+
+        for (int i = 0; i < 20; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i, L"", wformatString("UD{0}", int(i / 2))));
+        }
+
+        std::set<std::wstring> completedUDs;
+        completedUDs.insert(L"UD0");
+        completedUDs.insert(L"UD1");
+        plb.UpdateClusterUpgrade(true, move(completedUDs));
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescription(L"TestService", L"TestType", true));
+
+        upgradingFlag_.SetUpgrading(true);
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L"P/0"), 1, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L"P/8, SB/10"), 1, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(2), wstring(L"TestService"), 0, CreateReplicas(L"P/12, D/15/K"), 1, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(4), wstring(L"TestService"), 0, CreateReplicas(L"P/1, S/2, S/3"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+
+        VERIFY_ARE_EQUAL(actionList.size(), 3u);
+        //For partition 0, replica should be placed outside of UD1 since it's upgraded UD, and we are trying to avoid it
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"0 add secondary 1|2|3", value)));
+
+        //For partition 1, replica should be placed on SB location instead of completed UDs
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add secondary 10", value)));
+
+        //For partition 2, replica should be placed on upgrade location instead of completed UDs
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"2 add secondary 15", value)));
+
+    }
+
     BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest1)
     {
         Trace.WriteInfo("PLBPlacementTestSource", "PlacementWithUpgradeCompletedUDsTest1");
@@ -9044,12 +9140,69 @@ namespace PlacementAndLoadBalancingUnitTest
         //For partition 0, replica should be placed in UD1 out of 10 UDs since it is in completed UD
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add secondary 2|3", value)));
 
-        //For partition 0, replica should be placed on SB location instead of completed UDs
+        //For partition 1, replica should be placed on SB location instead of completed UDs
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add secondary 10", value)));
 
-        //For partition 0, replica should be placed on upgrade location instead of completed UDs
+        //For partition 2, replica should be placed on upgrade location instead of completed UDs
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"2 add secondary 20", value)));
 
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest2Inverted)
+    {
+        // ToBeSwapped case with Upgraded UDs and capacity violation
+        // In this case, upgraded UDs logic is turned off, and simple service is added to make
+        // PLB avoid those replicas in UD 0 and 1
+        Trace.WriteInfo("PLBPlacementTestSource", "PlacementWithUpgradeCompletedUDsTest2Inverted");
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+        PLBConfigScopeChange(PreferUpgradedUDs, bool, false);
+
+        if (!PLBConfig::GetConfig().IsTestMode)
+        {
+            // This test is slow, and tests an edge case - execute only in test mode (functional)
+            Trace.WriteInfo("PLBPlacementTestSource", "Skipping {0} (IsTestMode == false).", "PlacementWithUpgradeCompletedUDsTest2Inverted");
+            return;
+        }
+
+        plb.UpdateNode(CreateNodeDescriptionWithDomainsAndCapacity(0, L"", L"UD0", L"UpgradeCompletedUDsTest2_Metric1/10"));
+        // 2 nodes in each UD
+        for (int i = 1; i < 20; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i, L"", wformatString("UD{0}", int(i / 2))));
+        }
+
+        std::set<std::wstring> completedUDs;
+        completedUDs.insert(L"UD0");
+        plb.UpdateClusterUpgrade(true, move(completedUDs));
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescription(L"TestService", L"TestType", true, CreateMetrics(L"UpgradeCompletedUDsTest2_Metric1/1.0/20/10")));
+
+        upgradingFlag_.SetUpgrading(true);
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L"P/2/I, S/1, S/4, S/6, S/8, S/10, S/12, S/14, S/16, S/18"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L"P/2/I, S/0, S/4, S/6, S/8, S/10, S/12, S/14, S/16, S/18"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(2), wstring(L"TestService"), 0, CreateReplicas(L"P/0"), 0));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(3), wstring(L"TestService"), 0, CreateReplicas(L"P/1"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+
+        VERIFY_ARE_EQUAL(actionList.size(), 2u);
+
+        //UD0 should be chosen
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"0 swap primary 2<=>1", value)));
+        // Capacity should be relaxed
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"1 swap primary 2<=>0", value)));
     }
 
     BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest2)
@@ -9090,6 +9243,76 @@ namespace PlacementAndLoadBalancingUnitTest
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 swap primary 2<=>1", value)));
         // Capacity should be relaxed
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 swap primary 2<=>0", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest3Inverted)
+    {
+        // Application upgraded UDs verification with preferring logic turned off
+        wstring testName = L"PlacementWithUpgradeCompletedUDsTest3";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+        PLBConfigScopeChange(PreferUpgradedUDs, bool, false);
+
+        if (!PLBConfig::GetConfig().IsTestMode)
+        {
+            // This test is slow, and tests an edge case - execute only in test mode (functional)
+            Trace.WriteInfo("PLBPlacementTestSource", "Skipping {0} (IsTestMode == false).", testName);
+            return;
+        }
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        for (int i = 0; i < 20; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i, L"", wformatString("UD{0}", int(i / 2))));
+        }
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring applicationName = wformatString("{0}_Application", testName);
+        std::set<std::wstring> completedUDs;
+        completedUDs.insert(L"UD0");
+
+        plb.UpdateApplication(CreateApplicationDescriptionWithCapacities(
+            applicationName,
+            0,  // MinimumNodes
+            0,  // MaximumNodes
+            CreateApplicationCapacities(L""),
+            true,
+            move(completedUDs)
+        ));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService", L"TestType", applicationName, true));
+        
+        upgradingFlag_.SetUpgrading(true);
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L"P/4/I, S/1, S/2, S/6, S/8, S/10, S/12, S/14, S/16, S/18"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L"P/6/I, S/1, S/4, S/8, S/10, S/12, S/14, S/16, S/18"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(2), wstring(L"TestService"), 0, CreateReplicas(L"P/8, S/12, S/14, S/16, S/18"), 1, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(3), wstring(L"TestService"), 0, CreateReplicas(L"P/0"), 0));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(4), wstring(L"TestService"), 0, CreateReplicas(L"P/1"), 0));
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+
+        VERIFY_ARE_EQUAL(3u, actionList.size());
+
+        //Node 1 in UD0 is the only invalid node since it's in upgrade domain which we try to avoid
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"* swap primary *<=>1", value)));
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"2 add secondary 0|1", value)));
+
     }
 
     BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest3)
@@ -9144,6 +9367,91 @@ namespace PlacementAndLoadBalancingUnitTest
         //Node 1 in UD0 is the only valid node
         VERIFY_ARE_EQUAL(2, CountIf(actionList, ActionMatch(L"* swap primary *<=>1", value)));
         VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"2 add secondary 0|1", value)));
+
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementWithUpgradeCompletedUDsTest4Inverted)
+    {
+        // To be swapped primary replicas of two services with affinity between them
+        // Nodes in UDs 1 and 0 should be avoided
+        wstring testName = L"PlacementWithUpgradeCompletedUDsTest4Inverted";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+        PLBConfigScopeChange(PreferUpgradedUDs, bool, false);
+
+        if (!PLBConfig::GetConfig().IsTestMode)
+        {
+            // This test is slow, and tests an edge case - execute only in test mode (functional)
+            Trace.WriteInfo("PLBPlacementTestSource", "Skipping {0} (IsTestMode == false).", testName);
+            return;
+        }
+
+        for (int i = 0; i < 12; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i, L"", wformatString("{0}", int(i))));
+        }
+
+        // Force processing of pending updates so that service can be created.
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring applicationName = wformatString("{0}_Application", testName);
+        std::set<std::wstring> completedUDs;
+        completedUDs.insert(L"0");
+        completedUDs.insert(L"1");
+
+        plb.UpdateApplication(CreateApplicationDescriptionWithCapacities(
+            applicationName,
+            0,  // MinimumNodes
+            0,  // MaximumNodes
+            CreateApplicationCapacities(L""),
+            true,
+            move(completedUDs)
+        ));
+
+        wstring parentType = wformatString("{0}_ParentType", testName);
+        wstring childType = wformatString("{0}_ChildType", testName);
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(parentType), set<NodeId>()));
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(childType), set<NodeId>()));
+
+        wstring parentService = wformatString("{0}_P", testName);
+        wstring childService = wformatString("{0}_C", testName);
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(parentService, parentType, wstring(applicationName), true));
+
+        plb.UpdateService(ServiceDescription(
+            wstring(childService),
+            wstring(childType),
+            wstring(applicationName),
+            true,
+            wstring(L""),
+            wstring(parentService),
+            false,
+            std::vector<ServiceMetric>(),
+            FABRIC_MOVE_COST_LOW,
+            false)
+        );
+
+        upgradingFlag_.SetUpgrading(true);
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(0), wstring(childService), 0, CreateReplicas(L"P/4/I, S/1, S/5, S/6, S/7, S/8, S/9, S/10, S/11"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(1), wstring(parentService), 0, CreateReplicas(L"P/4/I, S/1, S/5, S/6, S/7, S/8, S/9, S/10, S/11"), 0, upgradingFlag_));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescription(L"TestService", L"TestType", true));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(2), wstring(L"TestService"), 0, CreateReplicas(L"P/5/I, S/1/B"), 0, upgradingFlag_));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(
+            CreateGuid(3), wstring(L"TestService"), 0, CreateReplicas(L"P/1"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+
+        VERIFY_ARE_EQUAL(2u, actionList.size());
+        //For partition 0/1, replica should be swapped to UD1
+        VERIFY_ARE_EQUAL(0, CountIf(actionList, ActionMatch(L"* swap primary *<=>1", value)));
 
     }
 
@@ -12497,7 +12805,626 @@ namespace PlacementAndLoadBalancingUnitTest
             VERIFY_ARE_EQUAL(3u, actionList.size());
             VERIFY_ARE_EQUAL(2, CountIf(actionList, ActionMatch(L"0 add * 1|3|5", value)));
         }
+    }
 
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementBasicTest)
+    {
+        // Basic test to place container on node that has all required images
+        wstring testName = L"PreferredContainerPlacementBasicTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        vector<wstring> availableImagesNode0 = { L"image1", L"image2" };
+        vector<wstring> availableImagesNode1 = { L"image3", L"image4" };
+        vector<wstring> availableImagesNode2 = { L"image1", L"image5" };
+        vector<wstring> availableImagesNode3 = { L"image2" };
+
+        int numOfNodes = 4;
+        for (int i = 0; i < numOfNodes; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i));
+        }
+
+        plb.UpdateAvailableImagesPerNode(wstring(L"0"), availableImagesNode0);
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+        plb.UpdateAvailableImagesPerNode(wstring(L"2"), availableImagesNode2);
+        plb.UpdateAvailableImagesPerNode(wstring(L"3"), availableImagesNode3);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        ServiceModel::ServicePackageIdentifier spID;
+        vector<ServicePackageDescription> packages;
+        packages.push_back(CreateServicePackageDescription(
+            L"ServicePackageName",
+            appTypeName,
+            appName,
+            1,
+            1000,
+            spID,
+            move(availableImagesNode2)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService", L"ServiceType", appName, true, CreateMetrics(L""), spID, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+
+        // replica sould be placed on node 1 or 2 
+        // as they are the only ones that satisied min bar for preferred container placement
+        // size of requied images = 2 => min bar are nodes with at least half of the required size (=1)
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 0|2", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementBasicTestWithoutRG)
+    {
+        // Basic test that checks preferred placement for service packages
+        // that don't have RG resources but have container images
+        wstring testName = L"PreferredContainerPlacementBasicTestWithoutRG";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        vector<wstring> availableImagesNode0 = { L"image1", L"image2" };
+        vector<wstring> availableImagesNode1 = { L"image3", L"image4" };
+        vector<wstring> availableImagesNode2 = { L"image1", L"image5" };
+        vector<wstring> availableImagesNode3 = { L"image2" };
+
+        int numOfNodes = 4;
+        for (int i = 0; i < numOfNodes; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i));
+        }
+
+        plb.UpdateAvailableImagesPerNode(wstring(L"0"), availableImagesNode0);
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+        plb.UpdateAvailableImagesPerNode(wstring(L"2"), availableImagesNode2);
+        plb.UpdateAvailableImagesPerNode(wstring(L"3"), availableImagesNode3);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        vector<wstring> requiredImages = { L"image4", L"image3", L"image7" };
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        ServiceModel::ServicePackageIdentifier spID;
+        vector<ServicePackageDescription> packages;
+        packages.push_back(CreateServicePackageDescription(
+            L"ServicePackageName",
+            appTypeName,
+            appName,
+            0,
+            0,
+            spID,
+            move(requiredImages)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService", L"ServiceType", appName, true, CreateMetrics(L""), spID, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+
+        // replica sould be placed on node 1 or 2 
+        // as they are the only ones that satisied min bar for preferred container placement
+        // size of requied images = 2 => min bar are nodes with at least half of the required size (=1)
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 1", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementWithNodePropertiesBasicTest)
+    {
+        // Test containers placement with node properties
+        wstring testName = L"PreferredContainerPlacementWithNodePropertiesBasicTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        map<wstring, wstring> nodeProp1;
+        nodeProp1[L"Color"] = L"Blue";
+        plb.UpdateNode(CreateNodeDescription(0, L"", L"", move(nodeProp1)));
+        vector<wstring> availableImagesNode0 = { L"image1", L"image2" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"0"), availableImagesNode0);
+
+        map<wstring, wstring> nodeProp2;
+        nodeProp2[L"Color"] = L"Red";
+        plb.UpdateNode(CreateNodeDescription(1, L"", L"", move(nodeProp2)));
+        vector<wstring> availableImagesNode1 = { L"image3", L"image5", L"image7" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        vector<wstring> requiredImages = { L"image5", L"image3", L"image7" };
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        ServiceModel::ServicePackageIdentifier spID;
+        vector<ServicePackageDescription> packages;
+        packages.push_back(CreateServicePackageDescription(
+            L"ServicePackageName",
+            appTypeName,
+            appName,
+            1,
+            1000,
+            spID,
+            move(requiredImages)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithServicePackage(
+            L"TestService",
+            L"ServiceType",
+            true,
+            spID,
+            CreateMetrics(L""),
+            true,
+            appName,
+            L"Color==Blue"));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+
+        // Validate that node properties has higher priority than prefering container placement
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 0", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementWithNodeCapacityBasicTest)
+    {
+        // Test containers placement with node capacity
+        wstring testName = L"PreferredContainerPlacementWithNodeCapacityBasicTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 2, 1024));
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 2, 1024));
+        vector<wstring> availableImagesNode1 = { L"image1", L"image2" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 4, 2200));
+        vector<wstring> availableImagesNode2 = { L"image10"};
+        plb.UpdateAvailableImagesPerNode(wstring(L"2"), availableImagesNode2);
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(3, 2, 1000));
+        vector<wstring> availableImagesNode3 = { L"image1" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"3"), availableImagesNode3);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName0 = wformatString("{0}_AppType0", testName);
+        wstring appName0 = wformatString("{0}_Application0", testName);
+        vector<wstring> requiredImages0 = { L"image2", L"image1" };
+        ServiceModel::ServicePackageIdentifier spID0;
+        vector<ServicePackageDescription> packages0;
+        packages0.push_back(CreateServicePackageDescription(
+            L"ServicePackageName0",
+            appTypeName0,
+            appName0,
+            1,
+            1000,
+            spID0,
+            move(requiredImages0)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName0, appName0, packages0));
+
+        wstring appTypeName1 = wformatString("{0}_AppType1", testName);
+        wstring appName1 = wformatString("{0}_Application1", testName);
+        vector<wstring> requiredImages1 = { L"image5", L"image6" };
+        ServiceModel::ServicePackageIdentifier spID1;
+        vector<ServicePackageDescription> packages1;
+        packages1.push_back(CreateServicePackageDescription(
+            L"ServicePackageName1",
+            appTypeName1,
+            appName1,
+            3,
+            2000,
+            spID1,
+            move(requiredImages1)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName1, appName1, packages1));
+
+        wstring appTypeName2 = wformatString("{0}_AppType2", testName);
+        wstring appName2 = wformatString("{0}_Application2", testName);
+        vector<wstring> requiredImages2 = { L"image3"};
+        ServiceModel::ServicePackageIdentifier spID2;
+        vector<ServicePackageDescription> packages2;
+        packages2.push_back(CreateServicePackageDescription(
+            L"ServicePackageName2",
+            appTypeName2,
+            appName2,
+            1,
+            500,
+            spID2,
+            move(requiredImages2)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName2, appName2, packages2));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService0", L"ServiceType", appName0, true, CreateMetrics(L""), spID0, true));
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService1", L"ServiceType", appName1, true, CreateMetrics(L""), spID1, true));
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService2", L"ServiceType", appName2, true, CreateMetrics(L""), spID2, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService0"), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(L"TestService2"), 0, CreateReplicas(L""), 2));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(4u, actionList.size());
+
+        // Validate that node capacity has higher priority than prefering container placement
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 1|3", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add primary 2", value)));
+
+        VERIFY_ARE_EQUAL(2, CountIf(actionList, ActionMatch(L"2 add * 0|1|3", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementWithNodeCapacityBasicTestWithoutRG)
+    {
+        // Test containers placement with node capacity
+        wstring testName = L"PreferredContainerPlacementWithNodeCapacityBasicTestWithoutRG";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 5, 5000));
+        vector<wstring> availableImagesNode0 = { L"image2" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"0"), availableImagesNode0);
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 3, 2000));
+        vector<wstring> availableImagesNode1 = { L"image3" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName0 = wformatString("{0}_AppType0", testName);
+        wstring appName0 = wformatString("{0}_Application0", testName);
+        vector<wstring> requiredImages0 = { L"image3" };
+        ServiceModel::ServicePackageIdentifier spID0;
+        vector<ServicePackageDescription> packages0;
+        packages0.push_back(CreateServicePackageDescription(
+            L"ServicePackageName0",
+            appTypeName0,
+            appName0,
+            0,
+            0,
+            spID0,
+            move(requiredImages0)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName0, appName0, packages0));
+
+        wstring appTypeName1 = wformatString("{0}_AppType1", testName);
+        wstring appName1 = wformatString("{0}_Application1", testName);
+        ServiceModel::ServicePackageIdentifier spID1;
+        vector<ServicePackageDescription> packages1;
+        packages1.push_back(CreateServicePackageDescription(
+            L"ServicePackageName1",
+            appTypeName1,
+            appName1,
+            5,
+            5000,
+            spID1,
+            move(requiredImages0)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName1, appName1, packages1));
+
+        wstring appTypeName2 = wformatString("{0}_AppType2", testName);
+        wstring appName2 = wformatString("{0}_Application2", testName);
+        vector<wstring> requiredImages2 = { L"image2" };
+        ServiceModel::ServicePackageIdentifier spID2;
+        vector<ServicePackageDescription> packages2;
+        packages2.push_back(CreateServicePackageDescription(
+            L"ServicePackageName2",
+            appTypeName2,
+            appName2,
+            1,
+            500,
+            spID2,
+            move(requiredImages2)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName2, appName2, packages2));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService0", L"ServiceType", appName0, true, CreateMetrics(L""), spID0, true));
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService1", L"ServiceType", appName1, true, CreateMetrics(L""), spID1, true));
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService2", L"ServiceType", appName2, true, CreateMetrics(L""), spID2, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService0"), 0, CreateReplicas(L""), 1));
+        fm_->FuMap.insert(make_pair<>(CreateGuid(0),
+            move(FailoverUnitDescription(
+                CreateGuid(0),
+                wstring(L"TestService0"),
+                0,
+                CreateReplicas(L""),
+                1))));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService1"), 0, CreateReplicas(L""), 1));
+        fm_->FuMap.insert(make_pair<>(CreateGuid(1),
+            move(FailoverUnitDescription(
+                CreateGuid(1),
+                wstring(L"TestService1"),
+                0,
+                CreateReplicas(L""),
+                1))));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(L"TestService2"), 0, CreateReplicas(L""), 2));
+        fm_->FuMap.insert(make_pair<>(CreateGuid(2),
+            move(FailoverUnitDescription(
+                CreateGuid(2),
+                wstring(L"TestService2"),
+                0,
+                CreateReplicas(L""),
+                2))));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(3u, actionList.size());
+
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 1", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add primary 0", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"2 add primary 1", value)));
+
+        fm_->ApplyActions();
+        fm_->UpdatePlb();
+        fm_->Clear();
+
+        // Refresh PLB to update SP loads
+        plb.Refresh(Stopwatch::Now());
+
+        ServiceModel::NodeLoadInformationQueryResult queryResult;
+        ErrorCode retValue = plb.GetNodeLoadInformationQueryResult(CreateNodeId(0), queryResult);
+        VERIFY_ARE_EQUAL(ErrorCodeValue::Success, retValue.ReadValue());
+        // RG System metrics(CPU and Memory) and Default metrics (PrimaryCount, ReplicaCount and Count) => count = 5
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation.size(), 5);
+        // CPU is fourth metric in the vector
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation[3].NodeLoad, 5);
+        // Memory is last metric in the vector
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation[4].NodeLoad, 5000);
+
+        retValue = plb.GetNodeLoadInformationQueryResult(CreateNodeId(1), queryResult);
+        VERIFY_ARE_EQUAL(ErrorCodeValue::Success, retValue.ReadValue());
+        // RG System metrics(CPU and Memory) and Default metrics (PrimaryCount, ReplicaCount and Count) => count = 5
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation.size(), 5);
+        // CPU is fourth metric in the vector
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation[3].NodeLoad, 1);
+        // Memory is last metric in the vector
+        VERIFY_ARE_EQUAL(queryResult.NodeLoadMetricInformation[4].NodeLoad, 500);
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementNoBalancingTest)
+    {
+        // Basic test to place container on node that has all required images
+        wstring testName = L"PreferredContainerPlacementNoBalancingTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        int numOfNodes = 2;
+        for (int i = 0; i < numOfNodes; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i));
+        }
+        // Update only node0 to have images
+        vector<wstring> availableImagesNode = { L"image1", L"image2", L"image3" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"0"), availableImagesNode);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        ServiceModel::ServicePackageIdentifier spID;
+        vector<ServicePackageDescription> packages;
+        packages.push_back(CreateServicePackageDescription(
+            L"ServicePackageName",
+            appTypeName,
+            appName,
+            1,
+            1000,
+            spID,
+            move(availableImagesNode)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService", L"ServiceType", appName, true, CreateMetrics(L""), spID, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(2u, actionList.size());
+
+        // replica sould be placed on node 0 because it has all necessary images
+        // Verify that simulated annealing will not move replica for the replicas with preferred container placement
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 0", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add primary 0", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementCCWithAffinityTest)
+    {
+        // Constraint check with affinity test
+        wstring testName = L"PreferredContainerPlacementCCWithAffinityTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(0, 5, 5096));
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(1, 5, 7800));
+        vector<wstring> availableImagesNode1 = { L"image3" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+
+        plb.UpdateNode(CreateNodeDescriptionWithResources(2, 4, 2048));
+        vector<wstring> availableImagesNode2 = { L"image1", L"image2" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"2"), availableImagesNode2);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        vector<wstring> requiredImages = { L"image1", L"image2" };
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}Application", testName);
+        vector<ServicePackageDescription> packages;
+        ServiceModel::ServicePackageIdentifier spIdParent;
+        ServiceModel::ServicePackageIdentifier spIdChild;
+        packages.push_back(CreateServicePackageDescription(L"ServicePackageNameParent", appTypeName, appName, 3, 1024, spIdParent, move(requiredImages)));
+        packages.push_back(CreateServicePackageDescription(L"ServicePackageNameChild", appTypeName, appName, 1, 1024, spIdChild));
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        wstring parentService = wformatString("{0}_ParentService", testName);
+        plb.UpdateService(CreateServiceDescriptionWithApplication(
+            parentService,
+            L"ServiceType",
+            appName,
+            true,
+            CreateMetrics(L""),
+            spIdParent,
+            true));
+
+        wstring childService = wformatString("{0}_ChildService", testName);
+        plb.UpdateService(CreateServiceDescriptionWithAffinity(
+            childService,
+            L"ServiceType",
+            true,
+            parentService,
+            CreateMetrics(L""),
+            false,
+            0,
+            false,
+            true,
+            spIdChild));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(parentService), 0, CreateReplicas(L""), 1));
+        fm_->FuMap.insert(make_pair<>(CreateGuid(0),
+            move(FailoverUnitDescription(
+                CreateGuid(0),
+                wstring(parentService),
+                0,
+                CreateReplicas(L""),
+                1))));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(childService), 0, CreateReplicas(L""), 1));
+        fm_->FuMap.insert(make_pair<>(CreateGuid(1),
+            move(FailoverUnitDescription(
+                CreateGuid(1),
+                wstring(childService),
+                0,
+                CreateReplicas(L""),
+                1))));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(2u, actionList.size());
+
+        // Both parent and child are placed on the same node 
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 2", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add primary 2", value)));
+
+        fm_->ApplyActions();
+        fm_->UpdatePlb();
+        fm_->Clear();
+
+        // Update child to report more CPU and memory so that creates node capacity violation
+        vector<ServicePackageDescription> upgradedPackages;
+        upgradedPackages.push_back(CreateServicePackageDescription(L"ServicePackageNameParent", appTypeName, appName, 3, 1024, spIdParent, move(requiredImages)));
+        upgradedPackages.push_back(CreateServicePackageDescription(L"ServicePackageNameChild", appTypeName, appName, 2, 2000, spIdChild));
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages, upgradedPackages));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+
+        // Check that CC has been fixed by moving replicas to another node
+        actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(2u, actionList.size());
+        VerifyPLBAction(plb, L"ConstraintCheck");
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 move primary 2=>0|1", value))); 
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 move primary 2=>0|1", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PreferredContainerPlacementBalanceOnSimilarNodesTest)
+    {
+        wstring testName = L"PreferredContainerPlacementBalanceOnSimilarNodesTest";
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        int numOfNodes = 4;
+        for (int i = 0; i < numOfNodes; i++)
+        {
+            plb.UpdateNode(CreateNodeDescription(i));
+        }
+
+        vector<wstring> availableImagesNode1 = { L"image1", L"image2", L"image3" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"1"), availableImagesNode1);
+
+        vector<wstring> availableImagesNode2 = { L"image2", L"image3", L"image4" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"2"), availableImagesNode2);
+
+        vector<wstring> availableImagesNode3 = { L"image4" };
+        plb.UpdateAvailableImagesPerNode(wstring(L"3"), availableImagesNode3);
+
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        vector<wstring> requiredImages = { L"image1",L"image2", L"image3", L"image4" };
+        wstring appTypeName = wformatString("{0}_AppType", testName);
+        wstring appName = wformatString("{0}_Application", testName);
+        ServiceModel::ServicePackageIdentifier spID;
+        vector<ServicePackageDescription> packages;
+        packages.push_back(CreateServicePackageDescription(
+            L"ServicePackageName",
+            appTypeName,
+            appName,
+            1,
+            1000,
+            spID,
+            move(requiredImages)));
+
+        plb.UpdateApplication(CreateApplicationWithServicePackages(appTypeName, appName, packages));
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"ServiceType"), set<Federation::NodeId>()));
+
+        plb.UpdateService(CreateServiceDescriptionWithApplication(L"TestService", L"ServiceType", appName, true, CreateMetrics(L""), spID, true));
+
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService"), 0, CreateReplicas(L""), 1));
+        plb.Refresh(Stopwatch::Now());
+
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(2u, actionList.size());
+
+        // Node 3 will be discarded as it has only 1 required image and min bar is 2
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"0 add primary 1|2", value)));
+        VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"1 add primary 1|2", value)));
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementOnNodeWithShouldDisapperLoadTest)
+    {
+        PlacementOnNodeWithShouldDisapperLoadTestHelper(L"PlacementOnNodeWithShouldDisapperLoadTest", true);
+    }
+
+    BOOST_AUTO_TEST_CASE(PlacementOnNodeWithShouldDisapperLoadTestFeatureSwitchOff)
+    {
+        PlacementOnNodeWithShouldDisapperLoadTestHelper(L"PlacementOnNodeWithShouldDisapperLoadTestFeatureSwitchOff", false);
     }
 
     BOOST_AUTO_TEST_SUITE_END()
@@ -12530,6 +13457,43 @@ namespace PlacementAndLoadBalancingUnitTest
 
         return TRUE;
     }
+
+    void TestPLBPlacement::PlacementOnNodeWithShouldDisapperLoadTestHelper(wstring const& testName, bool featureSwitch)
+    {
+        // 3 nodes with capacity 90 each:
+        //  Node 0: 0 load, 50 disappearing load
+        //  Node 1: 50 load
+        //  Node 2: 40 load
+        // New replica placement asking for 50, and the best target for balance is node 0.
+        // Feature swtich on: do not allow placement on node 0, off: allow placement on node 0.
+        Trace.WriteInfo("PLBPlacementTestSource", "{0}", testName);
+        PLBConfigScopeChange(PreventTransientOvercommit, bool, true);
+        PLBConfigScopeChange(CountDisappearingLoadForSimulatedAnnealing, bool, featureSwitch);
+        PlacementAndLoadBalancing & plb = fm_->PLB;
+
+        plb.UpdateNode(CreateNodeDescriptionWithCapacity(0, L"IDSU/90"));
+        plb.UpdateNode(CreateNodeDescriptionWithCapacity(1, L"IDSU/90"));
+        plb.UpdateNode(CreateNodeDescriptionWithCapacity(2, L"IDSU/90"));
+        plb.ProcessPendingUpdatesPeriodicTask();
+
+        plb.UpdateServiceType(ServiceTypeDescription(wstring(L"TestType"), set<NodeId>()));
+        plb.UpdateService(CreateServiceDescription(L"TestService1", L"TestType", true, CreateMetrics(L"IDSU/1.0/50/50")));
+        plb.UpdateService(CreateServiceDescription(L"TestService2", L"TestType", true, CreateMetrics(L"IDSU/1.0/50/50")));
+        plb.UpdateService(CreateServiceDescription(L"TestService3", L"TestType", true, CreateMetrics(L"IDSU/1.0/40/40")));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(0), wstring(L"TestService1"), 0, CreateReplicas(L"P/0/V,S/1"), 0));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(1), wstring(L"TestService2"), 0, CreateReplicas(L""), 1));
+        plb.UpdateFailoverUnit(FailoverUnitDescription(CreateGuid(2), wstring(L"TestService3"), 0, CreateReplicas(L"P/2"), 0));
+
+        fm_->RefreshPLB(Stopwatch::Now());
+        vector<wstring> actionList = GetActionListString(fm_->MoveActions);
+        VERIFY_ARE_EQUAL(1u, actionList.size());
+        int expectedOnTwo = featureSwitch ? 1 : 0;
+        int expectedOnZero = featureSwitch ? 0 : 1;
+        VERIFY_ARE_EQUAL(expectedOnTwo, CountIf(actionList, ActionMatch(L"1 add primary 2", value)));
+        VERIFY_ARE_EQUAL(expectedOnZero, CountIf(actionList, ActionMatch(L"1 add primary 0", value)));
+        VerifyPLBAction(plb, L"NewReplicaPlacement");
+    }
+
 
     void TestPLBPlacement::PlacementWithExistingReplicaMoveThrottleTestHelper(bool placementExpected)
     {
@@ -12564,7 +13528,7 @@ namespace PlacementAndLoadBalancingUnitTest
         // Refresh again and the scheduler action should be CreationWithMove
         fm_->RefreshPLB(Stopwatch::Now());
         actionList = GetActionListString(fm_->MoveActions);
-        VerifyPLBAction(plb, L"CreationWithMove");
+        VerifyPLBAction(plb, L"NewReplicaPlacementWithMove");
         if (placementExpected)
         {
             VERIFY_ARE_EQUAL(1, CountIf(actionList, ActionMatch(L"4 add primary *", value)));

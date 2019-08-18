@@ -555,7 +555,10 @@ std::wstring ErrorBody::FromErrorMessage(Common::ErrorCode errorCode)
         break;
     case (int) FABRIC_E_COMPOSE_DEPLOYMENT_NOT_FOUND:
         errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_COMPOSE_DEPLOYMENT_NOT_FOUND);
-        break;        
+        break;
+    case (int)FABRIC_E_COMPOSE_DEPLOYMENT_NOT_UPGRADING:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_COMPOSE_DEPLOYMENT_NOT_UPGRADING);
+        break;
     case (int) FABRIC_E_INVALID_FOR_STATEFUL_SERVICES:
         errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_INVALID_FOR_STATEFUL_SERVICES);
         break;
@@ -567,6 +570,24 @@ std::wstring ErrorBody::FromErrorMessage(Common::ErrorCode errorCode)
         break;
     case (int)FABRIC_E_CONTAINER_NOT_FOUND:
         errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_CONTAINER_NOT_FOUND);
+        break;
+    case (int) FABRIC_E_SINGLE_INSTANCE_APPLICATION_ALREADY_EXISTS:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_SINGLE_INSTANCE_APPLICATION_ALREADY_EXISTS);
+        break;
+    case (int) FABRIC_E_SINGLE_INSTANCE_APPLICATION_NOT_FOUND:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_SINGLE_INSTANCE_APPLICATION_NOT_FOUND);
+        break;
+    case (int) FABRIC_E_VOLUME_ALREADY_EXISTS:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_VOLUME_ALREADY_EXISTS);
+        break;
+    case (int) FABRIC_E_VOLUME_NOT_FOUND:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_VOLUME_NOT_FOUND);
+        break;
+    case (int)FABRIC_E_CENTRAL_SECRET_SERVICE_GENERIC:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_CENTRAL_SECRET_SERVICE_GENERIC);
+        break;
+    case (int)FABRIC_E_SINGLE_INSTANCE_APPLICATION_UPGRADE_IN_PROGRESS:
+        errorMessage = StringResource::Get(IDS_ERROR_MESSAGE_FABRIC_E_SINGLE_INSTANCE_APPLICATION_UPGRADE_IN_PROGRESS);
         break;
     default:
         errorMessage = L"Null";

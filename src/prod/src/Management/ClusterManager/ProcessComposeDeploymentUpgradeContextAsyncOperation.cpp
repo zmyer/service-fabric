@@ -150,11 +150,9 @@ private:
 
     void FinishBuildComposeDeploymentApplicationType(AsyncOperationSPtr const & thisSPtr)
     {
-        ErrorCode error(ErrorCodeValue::Success);
-
         auto storeTx = this->CreateTransaction();
 
-        error = owner_.ComposeUpgradeContext.Refresh(storeTx);
+        ErrorCode error = owner_.ComposeUpgradeContext.Refresh(storeTx);
         if (!error.IsSuccess())
         {
             WriteInfo(
@@ -208,12 +206,11 @@ private:
                             GET_RC(Deployment_Upgrading_To_Version),
                             owner_.ComposeUpgradeContext.CurrentTypeVersion,
                             owner_.ComposeUpgradeContext.TargetTypeVersion));
+                    if (error.IsSuccess())
+                    {
+                        error = SetupApplicationContextForUpgrade(storeTx);
+                    }
                 }
-            }
-
-            if (error.IsSuccess())
-            {
-                error = SetupApplicationContextForUpgrade(storeTx);
             }
         }
         else
@@ -301,9 +298,9 @@ private:
             {
                 Assert::TestAssert(
                     ProvisionTraceComponent,
-                    "{0} Unable to get completed or failed application upgrade context during compose deployment upgrade: {1}",
+                    "{0} Unable to get completed or failed application upgrade context during compose deployment upgrade. Status: {1}",
                     this->TraceId,
-                    error);
+                    owner_.applicationUpgradeContext_->Status);
             }
             auto seqNumber = owner_.applicationUpgradeContext_->SequenceNumber;
             owner_.applicationUpgradeContext_ = make_unique<ApplicationUpgradeContext>(
@@ -369,6 +366,11 @@ protected:
 
     virtual Common::ErrorCode OnRefreshUpgradeContext(Store::StoreTransaction const &storeTx) override
     {
+        // UpgradeContext is not active context in RolloutManager, need to explicitly set ExternallyFail after Refresh.
+        if (owner_.ComposeUpgradeContext.IsExternallyFailed())
+        {
+            this->UpgradeContext.ExternalFail();
+        }
         return owner_.ComposeUpgradeContext.Refresh(storeTx);
     }
 
@@ -579,8 +581,7 @@ void ProcessComposeDeploymentUpgradeAsyncOperation::OnProvisionComposeDeployment
     else
     {
         //
-        // Interrupted during/after provision. Once the actual upgrade has started,
-        // the rollback notification comes from the application upgrade operation.
+        // Interrupted during/after provision.
         //
         this->StartUnprovisionApplicationType(thisSPtr);
     }
@@ -597,7 +598,7 @@ void ProcessComposeDeploymentUpgradeAsyncOperation::StartUpgradeApplication(Asyn
 
     WriteInfo(
         ComposeApplicationUpgradeTraceComponent,
-        "{0} Deployment : {1} starting application upgrade",
+        "{0} Compose deployment {1}: starting application upgrade",
         TraceId,
         ComposeUpgradeContext.DeploymentName);
 

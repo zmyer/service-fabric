@@ -50,12 +50,13 @@ target_link_libraries(${exe_Naming.Test}
   ${lib_FileStoreService}
   ${lib_Store}
   ${lib_TestHooks}
-  ${lib_KtlLogger}
+  ${lib_KtlLoggerNode}
   ${lib_TStore}
   ${lib_StoreRepairPolicy}
   ${lib_Replication}
   ${lib_TransactionalReplicator}
   ${lib_Failover}
+  ${lib_NetworkInventoryManager}
   ${lib_FailoverCommon}
   ${lib_SystemServices}
   ${lib_ImageModel}
@@ -91,8 +92,6 @@ target_link_libraries(${exe_Naming.Test}
   dl
   xml2
   uuid
-  unwind
-  unwind-x86_64
 )
 
 install(

@@ -83,35 +83,39 @@ Common::ErrorCode EventHealthEvaluation::FromPublicApi(
     return ErrorCode::Success();
 }
 
+wstring EventHealthEvaluation::GetUnhealthyEvaluationDescription(wstring const & indent) const
+{
+    return wformatString("{0}{1} '{2}'", indent, description_, unhealthyEvent_.Description);
+}
+
 void EventHealthEvaluation::SetDescription()
 {
-    if (unhealthyEvent_.State == FABRIC_HEALTH_STATE_ERROR)
+    if (unhealthyEvent_.IsExpired)
     {
         description_ = wformatString(
-            "{0} SourceId='{1}', Property='{2}'.",
-            HMResource::GetResources().HealthEvaluationErrorEvent,
-            unhealthyEvent_.SourceId,
-            unhealthyEvent_.Property);
-    }
-    else if (unhealthyEvent_.IsExpired)
-    {
-        description_ = wformatString(
-            "{0} SourceId='{1}', Property='{2}', HealthState='{3}', ReceivedAt {4}.",
             HMResource::GetResources().HealthEvaluationExpiredEvent,
+            unhealthyEvent_.State,
             unhealthyEvent_.SourceId,
             unhealthyEvent_.Property,
+            unhealthyEvent_.LastModifiedUtcTimestamp,
+            unhealthyEvent_.TimeToLive);
+    }
+    else if (unhealthyEvent_.State == FABRIC_HEALTH_STATE_ERROR || !considerWarningAsError_)
+    {
+        description_ = wformatString(
+            HMResource::GetResources().HealthEvaluationUnhealthyEvent,
+            unhealthyEvent_.SourceId,
             unhealthyEvent_.State,
-            unhealthyEvent_.LastModifiedUtcTimestamp);
+            unhealthyEvent_.Property);
     }
     else
     {
+        // ConsiderWarningAsError is true and the event was not reported with error state.
         description_ = wformatString(
-            "{0} SourceId='{1}', Property='{2}', HealthState='{3}', ConsiderWarningAsError={4}.",
             HMResource::GetResources().HealthEvaluationUnhealthyEventPerPolicy,
             unhealthyEvent_.SourceId,
-            unhealthyEvent_.Property,
             unhealthyEvent_.State,
-            considerWarningAsError_);
+            unhealthyEvent_.Property);
     }
 }
 

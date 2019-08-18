@@ -40,6 +40,7 @@ namespace Reliability
                 MoveParentToFixAffinityViolation = config.MoveParentToFixAffinityViolation;
                 IsAffinityBidirectional = config.IsAffinityBidirectional;
                 PreventTransientOvercommit = config.PreventIntermediateOvercommit || config.PreventTransientOvercommit;
+                CountDisappearingLoadForSimulatedAnnealing = config.CountDisappearingLoadForSimulatedAnnealing;
                 CheckAlignedAffinityForUpgrade = config.CheckAlignedAffinityForUpgrade;
                 SwapPrimaryProbability = config.SwapPrimaryProbability;
                 UseMoveCostReports = config.UseMoveCostReports;
@@ -78,10 +79,21 @@ namespace Reliability
                 GlobalMetricWeights = config.GlobalMetricWeights;
                 DefragmentationMetricsPercentOrNumberOfEmptyNodesTriggeringThreshold = config.DefragmentationMetricsPercentOrNumberOfEmptyNodesTriggeringThreshold;
                 MetricEmptyNodeThresholds = config.MetricEmptyNodeThresholds;
+                ReservedLoadPerNode = config.ReservedLoadPerNode;
                 DefragmentationEmptyNodeDistributionPolicy = config.DefragmentationEmptyNodeDistributionPolicy;
                 DefragmentationScopedAlgorithmEnabled = config.DefragmentationScopedAlgorithmEnabled;
                 DefragmentationEmptyNodeWeight = config.DefragmentationEmptyNodeWeight;
+                DefragmentationNonEmptyNodeWeight = config.DefragmentationNonEmptyNodeWeight;
                 PlacementStrategy = config.PlacementStrategy;
+                NodesWithReservedLoadOverlap = config.NodesWithReservedLoadOverlap;
+                PreferExistingReplicaLocations = config.PreferExistingReplicaLocations;
+                BalancingByPercent = config.BalancingByPercentage;
+                PreferNodesForContainerPlacement = config.PreferNodesForContainerPlacement;
+                PreferUpgradedUDs = config.PreferUpgradedUDs;
+                MaximumInBuildReplicasPerNode = config.MaximumInBuildReplicasPerNode;
+                MaximumInBuildReplicasPerNodeBalancingThrottle = config.MaximumInBuildReplicasPerNodeBalancingThrottle;
+                MaximumInBuildReplicasPerNodeConstraintCheckThrottle = config.MaximumInBuildReplicasPerNodeConstraintCheckThrottle;
+                MaximumInBuildReplicasPerNodePlacementThrottle = config.MaximumInBuildReplicasPerNodePlacementThrottle;
             }
 
             bool IgnoreCostInScoring;
@@ -94,6 +106,7 @@ namespace Reliability
             bool MoveParentToFixAffinityViolation;
             bool IsAffinityBidirectional;
             bool PreventTransientOvercommit;
+            bool CountDisappearingLoadForSimulatedAnnealing;
             bool CheckAlignedAffinityForUpgrade;
             double SwapPrimaryProbability;
             bool UseMoveCostReports;
@@ -115,6 +128,8 @@ namespace Reliability
             int FaultDomainConstraintPriority;
             bool UseScoreInConstraintCheck;
             double MoveParentToFixAffinityViolationTransitionPercentage;
+            bool NodesWithReservedLoadOverlap;
+            bool PreferUpgradedUDs;
 
             //we need to treat this one separately as this also affects frontend behavior
             bool UseSeparateSecondaryLoad;
@@ -130,10 +145,14 @@ namespace Reliability
             PLBConfig::KeyDoubleValueMap GlobalMetricWeights;
             PLBConfig::KeyDoubleValueMap DefragmentationMetricsPercentOrNumberOfEmptyNodesTriggeringThreshold;
             PLBConfig::KeyIntegerValueMap MetricEmptyNodeThresholds;
+            PLBConfig::KeyIntegerValueMap ReservedLoadPerNode;
             PLBConfig::KeyIntegerValueMap DefragmentationEmptyNodeDistributionPolicy;
             PLBConfig::KeyBoolValueMap DefragmentationScopedAlgorithmEnabled;
             PLBConfig::KeyDoubleValueMap DefragmentationEmptyNodeWeight;
+            PLBConfig::KeyDoubleValueMap DefragmentationNonEmptyNodeWeight;
             PLBConfig::KeyIntegerValueMap PlacementStrategy;
+
+            PLBConfig::KeyBoolValueMap BalancingByPercent;
 
             bool QuorumBasedReplicaDistributionPerUpgradeDomains;
             bool QuorumBasedReplicaDistributionPerFaultDomains;
@@ -146,6 +165,14 @@ namespace Reliability
             int PlacementReplicaCountPerBatch;
 
             bool RelaxConstraintForPlacement;
+
+            bool PreferExistingReplicaLocations;
+
+            bool PreferNodesForContainerPlacement;
+            PLBConfig::KeyIntegerValueMap MaximumInBuildReplicasPerNode;
+            PLBConfig::KeyIntegerValueMap MaximumInBuildReplicasPerNodeBalancingThrottle;
+            PLBConfig::KeyIntegerValueMap MaximumInBuildReplicasPerNodeConstraintCheckThrottle;
+            PLBConfig::KeyIntegerValueMap MaximumInBuildReplicasPerNodePlacementThrottle;
         };
 
     }

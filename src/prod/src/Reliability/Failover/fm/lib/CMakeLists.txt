@@ -2,6 +2,7 @@ set( LINUX_SOURCES
     ../HealthReportFactory.cpp
     ../ApplicationInfo.cpp
     ../ApplicationUpgradeContext.cpp
+    ../AutoScalingTask.cpp
     ../BackgroundManager.cpp
     ../BackgroundThreadContext.cpp
     ../CacheEntry.cpp
@@ -43,6 +44,9 @@ set( LINUX_SOURCES
     ../PerformanceCounters.cpp
     ../PlacementTask.cpp
     ../PlbApiCallName.cpp
+    ../InstrumentedPLB.cpp
+    ../FailoverUnitCountsContext.cpp
+    ../QueueCounts.cpp
     ../QueryHelper.cpp
     ../QueueCounts.cpp
     ../RebuildContext.cpp

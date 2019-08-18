@@ -81,6 +81,20 @@ EndTransactionLogRecord::SPtr EndTransactionLogRecord::Create(
     return EndTransactionLogRecord::SPtr(pointer);;
 }
 
+std::wstring EndTransactionLogRecord::ToString() const
+{
+    wstring boolean = isCommitted_ ? L"true" : L"false"; 
+
+    std::wstring logRecordString = Constants::CompEndlJSON;
+
+    logRecordString += L"Committed" + Constants::DivisionBoolJSON + boolean;
+    logRecordString += Constants::CloseJSON;
+
+    std::wstring logRecordWstring(logRecordString.begin(), logRecordString.end());
+
+    return __super::ToString() + logRecordString;
+}
+
 void EndTransactionLogRecord::UpdateApproximateDiskSize()
 {
     ApproximateSizeOnDisk = ApproximateSizeOnDisk + DiskSpaceUsed;
@@ -131,9 +145,10 @@ void EndTransactionLogRecord::ReadPrivate(
 void EndTransactionLogRecord::Write(
     __in BinaryWriter & binaryWriter,
     __inout OperationData & operationData,
-    __in bool isPhysicalWrite)
+    __in bool isPhysicalWrite,
+    __in bool forceRecomputeOffsets)
 {
-    __super::Write(binaryWriter, operationData, isPhysicalWrite);
+    __super::Write(binaryWriter, operationData, isPhysicalWrite, forceRecomputeOffsets);
 
     if (replicatedData_ == nullptr)
     {        

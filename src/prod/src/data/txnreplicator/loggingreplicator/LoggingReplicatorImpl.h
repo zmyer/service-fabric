@@ -42,7 +42,7 @@ namespace Data
             static LoggingReplicatorImpl::SPtr Create(
                 __in Utilities::PartitionedReplicaId const & traceId,
                 __in TxnReplicator::IRuntimeFolders const & runtimeFolders,
-                __in KWfStatefulServicePartition & partition,
+                __in Data::Utilities::IStatefulPartition & partition,
                 __in IStateReplicator & stateReplicator,
                 __in TxnReplicator::IStateProviderManager & stateManager,
                 __in KString const & logDirectory,
@@ -52,9 +52,12 @@ namespace Data
                 __in TxnReplicator::IDataLossHandler & dataLossHandler,
                 __in TxnReplicator::TRPerformanceCountersSPtr const & perfCounters,
                 __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const & healthClient,
-				__in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+                __in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+                __in bool hasPersistedState,
                 __in KAllocator& allocator,
                 __out IStateProvider::SPtr & stateProvider);
+
+            bool get_HasPersistedState() const override;
 
             ktl::Awaitable<NTSTATUS> OpenAsync(
                 __out TxnReplicator::RecoveryInformation & recoveryInformation) noexcept override;
@@ -90,8 +93,6 @@ namespace Data
             NTSTATUS GetLastCommittedSequenceNumber(__out LONG64 & lsn) noexcept override;
 
             NTSTATUS GetCurrentEpoch(__out FABRIC_EPOCH & epoch) noexcept override;
-
-            NTSTATUS RequestCheckpointAfterNextTransaction() noexcept override;
 
             ktl::Awaitable<NTSTATUS> BackupAsync(
                 __in TxnReplicator::IBackupCallbackHandler & backupCallbackHandler,
@@ -270,11 +271,19 @@ namespace Data
 
             void Test_SetTestHookContext(TestHooks::TestHookContext const &);
 
-		public: // Notification APIs
-			NTSTATUS RegisterTransactionChangeHandler(
-				__in TxnReplicator::ITransactionChangeHandler & transactionChangeHandler) noexcept override;
+            NTSTATUS Test_GetPeriodicCheckpointAndTruncationTimestampTicks(
+                __out LONG64 & lastPeriodicCheckpointTimeTicks,
+                __out LONG64 & lastPeriodicTruncationTimeTicks) noexcept override;
 
-			NTSTATUS UnRegisterTransactionChangeHandler() noexcept override;
+        public: // Notification APIs
+            NTSTATUS RegisterTransactionChangeHandler(
+                __in TxnReplicator::ITransactionChangeHandler & transactionChangeHandler) noexcept override;
+
+            NTSTATUS UnRegisterTransactionChangeHandler() noexcept override;
+
+        public: // Test Support
+
+            NTSTATUS Test_RequestCheckpointAfterNextTransaction() noexcept override;
 
         private: 
 
@@ -314,7 +323,7 @@ namespace Data
             LoggingReplicatorImpl(
                 __in Utilities::PartitionedReplicaId const & traceId,
                 __in TxnReplicator::IRuntimeFolders const & runtimeFolders,
-                __in KWfStatefulServicePartition & partition,
+                __in Data::Utilities::IStatefulPartition & partition,
                 __in IStateReplicator & stateReplicator,
                 __in LogRecordLib::InvalidLogRecords & invalidLogRecords_,
                 __in TxnReplicator::IStateProviderManager & stateManager,
@@ -329,7 +338,8 @@ namespace Data
                 __in TxnReplicator::IDataLossHandler & dataLossHandler,
                 __in TxnReplicator::TRPerformanceCountersSPtr const & perfCounters,
                 __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const & healthClient,
-				__in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+                __in TxnReplicator::ITransactionalReplicator & transactionalReplicator,
+                __in bool hasPersistedState,
                 __out IStateProvider::SPtr & stateProvider);
             
             NTSTATUS ErrorIfNoWriteStatus() const noexcept;
@@ -372,10 +382,16 @@ namespace Data
                 __in LogRecordLib::LogRecord & mostRecentFlushedRecord,
                 __in NTSTATUS flushError) noexcept;
 
+            void CreateAllManagers();
+
+            void CreateOperationProcessor();
+
+            bool hasPersistedState_ = true;
+
             TxnReplicator::IRuntimeFolders::CSPtr runtimeFolders_;
             TxnReplicator::TRInternalSettingsSPtr const transactionalReplicatorConfig_;
             TxnReplicator::SLInternalSettingsSPtr const ktlLoggerSharedLogConfig_;
-            KWfStatefulServicePartition::SPtr const partition_;
+            Data::Utilities::IStatefulPartition::SPtr const partition_;
             TxnReplicator::IStateProviderManager::SPtr const stateManager_;
             LogRecordLib::InvalidLogRecords::SPtr const invalidLogRecords_;
             KString::CSPtr const logDirectory_;
@@ -386,6 +402,8 @@ namespace Data
             TxnReplicator::IInternalVersionManager::SPtr const versionManager_;
             LogRecordLib::CopyStageBuffers::SPtr const copyStageBuffers_;
             PhysicalLogWriterCallbackManager::SPtr const logFlushCallbackManager_;
+            Data::LoggingReplicator::IStateReplicator::SPtr const iStateReplicator_;
+            Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const healthClient_;
 
             LogTruncationManager::SPtr logTruncationManager_;
             CheckpointManager::SPtr checkpointManager_;
@@ -397,7 +415,7 @@ namespace Data
             SecondaryDrainManager::SPtr secondaryDrainManager_;
             IStateProvider::SPtr stateProvider_;
             TxnReplicator::IDataLossHandler::SPtr dataLossHandler_;
-            Reliability::ReplicationComponent::IReplicatorHealthClientSPtr const healthClient_;
+            TxnReplicator::ITransactionalReplicator & iTransactionalReplicator_;
 
             bool isDisposed_;
             
@@ -407,10 +425,12 @@ namespace Data
 
             KSpinLock flushWaitLock_;
             KSpinLock primaryStatusLock_;
+            KSpinLock changeHandlerLock_;
 
             Utilities::ThreadSafeSPtrCache<ktl::AwaitableCompletionSource<void>> primaryTransactionsAbortingTask_;
             Utilities::ThreadSafeSPtrCache<ktl::CancellationTokenSource> primaryTransactionsAbortingCts_;
- 
+            TxnReplicator::ITransactionChangeHandler::SPtr changeHandlerCache_;
+
             typedef struct WaitingFlushStreamsContext
             {
                 ktl::AwaitableCompletionSource<NTSTATUS>::SPtr Tcs;

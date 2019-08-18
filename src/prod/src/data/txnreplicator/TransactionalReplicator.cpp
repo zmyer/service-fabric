@@ -45,14 +45,15 @@ Common::StringLiteral const TraceComponent("TransactionalReplicator");
 TransactionalReplicator::TransactionalReplicator(
     __in PartitionedReplicaId const& traceId,
     __in IRuntimeFolders & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IStatefulPartition & partition,
     __in LoggingReplicator::IStateReplicator & stateReplicator,
     __in StateManager::IStateProvider2Factory & stateProviderFactoryFunction,
     __in TRInternalSettingsSPtr && transactionalReplicatorConfig,
     __in SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
-    __in Data::Log::LogManager & logManager,
+    __in Log::LogManager & logManager,
     __in IDataLossHandler & dataLossHandler,
-    __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient)
+    __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
+    __in bool hasPersistedState)
     : KAsyncServiceBase()
     , KWeakRefType<TransactionalReplicator>()
     , PartitionedReplicaTraceComponent(traceId)
@@ -87,6 +88,7 @@ TransactionalReplicator::TransactionalReplicator(
         partition, 
         stateProviderFactoryFunction, 
         transactionalReplicatorConfig_,
+        hasPersistedState,
         GetThisAllocator(), 
         stateManager_);
 
@@ -113,7 +115,8 @@ TransactionalReplicator::TransactionalReplicator(
         dataLossHandler,
         perfCounters_,
         healthClient_,
-		*this,
+        *this,
+        hasPersistedState,
         GetThisAllocator(),
         stateProvider_);
 }
@@ -132,14 +135,15 @@ TransactionalReplicator::~TransactionalReplicator()
 TransactionalReplicator::SPtr TransactionalReplicator::Create(
     __in PartitionedReplicaId const& traceId, 
     __in IRuntimeFolders & runtimeFolders,
-    __in KWfStatefulServicePartition & partition,
+    __in IStatefulPartition & partition,
     __in LoggingReplicator::IStateReplicator & stateReplicator,
     __in StateManager::IStateProvider2Factory & stateProviderFactory,
     __in TRInternalSettingsSPtr && transactionalReplicatorConfig,
     __in SLInternalSettingsSPtr && ktlLoggerSharedLogConfig,
-    __in Data::Log::LogManager & logManager,
+    __in Log::LogManager & logManager,
     __in IDataLossHandler & dataLossHandler,
     __in Reliability::ReplicationComponent::IReplicatorHealthClientSPtr && healthClient,
+    __in bool hasPersistedState,
     __in KAllocator& allocator)
 {
     TransactionalReplicator::SPtr result = _new(TRANSACTIONALREPLICATOR_TAG, allocator) TransactionalReplicator(
@@ -152,7 +156,8 @@ TransactionalReplicator::SPtr TransactionalReplicator::Create(
         move(ktlLoggerSharedLogConfig),
         logManager,
         dataLossHandler,
-        move(healthClient));
+        move(healthClient),
+        hasPersistedState);
 
     THROW_ON_ALLOCATION_FAILURE(result);
 
@@ -162,12 +167,12 @@ TransactionalReplicator::SPtr TransactionalReplicator::Create(
 NTSTATUS TransactionalReplicator::RegisterTransactionChangeHandler(
     __in ITransactionChangeHandler& transactionChangeHandler) noexcept
 {
-	return loggingReplicator_->RegisterTransactionChangeHandler(transactionChangeHandler);
+    return loggingReplicator_->RegisterTransactionChangeHandler(transactionChangeHandler);
 }
 
 NTSTATUS TransactionalReplicator::UnRegisterTransactionChangeHandler() noexcept
 {
-	return loggingReplicator_->UnRegisterTransactionChangeHandler();
+    return loggingReplicator_->UnRegisterTransactionChangeHandler();
 }
 
 NTSTATUS TransactionalReplicator::RegisterStateManagerChangeHandler(
@@ -767,7 +772,7 @@ Awaitable<NTSTATUS> TransactionalReplicator::AbortTransactionAsync(
 
 NTSTATUS TransactionalReplicator::Get(
     __in KUriView const & stateProviderName,
-    __out TxnReplicator::IStateProvider2::SPtr & stateProvider) noexcept
+    __out IStateProvider2::SPtr & stateProvider) noexcept
 {
     ApiEntry();
 
@@ -816,7 +821,7 @@ Awaitable<NTSTATUS> TransactionalReplicator::RemoveAsync(
 
 NTSTATUS TransactionalReplicator::CreateEnumerator(
     __in bool parentsOnly,
-    __out Data::IEnumerator<Data::KeyValuePair<KUri::CSPtr, IStateProvider2::SPtr>>::SPtr & outEnumerator) noexcept
+    __out IEnumerator<KeyValuePair<KUri::CSPtr, IStateProvider2::SPtr>>::SPtr & outEnumerator) noexcept
 {
     ApiEntry();
 
@@ -855,8 +860,13 @@ bool TransactionalReplicator::get_IsReadable() const noexcept
     return loggingReplicator_->IsReadable();
 }
 
+bool TransactionalReplicator::get_HasPersistedState() const noexcept
+{
+    return loggingReplicator_->HasPersistedState;
+}
 
-KWfStatefulServicePartition::SPtr TransactionalReplicator::get_StatefulPartition() const
+
+IStatefulPartition::SPtr TransactionalReplicator::get_StatefulPartition() const
 {
     return partition_;
 }
@@ -886,5 +896,14 @@ NTSTATUS TransactionalReplicator::Test_RequestCheckpointAfterNextTransaction() n
 {
     ApiEntry();
 
-    return loggingReplicator_->RequestCheckpointAfterNextTransaction();
+    return loggingReplicator_->Test_RequestCheckpointAfterNextTransaction();
+}
+
+NTSTATUS TransactionalReplicator::Test_GetPeriodicCheckpointAndTruncationTimestampTicks(
+    __out LONG64 & lastPeriodicCheckpointTimeTicks,
+    __out LONG64 & lastPeriodicTruncationTimeTicks) noexcept
+{
+    return loggingReplicator_->Test_GetPeriodicCheckpointAndTruncationTimestampTicks(
+        lastPeriodicCheckpointTimeTicks,
+        lastPeriodicTruncationTimeTicks);
 }

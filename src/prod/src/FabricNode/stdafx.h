@@ -11,6 +11,7 @@
 #include "Common/Common.h"
 #include "Federation/Federation.h"
 #include "Hosting2/Hosting.h"
+#include "Hosting2/NetworkInventoryAgent.h"
 #include "Reliability/Reliability.h"
 #include "systemservices/SystemServices.Fabric.h"
 #include "Naming/naming.h"
@@ -24,3 +25,4 @@
 #include "Transport/UnreliableTransportSpecification.h"
 #include "Transport/UnreliableTransportConfig.h"
 #include "Transport/Throttle.h"
+#include "httpgateway/HttpGateway.h"

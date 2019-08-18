@@ -16,8 +16,8 @@ namespace Common
         ConfigParameterOverride(ConfigParameterOverride const & other);
         ConfigParameterOverride(ConfigParameterOverride && other);
 
-        ConfigParameterOverride const & operator = (ConfigParameterOverride const & other);
-        ConfigParameterOverride const & operator = (ConfigParameterOverride && other);
+        ConfigParameterOverride & operator = (ConfigParameterOverride const & other) = default;
+        ConfigParameterOverride & operator = (ConfigParameterOverride && other) = default;
 
         bool operator == (ConfigParameterOverride const & other) const;
         bool operator != (ConfigParameterOverride const & other) const;
@@ -27,8 +27,8 @@ namespace Common
     public:
         std::wstring Name;
         std::wstring Value;
-
         bool IsEncrypted;
+		std::wstring Type;
 
     private:
         friend struct ConfigSectionOverride;

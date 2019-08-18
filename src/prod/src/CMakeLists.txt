@@ -1,3 +1,5 @@
+add_subdirectory (managed)
+add_subdirectory (pal)
 add_subdirectory (Common)
 add_subdirectory (Federation)
 add_subdirectory (Hosting2)
@@ -28,3 +30,4 @@ if (CLANG_VERSION_STRING VERSION_GREATER 3.9)
 add_subdirectory(data)
 endif()
 
+#add_subdirectory(BlockStore)

@@ -7,6 +7,8 @@
 
 namespace Hosting2
 {
+    typedef std::map<ApplicationHostIsolationContext, ApplicationHostProxySPtr> HostProxyMap;
+
     class ApplicationHostActivationTable :
         public Common::RootedObject,
         Common::TextTraceComponent<Common::TraceTaskCodes::Hosting>
@@ -21,6 +23,7 @@ namespace Hosting2
             Common::ErrorCode Remove(std::wstring const & hostId, __out ApplicationHostProxySPtr & hostProxy);
             Common::ErrorCode Find(std::wstring const & hostId, __out ApplicationHostProxySPtr & hostProxy);
             Common::ErrorCode Find(ApplicationHostIsolationContext const & isolationContext, __out ApplicationHostProxySPtr & hostProxy); 
+            Common::ErrorCode FindApplicationHostByCodePackageInstanceId(std::wstring const & codePackageInstanceId, __out ApplicationHostProxySPtr & hostProxy);
             std::vector<ApplicationHostProxySPtr> Close();
 
             void StartReportingToRM(std::wstring const & hostIdRM);
@@ -30,14 +33,18 @@ namespace Hosting2
             Transport::MessageUPtr CreateApplicationHostEventMessage(std::vector<Management::ResourceMonitor::ApplicationHostEvent> && updatesForRM);
             void Test_GetAllRMReports(std::vector<Management::ResourceMonitor::ApplicationHostEvent> & pending, std::vector<Management::ResourceMonitor::ApplicationHostEvent> & ongoing);
 
+            void Test_GetHostProxyMap(HostProxyMap & proxyMap);
+
         private:
-            typedef std::map<ApplicationHostIsolationContext, ApplicationHostProxySPtr> HostProxyMap;
             typedef std::map<std::wstring, ApplicationHostProxySPtr, Common::IsLessCaseInsensitiveComparer<std::wstring>> HostIdIndexMap;
+            typedef std::map<std::wstring, ApplicationHostProxySPtr, Common::IsLessCaseInsensitiveComparer<std::wstring>> CodePackageInstanceIdIndexMap;
+
         private:
             bool isClosed_;
             Common::RwLock lock_;
             HostProxyMap map_;
             HostIdIndexMap hostIdIndex_;
+            CodePackageInstanceIdIndexMap codePackageInstanceIdIndexMap_;
 
             HostingSubsystem & hosting_;
 

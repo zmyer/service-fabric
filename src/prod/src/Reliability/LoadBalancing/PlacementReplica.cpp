@@ -15,7 +15,9 @@ using namespace std;
 using namespace Common;
 using namespace Reliability::LoadBalancingComponent;
 
-PlacementReplica::PlacementReplica(size_t index, ReplicaRole::Enum role)
+PlacementReplica::PlacementReplica(size_t index,
+    ReplicaRole::Enum role,
+    bool canBeThrottled)
     : index_(index),
     partitionEntry_(nullptr),
     role_(role),
@@ -27,7 +29,8 @@ PlacementReplica::PlacementReplica(size_t index, ReplicaRole::Enum role)
     isMoveInProgress_(false),
     isToBeDropped_(false),
     isInUpgrade_(false),
-    isSingletonReplicaMovableDuringUpgrade_(true)
+    isSingletonReplicaMovableDuringUpgrade_(true),
+    canBeThrottled_(canBeThrottled)
 {
 }
 
@@ -42,7 +45,8 @@ PlacementReplica::PlacementReplica(
     bool isMoveInProgress,
     bool isToBeDropped,
     bool isInUpgrade,
-    bool isSingletonReplicaMovableDuringUpgrade)
+    bool isSingletonReplicaMovableDuringUpgrade,
+    bool canBeThrottled)
     : index_(index),
     partitionEntry_(nullptr),
     role_(role),
@@ -54,7 +58,8 @@ PlacementReplica::PlacementReplica(
     isMoveInProgress_(isMoveInProgress),
     isToBeDropped_(isToBeDropped),
     isInUpgrade_(isInUpgrade),
-    isSingletonReplicaMovableDuringUpgrade_(isSingletonReplicaMovableDuringUpgrade)
+    isSingletonReplicaMovableDuringUpgrade_(isSingletonReplicaMovableDuringUpgrade),
+    canBeThrottled_(canBeThrottled)
 {
 }
 
@@ -116,20 +121,39 @@ void PlacementReplica::ForEachBeneficialMetric(function<bool(size_t, bool forDef
             auto & loadStat = lbDomain->GetLoadStat(metricIndex);
             int64 coefficient = metric.IsDefrag ? (metric.DefragmentationScopedAlgorithmEnabled ? 1 : -1) : 1;
 
-            double average = loadStat.Average;
             bool scopedDefrag = false;
-            if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+            double loadDiff;
+            if (metric.BalancingByPercentage)
             {
-                // Since we want to empty out a certain number of nodes,
-                // the amount of load we want to have on all nodes changes
-                // (we try to distribute the load on all nodes, except on the empty nodes).
-                // Here we calculate the total load from the average and use it to calculate the desired load (new average)
-                average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
-                scopedDefrag = true;
+                // When balancing by percentage, loadStat.Average is average of percents of load.
+                // In case there are different node capacities, average of percentages can change by making moves; therefore, to find beneficial
+                // replicas, beneficial moves, etc. average should be calculated as average in ideal balanced situation
+                double average = loadStat.AbsoluteSum / loadStat.CapacitySum;
+                if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+                {
+                    average = loadStat.AbsoluteSum / (loadStat.CapacitySum - metric.DefragNodeCount * metric.ReservationLoad);
+                    scopedDefrag = true;
+                }
+
+                auto nodeCapacity = nodeEntry_->GetNodeCapacity(metric.IndexInGlobalDomain);
+                auto nodeLoad = nodeEntry_->GetLoadLevel(totalMetricIndex);
+
+                loadDiff = nodeLoad - nodeCapacity * average;
             }
-
-            double loadDiff = nodeEntry_->GetLoadLevel(totalMetricIndex) - average;
-
+            else
+            {
+                double average = loadStat.Average;
+                if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+                {
+                    // Since we want to empty out a certain number of nodes,
+                    // the amount of load we want to have on all nodes changes
+                    // (we try to distribute the load on all nodes, except on the empty nodes).
+                    // Here we calculate the total load from the average and use it to calculate the desired load (new average)
+                    average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
+                    scopedDefrag = true;
+                }
+                loadDiff = nodeEntry_->GetLoadLevel(totalMetricIndex) - average;
+            }
             // If scoped defrag is enabled, mark the replica as beneficial and
             // let the processor decide whether it is beneficial for balancing or for defrag
             if (!metric.IsBalanced && (coefficient * loadDiff > coefficient * 1e-9 || scopedDefrag))
@@ -146,19 +170,36 @@ void PlacementReplica::ForEachBeneficialMetric(function<bool(size_t, bool forDef
         auto & loadStat = globalDomain->GetLoadStat(metricIndexInGlobalDomain);
         int64 coefficient = metric.IsDefrag ? (metric.DefragmentationScopedAlgorithmEnabled ? 1 : -1) : 1;
 
-        double average = loadStat.Average;
         bool scopedDefrag = false;
-        if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+        double loadDiff;
+        if (metric.BalancingByPercentage)
         {
-            // Since we want to empty out a certain number of nodes,
-            // the amount of load we want to have on all nodes changes
-            // (we try to distribute the load on all nodes, except on the empty nodes).
-            // Here we calculate the total load from the average and use it to calculate the desired load (new average)
-            average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
-            scopedDefrag = true;
-        }
+            double average = loadStat.AbsoluteSum / loadStat.CapacitySum;
+            if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+            {
+                average = loadStat.AbsoluteSum * 1.0 / (loadStat.CapacitySum - metric.DefragNodeCount * metric.ReservationLoad);
+                scopedDefrag = true;
+            }
 
-        double loadDiff = nodeEntry_->GetLoadLevel(totalMetricIndexInGlobalDomain) - average;
+            auto nodeCapacity = nodeEntry_->GetNodeCapacity(metric.IndexInGlobalDomain);
+            auto nodeLoad = nodeEntry_->GetLoadLevel(totalMetricIndexInGlobalDomain);
+
+            loadDiff = nodeLoad - nodeCapacity * average;
+        }
+        else
+        {
+            double average = loadStat.Average;
+            if (metric.IsDefrag && metric.DefragmentationScopedAlgorithmEnabled && metric.DefragNodeCount < loadStat.Count)
+            {
+                // Since we want to empty out a certain number of nodes,
+                // the amount of load we want to have on all nodes changes
+                // (we try to distribute the load on all nodes, except on the empty nodes).
+                // Here we calculate the total load from the average and use it to calculate the desired load (new average)
+                average = loadStat.Average * loadStat.Count / (loadStat.Count - metric.DefragNodeCount);
+                scopedDefrag = true;
+            }
+            loadDiff = nodeEntry_->GetLoadLevel(totalMetricIndexInGlobalDomain) - average;
+        }
 
         if (!metric.IsBalanced && (coefficient * loadDiff > coefficient * 1e-9 || scopedDefrag))
         {

@@ -10,9 +10,11 @@ namespace Store
     class EseError
     {
     public:
-        static Common::ErrorCode GetErrorCode(JET_ERR eseError);
+        static Common::ErrorCode GetErrorCode(JET_ERR);
 
     private:
         EseError() { }
+
+        static Common::ErrorCode GetErrorCodeWithMessage(JET_ERR, Common::ErrorCodeValue::Enum); 
     };
 }
